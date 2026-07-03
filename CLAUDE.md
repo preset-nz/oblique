@@ -12,6 +12,7 @@ Local-first image editor built around a modifier stack. Tauri 2 + React 19 + Typ
 ## Workflow
 
 - One story = one unit of work = one commit. Don't bundle stories.
+- When a story (or a whole epic) ships: update its guidance doc's frontmatter — `status: shipped`, `updated: <today>` — in the same working session as the code commit. The guidance tree must always answer "what's actually built?" at a glance.
 - Story docs' "Components touched" file paths are contractual.
 - Run `just check` before finishing any task; hooks (lefthook) enforce it on push. Never use `--no-verify` — if a hook is wrong, fix the hook.
 - Justfile verbs are the standard surface: `prep, install, run, check, build` (+ `fmt`). Call `just <verb>`, not raw pnpm/cargo/uv, per `~/rhizomatic-preset/guidance/runbooks/justfile-conventions.md`.
