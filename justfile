@@ -35,6 +35,7 @@ check:
     uv run --project sidecar ruff format --check .
     uv run --project sidecar pytest sidecar
     ./node_modules/.bin/vitest run
+    ./node_modules/.bin/depcruise src
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
