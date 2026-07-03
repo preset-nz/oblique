@@ -1,0 +1,17 @@
+# Thin hooks; `just` recipes are the source of truth.
+# Convention: ~/rhizomatic-preset/guidance/runbooks/pre-commit-hooks.md
+
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,tsx,json,css}"
+      run: ./node_modules/.bin/biome check {staged_files}
+    ruff:
+      glob: "*.py"
+      run: uv run --project sidecar ruff check {staged_files}
+
+pre-push:
+  commands:
+    check:
+      run: just check
