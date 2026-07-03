@@ -33,6 +33,7 @@ check:
     ./node_modules/.bin/biome check .
     uv run --project sidecar ruff check .
     uv run --project sidecar ruff format --check .
+    ./node_modules/.bin/vitest run
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]

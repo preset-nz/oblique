@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from '@/branding';
+import { Viewport } from '@/canvas/Viewport';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export function Layout() {
@@ -18,21 +19,7 @@ export function Layout() {
 
         {/* Centre: flexible */}
         <div className="flex-1 overflow-hidden">
-          {/* Checkerboard pattern background */}
-          <div
-            className="w-full h-full"
-            style={{
-              backgroundImage: `
-                linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
-                linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
-                linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
-                linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)
-              `,
-              backgroundSize: '32px 32px',
-              backgroundPosition: '0 0, 0 16px, 16px -16px, -16px 0px',
-              backgroundColor: '#0f0f0f',
-            }}
-          />
+          <Viewport />
         </div>
 
         {/* Right panel: 320px */}
