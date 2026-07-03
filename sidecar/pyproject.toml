@@ -17,3 +17,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "perf: perf smoke tests, wall-clock sensitive — skipped by default (deselect via -m 'not perf').",
+]
+addopts = "-m 'not perf'"

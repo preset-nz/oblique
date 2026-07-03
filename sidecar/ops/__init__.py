@@ -1,13 +1,16 @@
 """Op registry.
 
-Every op is a pure function registered with the `@op` decorator. The
-registry is the sidecar's only extension point for image ops — Rust never
-hardcodes param schemas, it reads them from `list_ops` (see
-guidance/projects/oblique/design/architecture.md Section "Op backends").
+Every op is a pure function registered with the `@op` decorator: `(img:
+np.ndarray RGBA8, params: dict) -> np.ndarray RGBA8`, same shape in/out,
+must not mutate `img`. The registry is the sidecar's only extension point
+for image ops — the UI never hardcodes param schemas, it reads them from
+`list_ops` (see guidance/projects/oblique/design/architecture.md Section
+"Op backends"). Individual op implementations live in sibling modules
+(`ops/gaussian_blur.py` etc.) and are imported at the bottom of this file
+purely for their registration side effect.
 
 `debug_echo` is the protocol's permanent round-trip canary (kept forever,
-alongside its Rust-side twin) — it is intentionally the only op registered
-by this story; the real image ops land in Epic 02.
+alongside its Rust-side twin).
 """
 
 from __future__ import annotations
@@ -18,7 +21,11 @@ from typing import Any, Callable, Literal
 ParamScale = Literal["spatial", "none"]
 ParamType = Literal["float", "int", "bool", "enum"]
 
-OpFn = Callable[[bytes, dict[str, Any]], bytes]
+# Pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray, same shape, uint8 in/out,
+# must not mutate its input. `debug_echo` is the exception grandfathered from
+# Epic 01 (identity is type-agnostic, so it also works when handed raw bytes by
+# the generic single-op dispatch path in main.py).
+OpFn = Callable[[Any, dict[str, Any]], Any]
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,10 @@ class ParamSpec:
         return d
 
 
+P = ParamSpec
+"""Short alias used at op-registration call sites (`P("radius", "float", ...)`)."""
+
+
 @dataclass(frozen=True)
 class Op:
     name: str
@@ -68,7 +79,7 @@ OPS: dict[str, Op] = {}
 
 
 def op(name: str, params: list[ParamSpec] | None = None) -> Callable[[OpFn], OpFn]:
-    """Decorator; registers a pure fn (payload bytes, params dict) -> payload bytes."""
+    """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray."""
 
     def decorator(fn: OpFn) -> OpFn:
         OPS[name] = Op(name=name, backend="python", params=params or [], fn=fn)
@@ -81,3 +92,12 @@ def op(name: str, params: list[ParamSpec] | None = None) -> Callable[[OpFn], OpF
 def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
     """Identity op — returns the payload unchanged. The protocol's canary."""
     return payload
+
+
+# Imported for registration side effect only — each module calls `@op(...)`
+# at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
+from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
+from ops import grain as _grain  # noqa: E402, F401
+from ops import invert as _invert  # noqa: E402, F401
+from ops import levels as _levels  # noqa: E402, F401
+from ops import threshold as _threshold  # noqa: E402, F401

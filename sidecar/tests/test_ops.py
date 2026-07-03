@@ -1,0 +1,222 @@
+"""Per-op unit tests: shape/dtype preservation, purity, edge params, and
+grain's seeded determinism. `list_ops` completeness/backend/scale coverage
+lives here too (dispatch-level list_ops behaviour is in test_dispatch.py).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from main import dispatch
+from ops import OPS
+from ops.gaussian_blur import gaussian_blur
+from ops.grain import grain
+from ops.invert import invert
+from ops.levels import levels
+from ops.threshold import threshold
+
+ALL_OPS = [
+    (gaussian_blur, {"radius": 4.0}),
+    (levels, {"black": 10.0, "white": 240.0, "gamma": 1.2}),
+    (threshold, {"level": 127.0, "smooth": 8.0}),
+    (invert, {}),
+    (grain, {"amount": 0.3, "size": 2, "seed": 7}),
+]
+
+
+def _random_rgba(rng: np.random.Generator, h: int = 12, w: int = 16) -> np.ndarray:
+    return rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+
+
+@pytest.mark.parametrize("fn,params", ALL_OPS)
+def test_shape_and_dtype_preserved(fn, params):
+    rng = np.random.default_rng(0)
+    img = _random_rgba(rng)
+
+    out = fn(img, params)
+
+    assert out.shape == img.shape
+    assert out.dtype == np.uint8
+
+
+@pytest.mark.parametrize("fn,params", ALL_OPS)
+def test_op_does_not_mutate_input(fn, params):
+    rng = np.random.default_rng(1)
+    img = _random_rgba(rng)
+    before = img.copy()
+
+    fn(img, params)
+
+    np.testing.assert_array_equal(img, before)
+
+
+def test_gaussian_blur_edge_radii_do_not_throw():
+    rng = np.random.default_rng(2)
+    img = _random_rgba(rng)
+
+    zero = gaussian_blur(img, {"radius": 0.0})
+    np.testing.assert_array_equal(zero, img)
+
+    huge = gaussian_blur(img, {"radius": 100.0})
+    assert huge.shape == img.shape
+
+
+def test_gaussian_blur_alpha_untouched():
+    rng = np.random.default_rng(3)
+    img = _random_rgba(rng)
+
+    out = gaussian_blur(img, {"radius": 5.0})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_levels_clamps_white_at_or_below_black():
+    rng = np.random.default_rng(4)
+    img = _random_rgba(rng)
+
+    out = levels(img, {"black": 200.0, "white": 50.0, "gamma": 1.0})
+
+    assert out.shape == img.shape
+    assert out.dtype == np.uint8
+
+
+def test_levels_extreme_gamma_does_not_throw():
+    rng = np.random.default_rng(5)
+    img = _random_rgba(rng)
+
+    low_gamma = levels(img, {"black": 0.0, "white": 255.0, "gamma": 0.1})
+    high_gamma = levels(img, {"black": 0.0, "white": 255.0, "gamma": 5.0})
+
+    assert low_gamma.dtype == np.uint8
+    assert high_gamma.dtype == np.uint8
+
+
+def test_levels_alpha_untouched():
+    rng = np.random.default_rng(6)
+    img = _random_rgba(rng)
+
+    out = levels(img, {"black": 10.0, "white": 200.0, "gamma": 2.0})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_threshold_hard_step_extremes():
+    img = np.zeros((4, 4, 4), dtype=np.uint8)
+    img[..., :3] = 200  # bright
+    img[..., 3] = 255
+
+    black_level = threshold(img, {"level": 0.0, "smooth": 0.0})
+    white_level = threshold(img, {"level": 255.0, "smooth": 0.0})
+
+    assert np.all(black_level[..., :3] == 255)
+    assert np.all(white_level[..., :3] == 0)
+
+
+def test_threshold_smoothstep_does_not_throw_at_max_smooth():
+    rng = np.random.default_rng(7)
+    img = _random_rgba(rng)
+
+    out = threshold(img, {"level": 127.0, "smooth": 64.0})
+
+    assert out.dtype == np.uint8
+
+
+def test_threshold_alpha_untouched_and_rgb_grey():
+    rng = np.random.default_rng(8)
+    img = _random_rgba(rng)
+
+    out = threshold(img, {"level": 100.0, "smooth": 10.0})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+    assert np.all(out[..., 0] == out[..., 1])
+    assert np.all(out[..., 1] == out[..., 2])
+
+
+def test_invert_is_255_minus_rgb():
+    rng = np.random.default_rng(9)
+    img = _random_rgba(rng)
+
+    out = invert(img, {})
+
+    np.testing.assert_array_equal(out[..., :3], 255 - img[..., :3])
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_grain_seed_determinism():
+    rng = np.random.default_rng(10)
+    img = _random_rgba(rng, h=20, w=24)
+    params = {"amount": 0.5, "size": 3, "seed": 42}
+
+    first = grain(img, params)
+    second = grain(img, params)
+
+    np.testing.assert_array_equal(first, second)
+
+
+def test_grain_different_seed_differs():
+    rng = np.random.default_rng(11)
+    img = _random_rgba(rng, h=20, w=24)
+
+    a = grain(img, {"amount": 0.5, "size": 1, "seed": 1})
+    b = grain(img, {"amount": 0.5, "size": 1, "seed": 2})
+
+    assert not np.array_equal(a, b)
+
+
+def test_grain_edge_params_do_not_throw():
+    rng = np.random.default_rng(12)
+    img = _random_rgba(rng)
+
+    zero_amount = grain(img, {"amount": 0.0, "size": 1, "seed": 0})
+    np.testing.assert_array_equal(zero_amount, img)
+
+    max_amount_max_size = grain(img, {"amount": 1.0, "size": 8, "seed": 0})
+    assert max_amount_max_size.shape == img.shape
+
+
+def test_grain_alpha_untouched():
+    rng = np.random.default_rng(13)
+    img = _random_rgba(rng)
+
+    out = grain(img, {"amount": 0.4, "size": 2, "seed": 3})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_list_ops_includes_all_five_with_honest_specs():
+    header, _payload = dispatch({"id": "list", "op": "list_ops"}, b"")
+
+    names = {o["name"] for o in header["ops"]}
+    for expected in ("gaussian_blur", "levels", "threshold", "invert", "grain"):
+        assert expected in names
+
+    for entry in header["ops"]:
+        if entry["name"] not in {
+            "gaussian_blur",
+            "levels",
+            "threshold",
+            "invert",
+            "grain",
+        }:
+            continue
+        assert entry["backend"] == "python"
+        for param in entry["params"]:
+            assert "scale" in param
+            assert param["scale"] in ("spatial", "none")
+
+    blur = next(o for o in header["ops"] if o["name"] == "gaussian_blur")
+    radius_param = next(p for p in blur["params"] if p["name"] == "radius")
+    assert radius_param["scale"] == "spatial"
+
+    grain_entry = next(o for o in header["ops"] if o["name"] == "grain")
+    size_param = next(p for p in grain_entry["params"] if p["name"] == "size")
+    assert size_param["scale"] == "spatial"
+    amount_param = next(p for p in grain_entry["params"] if p["name"] == "amount")
+    assert amount_param["scale"] == "none"
+
+
+def test_all_five_ops_registered_in_ops_registry():
+    for name in ("gaussian_blur", "levels", "threshold", "invert", "grain"):
+        assert name in OPS
+        assert OPS[name].backend == "python"
