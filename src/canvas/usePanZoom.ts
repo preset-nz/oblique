@@ -80,14 +80,21 @@ export function usePanZoom(canvasRef: RefObject<HTMLCanvasElement | null>) {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const cursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       // deltaMode 0 = pixels (trackpads, most mice); 1 = lines (some mice);
       // 2 = pages. Normalise so line/page-mode devices don't feel stuck.
       const deltaUnit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rect.height : 1;
-      const factor = Math.exp(-e.deltaY * deltaUnit * ZOOM_WHEEL_SENSITIVITY);
-
       const { view, setView } = useViewTransformStore.getState();
-      setView(zoomAt(view, cursor, factor));
+
+      // Trackpad pinch (and Ctrl/Cmd+scroll) arrives as wheel with ctrl/meta
+      // held: zoom. Plain scroll — two-finger trackpad drag or mouse wheel —
+      // pans, per the Figma/Photoshop convention.
+      if (e.ctrlKey || e.metaKey) {
+        const cursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const factor = Math.exp(-e.deltaY * deltaUnit * ZOOM_WHEEL_SENSITIVITY);
+        setView(zoomAt(view, cursor, factor));
+      } else {
+        setView(panBy(view, -e.deltaX * deltaUnit, -e.deltaY * deltaUnit));
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
