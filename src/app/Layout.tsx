@@ -1,4 +1,4 @@
-import { SidecarStatusDot } from '@/app/SidecarStatusDot';
+import { StatusBar } from '@/app/StatusBar';
 import { PRODUCT_NAME } from '@/branding';
 import { Viewport } from '@/canvas/Viewport';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -9,9 +9,8 @@ export function Layout() {
     <TooltipProvider>
       <div className="flex flex-col h-screen bg-neutral-950 text-neutral-50">
         {/* Title bar */}
-        <div className="border-b border-neutral-800 px-4 py-3 flex items-center justify-between">
+        <div className="border-b border-neutral-800 px-4 py-3 flex items-center">
           <span className="text-sm font-medium">{PRODUCT_NAME}</span>
-          <SidecarStatusDot />
         </div>
 
         {/* Main grid */}
@@ -46,6 +45,9 @@ export function Layout() {
             </Tabs>
           </div>
         </div>
+
+        {/* Status bar */}
+        <StatusBar />
       </div>
     </TooltipProvider>
   );

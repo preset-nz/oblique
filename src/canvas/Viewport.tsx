@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { usePanZoom } from './usePanZoom';
-import { useViewTransformStore } from './viewTransform';
+import { screenToDoc, useViewTransformStore } from './viewTransform';
 
 // Placeholder calibration fixtures (Epic 02 replaces these with the real
 // scene/document + compositor output).
@@ -104,7 +104,11 @@ export function Viewport() {
         paint();
       });
     };
-    const unsubscribe = useViewTransformStore.subscribe(schedule);
+    // Only view changes repaint; cursorDoc updates every pointermove and
+    // must not reach the canvas paint path.
+    const unsubscribe = useViewTransformStore.subscribe((state, prev) => {
+      if (state.view !== prev.view) schedule();
+    });
     return () => {
       unsubscribe();
       if (rafId !== null) cancelAnimationFrame(rafId);
@@ -115,8 +119,30 @@ export function Viewport() {
   const markerRadius = 6 / view.scale;
   const markerStroke = 2 / view.scale;
 
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+
+    const { view: currentView } = useViewTransformStore.getState();
+    const docPt = screenToDoc(currentView, { x: screenX, y: screenY });
+    useViewTransformStore.getState().setCursorDoc(docPt);
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    useViewTransformStore.getState().setCursorDoc(null);
+  }, []);
+
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-neutral-900">
+    <div
+      ref={containerRef}
+      className="relative w-full h-full overflow-hidden bg-neutral-900"
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+    >
       <canvas ref={canvasRef} className="absolute inset-0 touch-none" />
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none"

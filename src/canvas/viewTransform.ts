@@ -93,8 +93,11 @@ interface ViewTransformState {
   /** Document (full-resolution) dimensions. */
   docW: number;
   docH: number;
+  /** Cursor position in document space, or null if outside canvas. */
+  cursorDoc: Point | null;
   setView: (view: ViewTransform) => void;
   setViewportSize: (w: number, h: number) => void;
+  setCursorDoc: (cursor: Point | null) => void;
   fitToWindow: () => void;
   reset100: () => void;
 }
@@ -109,8 +112,10 @@ export const useViewTransformStore = create<ViewTransformState>((set, get) => ({
   viewportH: 0,
   docW: PLACEHOLDER_DOC_SIZE,
   docH: PLACEHOLDER_DOC_SIZE,
+  cursorDoc: null,
   setView: (view) => set({ view }),
   setViewportSize: (w, h) => set({ viewportW: w, viewportH: h }),
+  setCursorDoc: (cursor) => set({ cursorDoc: cursor }),
   fitToWindow: () => {
     const { viewportW, viewportH, docW, docH } = get();
     set({ view: fitTransform(viewportW, viewportH, docW, docH) });
