@@ -10,6 +10,7 @@ vi.mock('sonner', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
   save: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -20,9 +21,12 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 import { toast } from 'sonner';
+import * as cache from '@/scene/cache';
+import * as history from '@/scene/history';
 import type { ProjectIoDeps } from './io';
 import {
   loadProject,
+  newProject,
   parseProject,
   serialiseProject,
   useProjectMetaStore,
@@ -162,5 +166,58 @@ describe('dirty-since-save tracking', () => {
 
     useSceneStore.getState().setModifierParam('n1', 'm1', 'radius', 9);
     expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
+  });
+});
+
+describe('newProject', () => {
+  it('clean project: resets scene/path/caches/sources/history without prompting', async () => {
+    await loadProject('/proj/x.oblique', makeDeps());
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+
+    const clearCache = vi.spyOn(cache, 'clearAll');
+    const clearSources = vi.spyOn(sources, 'clearAll');
+    const clearHistory = vi.spyOn(history, 'clear');
+    const confirmDiscard = vi.fn();
+
+    await newProject(confirmDiscard);
+
+    expect(confirmDiscard).not.toHaveBeenCalled();
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
+    expect(useProjectMetaStore.getState().path).toBeNull();
+    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
+    expect(clearCache).toHaveBeenCalled();
+    expect(clearSources).toHaveBeenCalled();
+    expect(clearHistory).toHaveBeenCalled();
+  });
+
+  it('dirty project: prompts, and a cancelled prompt leaves the scene untouched', async () => {
+    await loadProject('/proj/x.oblique', makeDeps());
+    useSceneStore.getState().setModifierParam('n1', 'm1', 'radius', 9);
+    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
+
+    const confirmDiscard = vi.fn(async () => false);
+    await newProject(confirmDiscard);
+
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+  });
+
+  it('dirty project: a confirmed prompt resets the scene', async () => {
+    await loadProject('/proj/x.oblique', makeDeps());
+    useSceneStore.getState().setModifierParam('n1', 'm1', 'radius', 9);
+
+    const confirmDiscard = vi.fn(async () => true);
+    await newProject(confirmDiscard);
+
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
+  });
+
+  it('does not resurrect the discarded scene in undo history', async () => {
+    await loadProject('/proj/x.oblique', makeDeps());
+    await newProject(async () => true);
+
+    const { undo } = await import('@/scene/history');
+    await undo();
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
   });
 });

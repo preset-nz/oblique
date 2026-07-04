@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { installProjectWindowIntegration } from './app/closeGuard';
 import { Layout } from './app/Layout';
+import { installMenu } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
@@ -27,6 +28,7 @@ function App() {
   }, []);
 
   useEffect(() => installShortcuts(), []);
+  useEffect(() => installMenu(), []);
 
   // Once per app, not per StrictMode re-run: window listeners have no
   // teardown API worth building for a singleton window.

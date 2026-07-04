@@ -1,7 +1,9 @@
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { confirm, open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { readTextFile, rename, writeTextFile } from '@tauri-apps/plugin-fs';
 import { toast } from 'sonner';
 import { create } from 'zustand';
+import { PRODUCT_NAME } from '@/branding';
+import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
@@ -169,6 +171,40 @@ export async function loadProject(
   // clears both stacks so Cmd+Z can't reach back into a different document.
   // Cleared at the end (not the start) so it wins over anything this
   // function's own mutations pushed on the way in.
+  history.clear();
+}
+
+/**
+ * File → New (native-menu.md gap, 2026-07-04): respects the unsaved-changes
+ * guard (same confirm-dialog pattern as `closeGuard.ts`'s close prompt),
+ * then resets the scene to empty. Mirrors `loadProject`'s teardown of
+ * caches/sources/history, but to the empty state rather than a loaded one.
+ *
+ * `confirmDiscard` is injected for tests (same pattern as `ProjectIoDeps`);
+ * production wires the real Tauri `confirm` dialog.
+ */
+export async function newProject(
+  confirmDiscard: (message: string) => Promise<boolean> = (message) =>
+    confirm(message, { title: PRODUCT_NAME, kind: 'warning' }),
+): Promise<void> {
+  if (useProjectMetaStore.getState().dirtySinceSave) {
+    const discard = await confirmDiscard(
+      'You have unsaved changes. Discard them and start a new project?',
+    );
+    if (!discard) return;
+  }
+
+  useSceneStore.getState().resetScene();
+  cache.clearAll();
+  sources.clearAll();
+
+  const meta = useProjectMetaStore.getState();
+  meta.setPath(null);
+  meta.markSaved();
+
+  // Same end-of-function ordering as loadProject: clear history last so it
+  // wins over the undo-stack push this function's own resetScene mutation
+  // would otherwise have caused (per-session only, never persisted).
   history.clear();
 }
 

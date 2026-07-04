@@ -52,6 +52,9 @@ interface SceneState {
   clearDirty: (nodeId: string, level: 'draft' | 'working') => void;
 
   loadScene: (scene: Scene) => void;
+
+  /** Replaces the scene with a fresh empty one (roadmap "New" command). */
+  resetScene: () => void;
 }
 
 function updateNode(nodes: SceneNode[], id: string, fn: (node: SceneNode) => SceneNode) {
@@ -218,5 +221,9 @@ export const useSceneStore = create<SceneState>((set) => ({
     // Verbatim — no dirty rewrite. Recook-on-load is the persistence
     // story's job (deferred: project-persistence.md).
     set({ scene });
+  },
+
+  resetScene: () => {
+    set({ scene: makeEmptyScene() });
   },
 }));

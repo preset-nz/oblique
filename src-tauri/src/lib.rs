@@ -1,3 +1,4 @@
+mod menu;
 mod sidecar;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -16,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![greet, sidecar::sidecar_send, sidecar::sidecar_subscribe])
         .setup(|app| {
             sidecar::start(app.handle().clone());
+            menu::install(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())
