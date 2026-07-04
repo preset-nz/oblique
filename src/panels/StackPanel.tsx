@@ -46,9 +46,13 @@ export function StackPanel() {
       <LayerList selectedNodeId={node.id} onSelectNode={selectNode} />
 
       <div className="flex flex-col gap-1 border-t border-neutral-800 pt-3">
-        <div className="mb-1 flex items-center justify-between text-xs text-neutral-400">
-          <span className="font-medium text-neutral-200">{node.label}</span>
-          <span>Stack</span>
+        <div className="mb-1 flex items-center justify-between gap-2 text-xs text-neutral-400">
+          {/* min-w-0 + truncate: Draw Things exports put whole prompts in
+              filenames; an untruncated label forces horizontal panel scroll. */}
+          <span className="min-w-0 truncate font-medium text-neutral-200" title={node.label}>
+            {node.label}
+          </span>
+          <span className="shrink-0">Stack</span>
         </div>
 
         <AddModifier nodeId={node.id} ops={ops} />

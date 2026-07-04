@@ -129,7 +129,9 @@ function LayerRow({
         className="flex flex-1 items-center gap-2 text-left min-w-0"
       >
         <Thumbnail node={node} />
-        <span className="truncate flex-1 text-xs">{node.label}</span>
+        <span className="min-w-0 truncate flex-1 text-xs" title={node.label}>
+          {node.label}
+        </span>
       </button>
       <div className="flex flex-1 flex-col gap-1 min-w-0">
         <div className="flex items-center gap-2">
