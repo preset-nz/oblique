@@ -101,6 +101,15 @@ export function applyKeyStep(
  * Parses free-typed text on commit (Enter/blur). Returns `prev` unchanged
  * if the text does not parse as a finite number; otherwise clamps and
  * rounds the parsed value to `step` precision.
+ *
+ * `clampMax` (default `true`) governs whether the upper bound is enforced
+ * on a *typed* commit. Scrub-drag (`applyDelta`) and keyboard step
+ * (`applyKeyStep`) always clamp both bounds — only a typed value can opt
+ * out of the upper clamp. This is the "soft max" dogfood fix (Epic 04
+ * stack-rows): several sidecar `P(...)` ranges are conservative guesses,
+ * so a scrub stays within the honest spec range (predictable drag feel)
+ * while a typed value can go beyond it, Blender-style. Callers that want
+ * the older hard-clamp-everywhere behaviour simply omit the argument.
  */
 export function parseCommit(
   text: string,
@@ -108,10 +117,11 @@ export function parseCommit(
   step: number,
   min?: number,
   max?: number,
+  clampMax = true,
 ): number {
   const trimmed = text.trim();
   if (trimmed === '') return prev;
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed)) return prev;
-  return roundToStep(clamp(parsed, min, max), step);
+  return roundToStep(clamp(parsed, min, clampMax ? max : undefined), step);
 }

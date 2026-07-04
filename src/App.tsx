@@ -13,6 +13,15 @@ function App() {
     document.documentElement.classList.add('dark');
   }, []);
 
+  useEffect(() => {
+    // Dogfood fix (Epic 04 stack-rows): suppress the native webview
+    // context menu app-wide (canvas + all panels) — right-click is
+    // reserved for future tool vocabulary, not the OS/webview default menu.
+    const suppressContextMenu = (e: MouseEvent) => e.preventDefault();
+    window.addEventListener('contextmenu', suppressContextMenu);
+    return () => window.removeEventListener('contextmenu', suppressContextMenu);
+  }, []);
+
   useEffect(() => installShortcuts(), []);
 
   // Once per app, not per StrictMode re-run: window listeners have no

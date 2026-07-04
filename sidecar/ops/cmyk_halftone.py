@@ -78,11 +78,16 @@ def _screen_channel(
 @op(
     "cmyk_halftone",
     params=[
+        # Dogfood fix (Epic 04 stack-rows): the original max=32.0 was a
+        # guess that was too timid — chunky poster-scale halftones want a
+        # much bigger dot pitch. Raised outright (hard max), rather than
+        # relying on the UI's soft-max/typed-overflow behaviour, since a
+        # spatial-scale param this size-sensitive deserves an honest range.
         P(
             "dot_size",
             "float",
             min=1.0,
-            max=32.0,
+            max=200.0,
             default=6.0,
             step=0.5,
             scale="spatial",

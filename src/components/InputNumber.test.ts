@@ -170,4 +170,16 @@ describe('parseCommit (typed value on Enter/blur)', () => {
     expect(parseCommit('999', 0, 1, 0, 10)).toBe(10);
     expect(parseCommit('-999', 0, 1, 0, 10)).toBe(0);
   });
+
+  it('defaults clampMax to true (back-compat: clamps to max)', () => {
+    expect(parseCommit('999', 0, 1, 0, 10)).toBe(10);
+  });
+
+  it('soft-max dogfood fix: clampMax=false lets a typed value exceed max', () => {
+    expect(parseCommit('999', 0, 1, 0, 10, false)).toBe(999);
+  });
+
+  it('soft-max dogfood fix: min is still enforced when clampMax is false', () => {
+    expect(parseCommit('-999', 0, 1, 0, 10, false)).toBe(0);
+  });
 });

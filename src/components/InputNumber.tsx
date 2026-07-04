@@ -16,6 +16,14 @@ export interface InputNumberProps {
   label: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * Soft-max dogfood fix (Epic 04 stack-rows): when `true`, a typed commit
+   * (Enter/blur) is allowed to exceed `max` — scrub-drag and keyboard
+   * arrows still clamp to `[min, max]` per spec. Op param ranges are
+   * conservative guesses; typed entry is the Blender-style escape hatch.
+   * @default false
+   */
+  allowTypedOverMax?: boolean;
 }
 
 interface DragState {
@@ -43,6 +51,7 @@ export function InputNumber({
   label,
   disabled = false,
   className,
+  allowTypedOverMax = false,
 }: InputNumberProps) {
   const [editing, setEditing] = React.useState(false);
   const [editText, setEditText] = React.useState('');
@@ -69,10 +78,10 @@ export function InputNumber({
   }, [editing]);
 
   const commit = React.useCallback(() => {
-    const next = parseCommit(editText, value, step, min, max);
+    const next = parseCommit(editText, value, step, min, max, !allowTypedOverMax);
     setEditingBoth(false);
     if (next !== value) onChange(next);
-  }, [editText, value, step, min, max, onChange, setEditingBoth]);
+  }, [editText, value, step, min, max, allowTypedOverMax, onChange, setEditingBoth]);
 
   const revert = React.useCallback(() => {
     setEditingBoth(false);
@@ -80,6 +89,10 @@ export function InputNumber({
 
   function handleLabelPointerDown(e: React.PointerEvent<HTMLSpanElement>) {
     if (disabled) return;
+    // Dogfood fix: a label scrub-drag must never fall through to the
+    // browser's native text-selection gesture (dragging over sibling
+    // labels/panels would otherwise highlight text instead of scrubbing).
+    e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragStateRef.current = {
       pointerId: e.pointerId,
@@ -92,6 +105,7 @@ export function InputNumber({
   function handleLabelPointerMove(e: React.PointerEvent<HTMLSpanElement>) {
     const state = dragStateRef.current;
     if (!state || disabled || state.pointerId !== e.pointerId) return;
+    if (e.cancelable) e.preventDefault();
     const dx = e.clientX - state.startX;
     if (!state.dragging) {
       if (Math.abs(dx) < DRAG_THRESHOLD_PX) return;

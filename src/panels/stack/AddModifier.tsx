@@ -1,0 +1,100 @@
+import { Plus } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useSceneStore } from '@/scene/store';
+import type { Modifier } from '@/scene/types';
+import type { OpDescriptor } from '@/sidecar/opsCache';
+
+function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
+  const params: Modifier['params'] = {};
+  for (const p of descriptor.params) params[p.name] = p.default as number | string | boolean;
+  return params;
+}
+
+/**
+ * Add-modifier button + searchable popover (epic README "Add-modifier
+ * flow"). Sits at the displayed TOP of the stack — the scene-model
+ * `addModifier` action already appends at the end of `node.modifiers`,
+ * which is exactly the "last applied" / displayed-top position (see
+ * `stackOrder.ts`), so no index math is needed here.
+ */
+export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor[] }) {
+  const addModifier = useSceneStore((s) => s.addModifier);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return ops;
+    return ops.filter((op) => op.name.toLowerCase().includes(q));
+  }, [ops, query]);
+
+  function pick(descriptor: OpDescriptor) {
+    addModifier(nodeId, descriptor.name, defaultParamsFor(descriptor));
+    setOpen(false);
+    setQuery('');
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery('');
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Add modifier"
+              className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-neutral-700 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+            >
+              <Plus size={14} />
+              Add modifier
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Add a modifier to the top of the stack</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="start" className="w-64 p-2">
+        <Input
+          autoFocus
+          placeholder="Search ops…"
+          aria-label="Search ops"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && filtered[0]) {
+              e.preventDefault();
+              pick(filtered[0]);
+            }
+          }}
+        />
+        <div className="mt-2 flex max-h-56 flex-col gap-0.5 overflow-auto">
+          {ops.length === 0 && (
+            <div className="px-2 py-1 text-xs text-neutral-500">
+              No ops available (sidecar not connected yet).
+            </div>
+          )}
+          {ops.length > 0 && filtered.length === 0 && (
+            <div className="px-2 py-1 text-xs text-neutral-500">No ops match "{query}".</div>
+          )}
+          {filtered.map((op) => (
+            <button
+              key={op.name}
+              type="button"
+              className="rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+              onClick={() => pick(op)}
+            >
+              {op.name}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
