@@ -1,5 +1,6 @@
 import { StatusBar } from '@/app/StatusBar';
 import { PRODUCT_NAME } from '@/branding';
+import { ToolbarRail } from '@/canvas/ToolbarRail';
 import { Viewport } from '@/canvas/Viewport';
 import { Toaster } from '@/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -22,7 +23,7 @@ export function Layout() {
         <div className="flex flex-1 overflow-hidden">
           {/* Left rail: 48px */}
           <div className="w-12 border-r border-neutral-800 flex flex-col items-center py-4">
-            {/* Placeholder for future ToolButtons */}
+            <ToolbarRail />
           </div>
 
           {/* Centre: flexible */}

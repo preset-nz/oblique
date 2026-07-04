@@ -1,3 +1,4 @@
+import { useToolStateStore } from '@/canvas/toolState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 
 /**
@@ -15,19 +16,45 @@ import { useViewTransformStore } from '@/canvas/viewTransform';
  * be dead code at best and a double-fire risk at worst if that assumption
  * ever proved wrong. See `src/app/menu.ts`'s doc comment for the reasoning
  * and the manual click-test that verifies it.
+ *
+ * `V`/`M` (tool-state.md) are plain, unmodified keys — checked against every
+ * existing accelerator in this file and `app/menu.ts` before wiring: all of
+ * those are Cmd-based, so bare `v`/`m` are free. Guarded by the same
+ * editable-target check as the Viewport nudge handler so typing in a text
+ * field never re-tools the canvas underneath it.
  */
 export function installShortcuts(): () => void {
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (!e.metaKey) return;
+    if (e.metaKey) {
+      const key = e.key.toLowerCase();
+
+      if (key === '0') {
+        e.preventDefault();
+        useViewTransformStore.getState().fitToWindow();
+      } else if (key === '1') {
+        e.preventDefault();
+        useViewTransformStore.getState().reset100();
+      }
+      return;
+    }
+
+    if (e.ctrlKey || e.altKey || e.shiftKey) return;
+
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    ) {
+      return;
+    }
 
     const key = e.key.toLowerCase();
-
-    if (key === '0') {
+    if (key === 'v') {
       e.preventDefault();
-      useViewTransformStore.getState().fitToWindow();
-    } else if (key === '1') {
+      useToolStateStore.getState().setTool('move');
+    } else if (key === 'm') {
       e.preventDefault();
-      useViewTransformStore.getState().reset100();
+      useToolStateStore.getState().setTool('select-rect');
     }
   };
 

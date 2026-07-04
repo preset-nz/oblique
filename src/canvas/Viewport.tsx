@@ -17,9 +17,10 @@ import {
   viewChangeNeedsRecomposite,
 } from './paintScene';
 import { TransformBox } from './TransformBox';
+import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
 import { usePanZoom } from './usePanZoom';
-import { screenToDoc, useViewTransformStore } from './viewTransform';
+import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 
@@ -54,7 +55,9 @@ export function Viewport() {
 
   const selection = useSelectionStore((s) => s.selection);
   const selectNode = useSelectionStore((s) => s.selectNode);
+  const clearSelection = useSelectionStore((s) => s.clear);
   const setNodeTransform = useSceneStore((s) => s.setNodeTransform);
+  const tool = useToolStateStore((s) => s.tool);
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
 
   /** Client coords -> document space, sharing the same view transform as canvas paint. */
@@ -66,13 +69,12 @@ export function Viewport() {
     return screenToDoc(currentView, { x: clientX - rect.left, y: clientY - rect.top });
   }, []);
 
-  // Move tool (interim, per this story's carve-out — tool-state.md hasn't
-  // landed yet): plain left-button drag starting on the selected node's
-  // transformed bounds moves it, arrow keys nudge it; usePanZoom already
-  // claims space-held/middle-button drags for panning, so this only needs to
-  // defer to those. Drag on empty canvas is a no-op (not a pan) until
-  // tool-state.md gives it one; that's the "simplest honest interim" the
-  // brief calls for.
+  // Tool-gated pointer handlers (tool-state.md replaces the node-transform-2d
+  // interim). usePanZoom keeps owning space-held/middle-button pan untouched
+  // under every tool; this effect adds the branch in front of it per the
+  // story's "Components touched" line: a plain left-button pointerdown here
+  // starts a pan when `tool === 'pan'`, or a move-drag when `tool === 'move'`
+  // (marquee tools are a no-op until marquees.md).
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -84,19 +86,26 @@ export function Viewport() {
         return;
       }
 
+      const target = e.target;
+      const isEditableTarget =
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      // Escape clears node selection from any tool (de-select, tool-state.md).
+      // Selection is UI state — clearing it never touches the scene store,
+      // so it can never create an undo step.
+      if (e.key === 'Escape' && !isEditableTarget) {
+        clearSelection();
+        return;
+      }
+
       // Arrow-key nudge: 1 px, Shift = 10 px (node-transform-2d.md §Tools).
       // Skipped while a text field has focus — InputNumber owns ArrowUp/Down
       // for value stepping there. Each keydown is its own undo step (the
       // store-subscribe capture coalesces nothing outside a transaction).
       const step = NUDGE_DELTA[e.key];
-      if (!step || selection.kind !== 'node') return;
-      const target = e.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-      ) {
-        return;
-      }
+      if (!step || selection.kind !== 'node' || tool !== 'move') return;
+      if (isEditableTarget) return;
       const node = useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId);
       if (!node) return;
       e.preventDefault();
@@ -117,12 +126,34 @@ export function Viewport() {
     let dragStartTransform = IDENTITY_TRANSFORM_2D;
     let dragStartDoc: Point = { x: 0, y: 0 };
 
+    // Plain left-drag pan for the pan tool. Screen-space delta tracking,
+    // same shape as usePanZoom's own space/middle-button pan — deliberately
+    // not routed through usePanZoom.ts (left untouched per the story) so
+    // Epic 01's space/middle-button gestures keep their own independent path.
+    let panning = false;
+    let panLastScreen: Point = { x: 0, y: 0 };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
 
+      if (tool === 'pan') {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        panning = true;
+        panLastScreen = { x: e.clientX, y: e.clientY };
+        return;
+      }
+
+      if (tool !== 'move') return; // marquee tools: no drag yet (marquees.md)
+
       const docPt = toDoc(e.clientX, e.clientY);
       const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
-      if (!hit) return;
+      if (!hit) {
+        // De-select: click on empty canvas with the move tool active
+        // (tool-state.md). UI-only, never touches the scene store.
+        if (selection.kind === 'node') clearSelection();
+        return;
+      }
 
       if (selection.kind !== 'node' || selection.nodeId !== hit.id) {
         selectNode(hit.id);
@@ -137,6 +168,14 @@ export function Viewport() {
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (panning) {
+        const dx = e.clientX - panLastScreen.x;
+        const dy = e.clientY - panLastScreen.y;
+        panLastScreen = { x: e.clientX, y: e.clientY };
+        const { view, setView } = useViewTransformStore.getState();
+        setView(panBy(view, dx, dy));
+        return;
+      }
       if (!dragNodeId) return;
       const docPt = toDoc(e.clientX, e.clientY);
       const next = applyMove(dragStartTransform, {
@@ -147,6 +186,11 @@ export function Viewport() {
     };
 
     const endDrag = (e: PointerEvent) => {
+      if (panning) {
+        canvas.releasePointerCapture(e.pointerId);
+        panning = false;
+        return;
+      }
       if (!dragNodeId) return;
       canvas.releasePointerCapture(e.pointerId);
       dragNodeId = null;
@@ -168,7 +212,7 @@ export function Viewport() {
       canvas.removeEventListener('pointerup', endDrag);
       canvas.removeEventListener('pointercancel', endDrag);
     };
-  }, [selection, selectNode, setNodeTransform, toDoc]);
+  }, [selection, selectNode, clearSelection, setNodeTransform, tool, toDoc]);
 
   const selectedNode = useSceneStore((s) =>
     selectedNodeId ? s.scene.nodes.find((n) => n.id === selectedNodeId) : undefined,
