@@ -14,6 +14,7 @@ export interface OpParamSpec {
   step?: number;
   scale: 'spatial' | 'none';
   choices?: string[]; // enum type only
+  widget?: 'slider'; // UI hint from the op's home backend — favours the slider kind over plain number
 }
 
 export interface OpDescriptor {

@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal
 
 ParamScale = Literal["spatial", "none"]
 ParamType = Literal["float", "int", "bool", "enum"]
+ParamWidget = Literal["slider"]
 
 # Pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray, same shape, uint8 in/out,
 # must not mutate its input. `debug_echo` is the exception grandfathered from
@@ -40,6 +41,9 @@ class ParamSpec:
     step: float | None = None
     scale: ParamScale = "none"
     choices: tuple[str, ...] | None = None  # enum type only
+    widget: ParamWidget | None = (
+        None  # UI hint, e.g. "slider" over the default number field
+    )
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -56,6 +60,8 @@ class ParamSpec:
             d["step"] = self.step
         if self.choices is not None:
             d["choices"] = list(self.choices)
+        if self.widget is not None:
+            d["widget"] = self.widget
         return d
 
 
