@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import * as cache from '@/scene/cache';
 import { useCacheVersionStore } from '@/scene/cache';
 import { deleteNode } from '@/scene/deleteNode';
+import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode } from '@/scene/types';
 
@@ -177,7 +178,7 @@ function LayerRow({
                 <Trash2 size={14} />
               </button>
             </TooltipTrigger>
-            <TooltipContent>Delete layer (no undo yet)</TooltipContent>
+            <TooltipContent>Delete layer</TooltipContent>
           </Tooltip>
         </div>
         <Slider
@@ -186,6 +187,11 @@ function LayerRow({
           max={100}
           step={1}
           onValueChange={(value) => setNodeProp(node.id, { opacity: value[0] / 100 })}
+          // Undo/history transaction boundary (Epic 13): Radix's onValueChange
+          // fires continuously while dragged; onPointerDown/onValueCommit are
+          // this control's start/release, coalescing one drag into one step.
+          onPointerDown={() => beginTransaction()}
+          onValueCommit={() => endTransaction()}
           onClick={(e) => e.stopPropagation()}
         />
         <ToggleGroup

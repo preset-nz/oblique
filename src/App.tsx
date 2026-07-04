@@ -6,6 +6,10 @@ import { installShortcuts } from './app/shortcuts';
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
 import './cook/singleton';
+// Side-effecting import: starts the undo/history scene-store subscription
+// (Epic 13) the first time this module loads. Safe to import more than
+// once — the subscribe call is idempotent module-scope state.
+import './scene/history';
 
 function App() {
   useEffect(() => {

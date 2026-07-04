@@ -2,6 +2,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { readTextFile, rename, writeTextFile } from '@tauri-apps/plugin-fs';
 import { toast } from 'sonner';
 import { create } from 'zustand';
+import * as history from '@/scene/history';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
@@ -163,6 +164,12 @@ export async function loadProject(
   const meta = useProjectMetaStore.getState();
   meta.setPath(path);
   meta.markSaved();
+
+  // History is per-session, never persisted (epic 13 scope) — a fresh load
+  // clears both stacks so Cmd+Z can't reach back into a different document.
+  // Cleared at the end (not the start) so it wins over anything this
+  // function's own mutations pushed on the way in.
+  history.clear();
 }
 
 /**

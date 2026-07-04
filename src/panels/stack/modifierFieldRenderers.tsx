@@ -6,6 +6,7 @@ import {
 } from '@preset.nz/property-editors';
 import { InputNumber } from '@/components/InputNumber';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { beginTransaction, endTransaction } from '@/scene/history';
 import { snapToIntegerStep } from './integerStepFix';
 import type { ModifierNumberFieldDef, ModifierSliderFieldDef } from './modifierScope';
 
@@ -46,6 +47,8 @@ const ModifierNumberRenderer: FieldRenderer<ModifierNumberFieldDef> = ({
       // scrub still clamps to the spec range, but a typed value can go
       // beyond it (Blender-style soft max).
       allowTypedOverMax
+      onDragStart={beginTransaction}
+      onDragEnd={endTransaction}
     />
   );
 };
@@ -75,6 +78,12 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
           step={step}
           disabled={readOnly}
           onChange={(e) => wrapped?.(Number(e.target.value))}
+          // Undo/history transaction boundary (Epic 13): a native range fires
+          // onChange continuously while dragged, so pointerdown/pointerup are
+          // this control's version of InputNumber's scrub-drag lifecycle —
+          // one drag coalesces into one undo step.
+          onPointerDown={() => beginTransaction()}
+          onPointerUp={() => endTransaction()}
           className="flex-1"
         />
         {/* Slider drag and InputNumber scrub live on the same row, sharing one value. */}
@@ -88,6 +97,8 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
           disabled={readOnly}
           className="w-auto"
           allowTypedOverMax
+          onDragStart={beginTransaction}
+          onDragEnd={endTransaction}
         />
       </div>
     </div>

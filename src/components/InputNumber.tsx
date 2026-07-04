@@ -24,6 +24,16 @@ export interface InputNumberProps {
    * @default false
    */
   allowTypedOverMax?: boolean;
+  /**
+   * Fired once a label pointerdown crosses the scrub-drag threshold (before
+   * the first `onChange` of the drag), and once when the drag ends —
+   * `InputNumber`'s drag lifecycle is the transaction-boundary hook for
+   * undo/history (Epic 13): callers wrap these around a single coalesced
+   * undo step. Optional and unused by callers that don't care (kept generic
+   * — no history-module import in this file).
+   */
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 interface DragState {
@@ -52,6 +62,8 @@ export function InputNumber({
   disabled = false,
   className,
   allowTypedOverMax = false,
+  onDragStart,
+  onDragEnd,
 }: InputNumberProps) {
   const [editing, setEditing] = React.useState(false);
   const [editText, setEditText] = React.useState('');
@@ -110,6 +122,7 @@ export function InputNumber({
     if (!state.dragging) {
       if (Math.abs(dx) < DRAG_THRESHOLD_PX) return;
       state.dragging = true;
+      onDragStart?.();
     }
     const mods = { shift: e.shiftKey, alt: e.altKey };
     const next = applyDelta(state.startValue, dx, step, mods, min, max);
@@ -127,7 +140,9 @@ export function InputNumber({
     }
     const wasDragging = state?.dragging ?? false;
     dragStateRef.current = null;
-    if (!wasDragging && !disabled) {
+    if (wasDragging) {
+      onDragEnd?.();
+    } else if (!disabled) {
       beginEditing();
     }
   }
@@ -137,7 +152,9 @@ export function InputNumber({
     if (state && e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    const wasDragging = state?.dragging ?? false;
     dragStateRef.current = null;
+    if (wasDragging) onDragEnd?.();
   }
 
   function handleInputFocus() {

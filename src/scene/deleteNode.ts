@@ -9,7 +9,10 @@ import { useSceneStore } from '@/scene/store';
  *
  * Deletion is compositing-only for the surviving nodes (dirty rule 4): no
  * dirty flag, no recook — the scene-store subscription recomposites.
- * No undo until Epic 13; the layer row's trash button is the only caller.
+ * Undoable (Epic 13) via the scene-store subscription in `scene/history.ts`
+ * — `removeNode`'s scene mutation is captured as a normal undo step; undo
+ * restores the node and `scene/history.ts` re-decodes its source bitmap
+ * (evicted here) before the scheduler recooks it.
  */
 export function deleteNode(nodeId: string): void {
   useSceneStore.getState().removeNode(nodeId);
