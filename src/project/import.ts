@@ -8,7 +8,7 @@ import { useSceneStore } from '@/scene/store';
  * Filename-only label — sourcePath keeps the full path; the label is
  * cosmetic (layer-panel display).
  */
-function filenameOf(path: string): string {
+export function filenameOf(path: string): string {
   const normalised = path.split('\\').join('/');
   return normalised.slice(normalised.lastIndexOf('/') + 1) || normalised;
 }

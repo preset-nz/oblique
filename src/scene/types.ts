@@ -41,6 +41,10 @@ export interface PixelNode extends SceneNode {
   sourceSize: [number, number]; // document-space dimensions
 }
 
+export function isPixelNode(node: SceneNode): node is PixelNode {
+  return node.type === 'pixel';
+}
+
 // Epic 08 will replace this with the real Camera type from the source spec;
 // `never` keeps `cameras` strictly empty (and tsc-clean) until then.
 export type Camera = never;

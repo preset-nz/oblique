@@ -5,10 +5,15 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-destroy",
     "opener:default",
     "dialog:default",
     "fs:default",
     "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-rename",
     {
       "identifier": "fs:scope",
       "allow": ["$HOME/**"]

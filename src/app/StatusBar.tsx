@@ -1,9 +1,14 @@
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
+import { filenameOf } from '@/project/import';
+import { useProjectMetaStore } from '@/project/io';
 
 export function StatusBar() {
   const scale = useViewTransformStore((state) => state.view.scale);
   const cursorDoc = useViewTransformStore((state) => state.cursorDoc);
+  const projectPath = useProjectMetaStore((state) => state.path);
+  const dirtySinceSave = useProjectMetaStore((state) => state.dirtySinceSave);
+  const projectName = projectPath ? filenameOf(projectPath) : 'untitled';
 
   const zoomPercent = Math.round(scale * 100);
 
@@ -39,9 +44,12 @@ export function StatusBar() {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Save status placeholder */}
+      {/* Save status: project filename, dot while unsaved changes exist */}
       <div className="flex items-center gap-1 whitespace-nowrap" aria-live="polite">
-        <span className="text-neutral-500">—</span>
+        <span className="text-neutral-500">
+          {projectName}
+          {dirtySinceSave ? ' •' : ''}
+        </span>
       </div>
 
       <Separator />
