@@ -11,6 +11,9 @@ importers:
       '@fontsource-variable/inter':
         specifier: ^5.2.8
         version: 5.2.8
+      '@preset.nz/property-editors':
+        specifier: file:../../packages/property-editors
+        version: file:../../packages/property-editors(react@19.2.7)
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.1
@@ -524,6 +527,11 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@preset.nz/property-editors@file:../../packages/property-editors':
+    resolution: {directory: ../../packages/property-editors, type: directory}
+    peerDependencies:
+      react: ^19
 
   '@radix-ui/number@1.1.2':
     resolution: {integrity: sha512-ceTwaxc4I5IOi97DgCotl3pqiyRGvffcc0oOsE2dQYaJOFIDsDt4VWG6xEbg1QePv9QWausCEIppud/tJ1wNig==}
@@ -3641,6 +3649,10 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@preset.nz/property-editors@file:../../packages/property-editors(react@19.2.7)':
+    dependencies:
+      react: 19.2.7
 
   '@radix-ui/number@1.1.2': {}
 
