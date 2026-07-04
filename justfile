@@ -36,6 +36,12 @@ check:
     uv run --project sidecar pytest sidecar
     ./node_modules/.bin/vitest run
     ./node_modules/.bin/depcruise src
+    node scripts/check-licenses.mjs
+
+# Licence gate only (also part of `check`) — permissive allowlist, see script header.
+[group('quality')]
+licenses:
+    node scripts/check-licenses.mjs
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
