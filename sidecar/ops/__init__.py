@@ -106,8 +106,11 @@ def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
 # Imported for registration side effect only — each module calls `@op(...)`
 # at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
 from ops import cmyk_halftone as _cmyk_halftone  # noqa: E402, F401
+from ops import colour_crush as _colour_crush  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
+from ops import ink_starved as _ink_starved  # noqa: E402, F401
 from ops import invert as _invert  # noqa: E402, F401
 from ops import levels as _levels  # noqa: E402, F401
 from ops import threshold as _threshold  # noqa: E402, F401
+from ops import xerox as _xerox  # noqa: E402, F401
