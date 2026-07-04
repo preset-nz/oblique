@@ -132,6 +132,9 @@ export function Viewport() {
     // Epic 01's space/middle-button gestures keep their own independent path.
     let panning = false;
     let panLastScreen: Point = { x: 0, y: 0 };
+    // Distinguishes a click (select, Georg 2026-07-05: clicking a node should
+    // select it under the pan tool too) from a drag (pan) — screen px.
+    let panTravel = 0;
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
@@ -140,6 +143,7 @@ export function Viewport() {
         e.preventDefault();
         canvas.setPointerCapture(e.pointerId);
         panning = true;
+        panTravel = 0;
         panLastScreen = { x: e.clientX, y: e.clientY };
         return;
       }
@@ -171,6 +175,7 @@ export function Viewport() {
       if (panning) {
         const dx = e.clientX - panLastScreen.x;
         const dy = e.clientY - panLastScreen.y;
+        panTravel += Math.abs(dx) + Math.abs(dy);
         panLastScreen = { x: e.clientX, y: e.clientY };
         const { view, setView } = useViewTransformStore.getState();
         setView(panBy(view, dx, dy));
@@ -189,6 +194,13 @@ export function Viewport() {
       if (panning) {
         canvas.releasePointerCapture(e.pointerId);
         panning = false;
+        // A stationary press is a click, not a pan: select what's under it
+        // (or clear on empty canvas) — same semantics as the move tool.
+        if (panTravel <= 4) {
+          const hit = topmostNodeAt(useSceneStore.getState().scene, toDoc(e.clientX, e.clientY));
+          if (hit) selectNode(hit.id);
+          else if (selection.kind === 'node') clearSelection();
+        }
         return;
       }
       if (!dragNodeId) return;
