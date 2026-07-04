@@ -120,9 +120,16 @@ function LayerRow({
   const down = nudgeIndex(index, 'down', length);
 
   return (
-    <div className={`flex items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''}`}>
-      {/* Selection is the row's own <button> (not the outer container) so
-          it never nests inside the eye/reorder buttons or slider below. */}
+    // The whole row selects (dogfood 2026-07-05: the label-only target kept
+    // getting missed) — every inner control already stopPropagation()s its
+    // own clicks. Keyboard access stays on the label <button> below, so the
+    // div-level onClick is a pointer-only convenience, not the a11y path.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the inner button
+    // biome-ignore lint/a11y/noStaticElementInteractions: same — pointer-only convenience
+    <div
+      onClick={onSelect}
+      className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''}`}
+    >
       <button
         type="button"
         onClick={onSelect}
