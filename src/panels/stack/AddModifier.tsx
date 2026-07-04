@@ -26,9 +26,12 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
   const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
+    // debug_-prefixed ops are protocol internals (debug_echo is the
+    // round-trip canary) — real, registered, but never user-addable.
+    const usable = ops.filter((op) => !op.name.startsWith('debug_'));
     const q = query.trim().toLowerCase();
-    if (!q) return ops;
-    return ops.filter((op) => op.name.toLowerCase().includes(q));
+    if (!q) return usable;
+    return usable.filter((op) => op.name.toLowerCase().includes(q));
   }, [ops, query]);
 
   function pick(descriptor: OpDescriptor) {
