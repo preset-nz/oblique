@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { InputNumber } from '@/components/InputNumber';
+import { LayerList } from '@/panels/stack/LayerList';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier, SceneNode } from '@/scene/types';
 import { type OpDescriptor, type OpParamSpec, useOpsCacheStore } from '@/sidecar/opsCache';
@@ -188,13 +189,11 @@ export function StackPanel() {
       className="text-neutral-200 text-sm"
       style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
     >
-      <select value={node.id} onChange={(e) => setSelectedNodeId(e.target.value)}>
-        {nodes.map((n) => (
-          <option key={n.id} value={n.id}>
-            {n.label}
-          </option>
-        ))}
-      </select>
+      <LayerList selectedNodeId={node.id} onSelectNode={setSelectedNodeId} />
+
+      <div style={{ borderTop: '1px solid #444', paddingTop: 8 }}>
+        <strong>{node.label}</strong> — modifiers (debug panel, Epic 04 replaces this)
+      </div>
 
       {node.modifiers.map((modifier, index) => (
         <ModifierRow key={modifier.id} node={node} modifier={modifier} index={index} ops={ops} />
