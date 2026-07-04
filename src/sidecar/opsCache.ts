@@ -13,6 +13,7 @@ export interface OpParamSpec {
   max?: number;
   step?: number;
   scale: 'spatial' | 'none';
+  choices?: string[]; // enum type only
 }
 
 export interface OpDescriptor {

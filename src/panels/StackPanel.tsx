@@ -52,11 +52,24 @@ function ParamControl({
       </label>
     );
   }
-  // enum: no options field on OpParamSpec yet (no enum ops in the starter
-  // set) — placeholder only, per the panel's "ugly but honest" mandate.
+  if (spec.type === 'enum' && spec.choices) {
+    return (
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        {spec.name}
+        <select value={String(value)} onChange={(e) => onChange(e.target.value)}>
+          {spec.choices.map((choice) => (
+            <option key={choice} value={choice}>
+              {choice}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  // enum with no choices sent: honest read-only fallback.
   return (
     <span>
-      {spec.name}: {String(value)} (enum editing not yet supported)
+      {spec.name}: {String(value)}
     </span>
   );
 }

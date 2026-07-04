@@ -39,6 +39,7 @@ class ParamSpec:
     max: float | None = None
     step: float | None = None
     scale: ParamScale = "none"
+    choices: tuple[str, ...] | None = None  # enum type only
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -53,6 +54,8 @@ class ParamSpec:
             d["max"] = self.max
         if self.step is not None:
             d["step"] = self.step
+        if self.choices is not None:
+            d["choices"] = list(self.choices)
         return d
 
 
@@ -96,6 +99,7 @@ def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
 
 # Imported for registration side effect only — each module calls `@op(...)`
 # at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
+from ops import cmyk_halftone as _cmyk_halftone  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
 from ops import invert as _invert  # noqa: E402, F401

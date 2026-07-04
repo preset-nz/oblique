@@ -10,6 +10,7 @@ import pytest
 
 from main import dispatch
 from ops import OPS
+from ops.cmyk_halftone import cmyk_halftone
 from ops.gaussian_blur import gaussian_blur
 from ops.grain import grain
 from ops.invert import invert
@@ -22,6 +23,7 @@ ALL_OPS = [
     (threshold, {"level": 127.0, "smooth": 8.0}),
     (invert, {}),
     (grain, {"amount": 0.3, "size": 2, "seed": 7}),
+    (cmyk_halftone, {"dot_size": 3.0, "misregistration": 1.0, "seed": 7}),
 ]
 
 
@@ -220,3 +222,58 @@ def test_all_five_ops_registered_in_ops_registry():
     for name in ("gaussian_blur", "levels", "threshold", "invert", "grain"):
         assert name in OPS
         assert OPS[name].backend == "python"
+
+
+def test_cmyk_halftone_seed_determinism():
+    rng = np.random.default_rng(8)
+    img = _random_rgba(rng, h=32, w=32)
+    params = {"dot_size": 4.0, "misregistration": 2.0, "seed": 42}
+
+    np.testing.assert_array_equal(
+        cmyk_halftone(img, params), cmyk_halftone(img, params)
+    )
+
+
+def test_cmyk_halftone_mid_grey_shows_dot_structure():
+    # Spec acceptance: mid-grey input yields visible screen structure —
+    # both inked and paper pixels must exist.
+    img = np.full((64, 64, 4), 128, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = cmyk_halftone(img, {"dot_size": 6.0, "mode": "paper"})
+    lum = out[..., :3].mean(axis=-1)
+
+    assert (lum < 100).any(), "expected inked dots"
+    assert (lum > 200).any(), "expected paper between dots"
+
+
+def test_cmyk_halftone_solid_primary_mostly_single_channel():
+    # Pure red -> cyan plate ~0; red channel should stay high where
+    # magenta/yellow dots land (they don't absorb red).
+    img = np.zeros((64, 64, 4), dtype=np.uint8)
+    img[..., 0] = 255
+    img[..., 3] = 255
+
+    out = cmyk_halftone(img, {"dot_size": 6.0, "mode": "paper"})
+
+    assert out[..., 0].mean() > 200, (
+        "cyan/black plates should be near-empty on pure red"
+    )
+
+
+def test_cmyk_halftone_alpha_untouched():
+    rng = np.random.default_rng(9)
+    img = _random_rgba(rng, h=24, w=24)
+
+    out = cmyk_halftone(img, {"dot_size": 4.0})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_cmyk_halftone_over_mode_darkens_input():
+    rng = np.random.default_rng(10)
+    img = _random_rgba(rng, h=24, w=24)
+
+    out = cmyk_halftone(img, {"dot_size": 4.0, "mode": "over"})
+
+    assert (out[..., :3].astype(int) <= img[..., :3].astype(int)).all()
