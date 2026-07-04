@@ -178,12 +178,13 @@ describe('exportPng', () => {
     expect(toast.error).toHaveBeenCalledWith('Nothing to export', expect.anything());
   });
 
-  it('does not write the file when the save dialog is cancelled', async () => {
+  it('cooks nothing and writes nothing when the save dialog is cancelled (dialog comes first)', async () => {
     const nodes = [pixelNode('a')];
     const deps = makeDeps(makeScene(nodes), { pickSavePath: vi.fn(async () => null) });
 
     await exportPng(deps);
 
+    expect(deps.cookFullRes).not.toHaveBeenCalled();
     expect(deps.writeFile).not.toHaveBeenCalled();
   });
 
@@ -192,7 +193,9 @@ describe('exportPng', () => {
     const nodes = [pixelNode('a')];
     const deps = makeDeps(makeScene(nodes), {
       cookFullRes: vi.fn(async () => bitmap),
-      pickSavePath: vi.fn(async () => null),
+      writeFile: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
     });
 
     await exportPng(deps);

@@ -15,19 +15,23 @@ export function installShortcuts(): () => void {
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!e.metaKey) return;
 
-    if (e.key === '0') {
+    // With Shift held, KeyboardEvent.key is the shifted character ('E' not
+    // 'e') — normalise, or every Shift+Cmd+<letter> shortcut is dead.
+    const key = e.key.toLowerCase();
+
+    if (key === '0') {
       e.preventDefault();
       useViewTransformStore.getState().fitToWindow();
-    } else if (e.key === '1') {
+    } else if (key === '1') {
       e.preventDefault();
       useViewTransformStore.getState().reset100();
-    } else if (e.key === 'o') {
+    } else if (key === 'o') {
       e.preventDefault();
       void openAnythingDialog();
-    } else if (e.key === 's') {
+    } else if (key === 's') {
       e.preventDefault();
       void saveProject({ as: e.shiftKey });
-    } else if (e.key === 'e' && e.shiftKey) {
+    } else if (key === 'e' && e.shiftKey) {
       e.preventDefault();
       void exportPng();
     }

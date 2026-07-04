@@ -93,6 +93,11 @@ export async function exportPng(
     return;
   }
 
+  // Ask for the destination up front — committing to a long cook before the
+  // user has even confirmed the export reads as "nothing happened".
+  const path = await deps.pickSavePath(suggestedExportName(useProjectMetaStore.getState().path));
+  if (!path) return;
+
   const nodes = exportableNodes(scene);
   const cancelled = { current: false };
   const toastId = toast.loading(`Exporting 0 / ${nodes.length}`, {
@@ -142,12 +147,6 @@ export async function exportPng(
 
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const bytes = await deps.blobToBytes(blob);
-
-    const path = await deps.pickSavePath(suggestedExportName(useProjectMetaStore.getState().path));
-    if (!path) {
-      toast.dismiss(toastId);
-      return;
-    }
 
     await deps.writeFile(path, bytes);
     toast.dismiss(toastId);
