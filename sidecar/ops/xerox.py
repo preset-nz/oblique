@@ -1,9 +1,11 @@
 """`xerox` — photocopy generation loss: the image as it degrades through
 repeated copy-of-a-copy passes on a tired machine. Each generation blows
 out contrast a little further and lets the exposure threshold drift, a
-slight rotation creeps in from a crooked platen, and — applied once,
-cumulative-looking — dirty-glass streaks and toner-starved speckle build
-up in the dark fields, with a soft bloom haloing the remaining edges.
+slight rotation creeps in from a crooked platen, and toner-starved
+speckle builds up in the dark fields, with a soft bloom haloing the
+remaining edges. Streak banding is deliberately NOT here — bands are
+generator-shaped content, not copy degradation (see ops-backlog's
+operators-vs-generators note; `roller_streaks` owns that look).
 Mono (Rec. 709) by default, since photocopiers don't do colour; RGBA
 in/out at the same size, alpha untouched.
 """
@@ -43,23 +45,6 @@ def _rotate_same_size(rgb_u8: np.ndarray, angle_deg: float) -> np.ndarray:
     return np.asarray(cropped, dtype=np.uint8)
 
 
-def _streak_pattern(w: int, rng: np.random.Generator, count: int = 6) -> np.ndarray:
-    """Low-frequency vertical banding, constant down each column — dirty
-    glass / dust on the platen. Returns [0, 1], 1 == darkest streak."""
-    xs = np.arange(w, dtype=np.float64)
-    pattern = np.zeros(w, dtype=np.float64)
-    for _ in range(count):
-        freq = rng.uniform(0.005, 0.06)
-        phase = rng.uniform(0.0, 2.0 * np.pi)
-        amp = rng.uniform(0.3, 1.0)
-        pattern += amp * np.sin(2.0 * np.pi * freq * xs + phase)
-    pattern -= pattern.min()
-    span = pattern.max()
-    if span > 1e-9:
-        pattern /= span
-    return pattern
-
-
 def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
     """Cheap Sobel-free edge magnitude (central differences); good enough
     for a soft bloom mask, and keeps the sidecar scipy-free."""
@@ -74,7 +59,6 @@ def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
     "xerox",
     params=[
         P("generations", "int", min=1, max=10, default=3, step=1),
-        P("streaks", "float", min=0.0, max=1.0, default=0.2, step=0.01),
         P("skew", "float", min=0.0, max=2.0, default=0.3, step=0.05),
         P("toner_noise", "float", min=0.0, max=1.0, default=0.15, step=0.01),
         P("edge_bloom", "float", min=0.0, max=1.0, default=0.1, step=0.01),
@@ -93,7 +77,6 @@ def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
 )
 def xerox(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     generations = max(1, min(10, int(params.get("generations", 3))))
-    streaks = float(params.get("streaks", 0.2))
     skew = float(params.get("skew", 0.3))
     toner_noise = float(params.get("toner_noise", 0.15))
     edge_bloom = float(params.get("edge_bloom", 0.1))
@@ -124,12 +107,6 @@ def xerox(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         drift = float(rng.uniform(-1.0, 1.0)) * 6.0 * frac
         mid = 127.5 + drift
         rgb_f = (rgb_f - mid) * contrast_factor + mid
-        rgb_f = np.clip(rgb_f, 0.0, 255.0)
-
-    if streaks > 0.0:
-        pattern = _streak_pattern(w, rng)
-        darken = 1.0 - streaks * 0.7 * pattern
-        rgb_f = rgb_f * darken[None, :, None]
         rgb_f = np.clip(rgb_f, 0.0, 255.0)
 
     if toner_noise > 0.0:

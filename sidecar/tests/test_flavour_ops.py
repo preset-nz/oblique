@@ -15,7 +15,7 @@ from ops.xerox import xerox
 
 ALL_OPS = [
     (colour_crush, {"bits": 3, "dither": False}),
-    (xerox, {"generations": 3, "streaks": 0.2, "skew": 0.3, "seed": 7}),
+    (xerox, {"generations": 3, "skew": 0.3, "seed": 7}),
     (ink_starved, {"direction": "h", "starvation": 0.4, "banding": 0.2, "seed": 7}),
 ]
 
@@ -132,7 +132,6 @@ def test_xerox_seed_determinism():
     img = _random_rgba(rng, h=40, w=40)
     params = {
         "generations": 4,
-        "streaks": 0.5,
         "skew": 1.0,
         "toner_noise": 0.4,
         "edge_bloom": 0.3,
@@ -149,8 +148,8 @@ def test_xerox_different_seed_differs():
     rng = np.random.default_rng(9)
     img = _random_rgba(rng, h=40, w=40)
 
-    a = xerox(img, {"generations": 3, "streaks": 0.5, "seed": 1})
-    b = xerox(img, {"generations": 3, "streaks": 0.5, "seed": 2})
+    a = xerox(img, {"generations": 3, "seed": 1})
+    b = xerox(img, {"generations": 3, "seed": 2})
 
     assert not np.array_equal(a, b)
 
@@ -159,7 +158,7 @@ def test_xerox_mono_by_default():
     rng = np.random.default_rng(10)
     img = _random_rgba(rng, h=20, w=20)
 
-    out = xerox(img, {"generations": 2, "streaks": 0.0, "skew": 0.0, "seed": 3})
+    out = xerox(img, {"generations": 2, "skew": 0.0, "seed": 3})
 
     assert np.all(out[..., 0] == out[..., 1])
     assert np.all(out[..., 1] == out[..., 2])
@@ -176,7 +175,6 @@ def test_xerox_keep_colour_preserves_channel_variety():
         img,
         {
             "generations": 1,
-            "streaks": 0.0,
             "skew": 0.0,
             "toner_noise": 0.0,
             "edge_bloom": 0.0,
@@ -196,7 +194,6 @@ def test_xerox_edge_params_at_extremes_do_not_throw():
         img,
         {
             "generations": 10,
-            "streaks": 1.0,
             "skew": 2.0,
             "toner_noise": 1.0,
             "edge_bloom": 1.0,
