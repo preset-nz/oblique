@@ -3,6 +3,7 @@ import * as cache from '@/scene/cache';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { isPixelNode, type PixelNode, type Scene, type SceneNode } from '@/scene/types';
+import { sceneChangedIgnoringDirty } from './sceneDiff';
 
 /**
  * Undo/history (Epic 13). Snapshot model, not command pattern: the undo/redo
@@ -40,26 +41,8 @@ let transactionBefore: Scene | null = null;
 /** True while `restoreScene` is applying an undo/redo — the subscription must not re-capture its own restore as a new undo step. */
 let suppressCapture = false;
 
-/** Ignores the `dirty` field. Used to tell a real edit apart from cook churn (clearDirty/markDirty). */
-function sceneChangedIgnoringDirty(a: Scene, b: Scene): boolean {
-  if (a === b) return false;
-  if (a.nodes.length !== b.nodes.length) return true;
-  if (a.documentSize[0] !== b.documentSize[0] || a.documentSize[1] !== b.documentSize[1]) {
-    return true;
-  }
-  if (a.resolution !== b.resolution) return true;
-  if (a.defaultCameraId !== b.defaultCameraId) return true;
-
-  for (let i = 0; i < a.nodes.length; i++) {
-    const na = a.nodes[i];
-    const nb = b.nodes[i];
-    if (na.id !== nb.id) return true; // reorder
-    const { dirty: _a, ...restA } = na;
-    const { dirty: _b, ...restB } = nb;
-    if (JSON.stringify(restA) !== JSON.stringify(restB)) return true;
-  }
-  return false;
-}
+// Real-edit-vs-cook-churn test lives in scene/sceneDiff.ts (shared with the
+// cook scheduler, which must not reset its idle timers on dirty-flag churn).
 
 function pushUndo(scene: Scene): void {
   undoStack.push(scene);

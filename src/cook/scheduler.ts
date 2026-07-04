@@ -1,3 +1,4 @@
+import { sceneChangedIgnoringDirty } from '@/scene/sceneDiff';
 import { useSceneStore } from '@/scene/store';
 import { useSidecarStatusStore } from '@/sidecar/client';
 import { type CookLevel, cookNode, resetCookErrorBurst } from './cook';
@@ -49,6 +50,14 @@ export class CookScheduler {
   start(): void {
     this.unsubscribeScene = useSceneStore.subscribe((state, prev) => {
       if (state.scene === prev.scene) return;
+      // Cook churn (clearDirty/markDirty swap the scene object but change
+      // only dirty flags) must NOT re-arm the timers: every completing draft
+      // cook would push pending WORKING cooks out another 400ms — with a few
+      // nodes cooking, working-res results starve ("grain takes ages to kick
+      // in", Georg 2026-07-05). Only a real edit resets the idle clock; the
+      // timer callbacks read dirty state fresh at fire time, so dirty set by
+      // markDirty right after a real edit (project load) is still picked up.
+      if (!sceneChangedIgnoringDirty(prev.scene, state.scene)) return;
       this.armDraftDebounce();
       this.armWorkingIdle();
     });

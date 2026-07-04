@@ -83,6 +83,30 @@ describe('CookScheduler', () => {
     scheduler.stop();
   });
 
+  it('dirty-flag churn (clearDirty) does NOT reset the WORKING idle timer — completing cooks must not starve pending ones', async () => {
+    const executor = vi.fn(async () => {});
+    const scheduler = new CookScheduler(executor);
+    scheduler.start();
+
+    setNodes([
+      makeNode('a', { dirty: { draft: true, working: true } }),
+      makeNode('b', { dirty: { draft: false, working: true } }),
+    ]);
+
+    // t=100: node a's draft cook "completes" — clearDirty swaps the scene
+    // object but only changes dirty flags. Before the sceneDiff filter this
+    // re-armed the 400ms idle timer, postponing b's working cook to t=500
+    // (and indefinitely under sustained churn).
+    await vi.advanceTimersByTimeAsync(100);
+    useSceneStore.getState().clearDirty('a', 'draft');
+
+    // Working cooks still fire at t=400, measured from the real edit.
+    await vi.advanceTimersByTimeAsync(301);
+    expect(executor).toHaveBeenCalledWith('b', 'working');
+
+    scheduler.stop();
+  });
+
   it('promotes to WORKING after 400ms of no further store mutation', async () => {
     const executor = vi.fn(async () => {});
     const scheduler = new CookScheduler(executor);
@@ -109,10 +133,12 @@ describe('CookScheduler', () => {
     await vi.advanceTimersByTimeAsync(100);
     executor.mockClear();
 
-    // Keep mutating every 200ms — under the 400ms idle bar — several times.
+    // Keep making REAL edits every 200ms — under the 400ms idle bar. (Scene
+    // content must actually change each time: identical-content swaps are
+    // cook churn per sceneDiff.ts and deliberately don't reset the timer.)
     for (let i = 0; i < 3; i++) {
       await vi.advanceTimersByTimeAsync(200);
-      setNodes([makeNode('a', { dirty: { draft: false, working: true } })]);
+      setNodes([makeNode('a', { opacity: 0.9 - i * 0.1, dirty: { draft: false, working: true } })]);
     }
     expect(executor).not.toHaveBeenCalledWith('a', 'working');
 
@@ -132,14 +158,15 @@ describe('CookScheduler', () => {
     await vi.advanceTimersByTimeAsync(80);
     expect(calls).toEqual([{ nodeId: 'a', level: 'draft' }]);
 
-    // Re-dirty while the first draft cook is still in flight.
-    setNodes([makeNode('a', { dirty: { draft: true, working: true } })]);
+    // Re-dirty via a REAL edit while the first draft cook is still in flight
+    // (identical-content swaps are churn per sceneDiff.ts and wouldn't arm).
+    setNodes([makeNode('a', { opacity: 0.8, dirty: { draft: true, working: true } })]);
     await vi.advanceTimersByTimeAsync(80);
     // Superseded, not queued again yet (still in flight) — still only one call so far.
     expect(calls).toEqual([{ nodeId: 'a', level: 'draft' }]);
 
     // Re-dirty again — supersession should still just mark "pending", not stack up.
-    setNodes([makeNode('a', { dirty: { draft: true, working: true } })]);
+    setNodes([makeNode('a', { opacity: 0.6, dirty: { draft: true, working: true } })]);
     await vi.advanceTimersByTimeAsync(80);
     expect(calls).toEqual([{ nodeId: 'a', level: 'draft' }]);
 
