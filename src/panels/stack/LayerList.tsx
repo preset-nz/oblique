@@ -1,7 +1,13 @@
 import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import * as cache from '@/scene/cache';
 import { useCacheVersionStore } from '@/scene/cache';
@@ -194,22 +200,30 @@ function LayerRow({
           onValueCommit={() => endTransaction()}
           onClick={(e) => e.stopPropagation()}
         />
-        <ToggleGroup
-          type="single"
-          size="sm"
-          spacing={0}
+        {/* Dropdown, not a ToggleGroup: seven inline toggles made rows wider
+            than the panel and forced horizontal scroll (dogfood 2026-07-04). */}
+        <Select
           value={node.blendMode}
           onValueChange={(value) => {
             if (value) setNodeProp(node.id, { blendMode: value as BlendMode });
           }}
-          onClick={(e) => e.stopPropagation()}
         >
-          {BLEND_MODES.map((mode) => (
-            <ToggleGroupItem key={mode} value={mode} className="text-[10px] px-1.5">
-              {mode.slice(0, 4)}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          <SelectTrigger
+            size="sm"
+            className="h-6 w-fit text-xs"
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Blend mode"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {BLEND_MODES.map((mode) => (
+              <SelectItem key={mode} value={mode} className="text-xs">
+                {mode}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </div>
   );
