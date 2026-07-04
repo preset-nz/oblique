@@ -1,70 +1,55 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as cache from '@/scene/cache';
-import type { SceneNode } from '@/scene/types';
-import { findTopmostImageNode, pickBestCache } from './paintScene';
+import { describe, expect, it } from 'vitest';
+import { computeBufferSize, ensureBuffer, viewChangeNeedsRecomposite } from './paintScene';
 
-function makeNode(id: string, overrides: Partial<SceneNode> = {}): SceneNode {
-  return {
-    id,
-    label: id,
-    type: 'pixel',
-    state: 'active',
-    output: 'image',
-    cameraId: null,
-    modifiers: [],
-    visible: true,
-    blendMode: 'normal',
-    opacity: 1,
-    dirty: { draft: false, working: false },
-    ...overrides,
-  } as SceneNode;
-}
-
-function fakeBitmap(): ImageBitmap {
-  return { close: vi.fn() } as unknown as ImageBitmap;
-}
-
-describe('findTopmostImageNode', () => {
-  it('returns the first (topmost) visible image-output node', () => {
-    const nodes = [makeNode('top'), makeNode('bottom')];
-    expect(findTopmostImageNode(nodes)?.id).toBe('top');
+describe('viewChangeNeedsRecomposite', () => {
+  it('is false for a pure pan/zoom change — docW/docH unchanged', () => {
+    const prev = { docW: 200, docH: 100 };
+    const next = { docW: 200, docH: 100 };
+    expect(viewChangeNeedsRecomposite(prev, next)).toBe(false);
   });
 
-  it('skips hidden nodes', () => {
-    const nodes = [makeNode('top', { visible: false }), makeNode('bottom')];
-    expect(findTopmostImageNode(nodes)?.id).toBe('bottom');
+  it('is true when docW changes', () => {
+    const prev = { docW: 200, docH: 100 };
+    const next = { docW: 400, docH: 100 };
+    expect(viewChangeNeedsRecomposite(prev, next)).toBe(true);
   });
 
-  it('skips non-image-output nodes', () => {
-    const nodes = [makeNode('mask', { output: 'mask' }), makeNode('image')];
-    expect(findTopmostImageNode(nodes)?.id).toBe('image');
-  });
-
-  it('returns undefined for an empty stack', () => {
-    expect(findTopmostImageNode([])).toBeUndefined();
+  it('is true when docH changes', () => {
+    const prev = { docW: 200, docH: 100 };
+    const next = { docW: 200, docH: 250 };
+    expect(viewChangeNeedsRecomposite(prev, next)).toBe(true);
   });
 });
 
-describe('pickBestCache', () => {
-  beforeEach(() => {
-    cache.clearAll();
+describe('computeBufferSize', () => {
+  it('scales the document down by the level factor, rounding, minimum 1px', () => {
+    expect(computeBufferSize(200, 100, 'working')).toEqual([100, 50]);
+    expect(computeBufferSize(200, 100, 'draft')).toEqual([25, 13]);
+    expect(computeBufferSize(200, 100, 'baked')).toEqual([200, 100]);
+    expect(computeBufferSize(1, 1, 'draft')).toEqual([1, 1]);
+  });
+});
+
+describe('ensureBuffer', () => {
+  it('allocates a new buffer when none exists', () => {
+    if (typeof OffscreenCanvas === 'undefined') return; // non-browser test environment
+    const buffer = ensureBuffer(null, 100, 50);
+    expect(buffer.width).toBe(100);
+    expect(buffer.height).toBe(50);
   });
 
-  it('prefers WORKING over DRAFT when both exist', () => {
-    const draft = fakeBitmap();
-    const working = fakeBitmap();
-    cache.set('n1', 'draft', draft);
-    cache.set('n1', 'working', working);
-    expect(pickBestCache('n1')).toBe(working);
+  it('reuses the existing buffer when the size is unchanged', () => {
+    if (typeof OffscreenCanvas === 'undefined') return;
+    const first = ensureBuffer(null, 100, 50);
+    const second = ensureBuffer(first, 100, 50);
+    expect(second).toBe(first);
   });
 
-  it('falls back to DRAFT when WORKING is not yet cooked', () => {
-    const draft = fakeBitmap();
-    cache.set('n1', 'draft', draft);
-    expect(pickBestCache('n1')).toBe(draft);
-  });
-
-  it('returns undefined when nothing is cached yet', () => {
-    expect(pickBestCache('n1')).toBeUndefined();
+  it('allocates a fresh buffer when the size changed', () => {
+    if (typeof OffscreenCanvas === 'undefined') return;
+    const first = ensureBuffer(null, 100, 50);
+    const second = ensureBuffer(first, 200, 100);
+    expect(second).not.toBe(first);
+    expect(second.width).toBe(200);
   });
 });

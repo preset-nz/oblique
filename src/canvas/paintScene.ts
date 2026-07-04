@@ -1,37 +1,21 @@
-import * as cache from '@/scene/cache';
-import * as sources from '@/scene/sources';
-import { useSceneStore } from '@/scene/store';
-import type { SceneNode } from '@/scene/types';
+import { compositeScene, resolutionFactorFor } from '@/compositor/composite';
+import type { Resolution, Scene } from '@/scene/types';
 
 const CHECKER_SQUARE_PX = 16;
 const CHECKER_LIGHT = '#3a3a3a';
 const CHECKER_DARK = '#2a2a2a';
-const STRIPE_BG = '#3a2a1a';
-const STRIPE_FG = '#f59e0b';
 
-/**
- * Interim single-node paint (cook-pipeline.md — replaced by the full
- * bottom-up compositor in Epic 03). Picks the topmost visible `image`-output
- * node; `scene.nodes[0]` is the top of the stack.
- */
-export function findTopmostImageNode(nodes: SceneNode[]): SceneNode | undefined {
-  return nodes.find((n) => n.visible && n.output === 'image');
-}
-
-/** Best available cache for a node: WORKING if cooked, else DRAFT. */
-export function pickBestCache(nodeId: string): ImageBitmap | undefined {
-  return cache.get(nodeId, 'working') ?? cache.get(nodeId, 'draft');
-}
+/** On-screen composite target — the WORKING resolution (architecture.md §Compositor). */
+export const DISPLAY_LEVEL: Resolution = 'working';
 
 /**
  * Per-context pattern cache: a 2x2-square tile built once on an
  * `OffscreenCanvas` and repeated via `createPattern`, rather than a
  * fillRect-per-square loop. At a 24 MP document that loop is ~94,000
- * `fillRect` calls *every paint* (paintScene runs on every cacheVersion
- * bump, i.e. every draft cook during a scrub) — plausibly the dominant
- * cost against the "DRAFT loop >= 20fps" acceptance. One `createPattern` +
- * one `fillRect` scales with document area at a fraction of that cost, and
- * still draws in document space so it scales correctly with zoom.
+ * `fillRect` calls *every paint* — plausibly the dominant cost against the
+ * "DRAFT loop >= 20fps" acceptance. One `createPattern` + one `fillRect`
+ * scales with document area at a fraction of that cost, and still draws in
+ * document space so it scales correctly with zoom.
  */
 const checkerPatterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
 
@@ -62,52 +46,68 @@ function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number): 
   ctx.fillRect(0, 0, w, h);
 }
 
-/** Diagonal-stripe placeholder for a pixel node whose source file couldn't be re-decoded on load. */
-function drawStripedPlaceholder(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, w, h);
-  ctx.clip();
-  ctx.fillStyle = STRIPE_BG;
-  ctx.fillRect(0, 0, w, h);
+/**
+ * The `useViewTransformStore` half of the recompute-vs-reblit decision:
+ * true only when the document's own dimensions changed, false for a pure
+ * pan/zoom (`view.scale`/`tx`/`ty`) change. `Viewport.tsx`'s view-store
+ * subscription calls this directly; the scene-store and cache-version
+ * subscriptions always force a recompute unconditionally (any scene or
+ * cache mutation is scene content, not a viewport concern) — this predicate
+ * only needs to exist for the case that must NOT trigger one
+ * (architecture.md §Compositor acceptance: "pan/zoom never triggers a
+ * recomposite").
+ */
+export function viewChangeNeedsRecomposite(
+  prev: { docW: number; docH: number },
+  next: { docW: number; docH: number },
+): boolean {
+  return prev.docW !== next.docW || prev.docH !== next.docH;
+}
 
-  const stripeWidth = Math.max(8, Math.round(Math.min(w, h) / 40));
-  ctx.strokeStyle = STRIPE_FG;
-  ctx.lineWidth = stripeWidth;
-  const diagonal = w + h;
-  for (let x = -h; x < diagonal; x += stripeWidth * 2) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x + h, h);
-    ctx.stroke();
-  }
-  ctx.restore();
+/** Composite-buffer size at `level`: document size scaled by the level's factor, minimum 1px per side. */
+export function computeBufferSize(docW: number, docH: number, level: Resolution): [number, number] {
+  const factor = resolutionFactorFor(level);
+  return [Math.max(1, Math.round(docW * factor)), Math.max(1, Math.round(docH * factor))];
+}
+
+/** Reuse `buffer` if it's already the right size, else allocate a new one. */
+export function ensureBuffer(
+  buffer: OffscreenCanvas | null,
+  width: number,
+  height: number,
+): OffscreenCanvas {
+  if (buffer && buffer.width === width && buffer.height === height) return buffer;
+  return new OffscreenCanvas(width, height);
+}
+
+/** Rebuild `buffer`'s contents from the scene — the expensive, dirty-gated step. */
+export function recompositeBuffer(buffer: OffscreenCanvas, scene: Scene, level: Resolution): void {
+  const ctx = buffer.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, buffer.width, buffer.height);
+  compositeScene(ctx, scene, level);
 }
 
 /**
- * Paint the document: checkerboard behind transparency, then the topmost
- * visible image node's best-available cache scaled to document size.
- * `ctx` is expected to already carry the document->screen view transform
- * (see `Viewport.tsx`); this function draws purely in document space.
+ * Blit the composite buffer onto the visible canvas: checkerboard first (so
+ * transparency in the composite shows through), then the buffer scaled up
+ * to document size. `ctx` is expected to already carry the document->screen
+ * view transform (see `Viewport.tsx`); this draws purely in document space
+ * and never allocates — the cheap per-frame path pan/zoom drives.
  */
-export function paintScene(ctx: CanvasRenderingContext2D, docW: number, docH: number): void {
+export function blitScene(
+  ctx: CanvasRenderingContext2D,
+  buffer: OffscreenCanvas | null,
+  docW: number,
+  docH: number,
+): void {
   if (docW <= 0 || docH <= 0) return;
 
   drawCheckerboard(ctx, docW, docH);
-
-  const node = findTopmostImageNode(useSceneStore.getState().scene.nodes);
-  if (!node) return;
-
-  if (sources.isSourceMissing(node.id)) {
-    drawStripedPlaceholder(ctx, docW, docH);
-    return;
-  }
-
-  const bitmap = pickBestCache(node.id);
-  if (!bitmap) return; // still cooking (or not yet imported) — nothing to draw yet
+  if (!buffer) return;
 
   ctx.imageSmoothingEnabled = true;
-  ctx.globalAlpha = node.opacity;
-  ctx.drawImage(bitmap, 0, 0, docW, docH);
   ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(buffer, 0, 0, docW, docH);
 }

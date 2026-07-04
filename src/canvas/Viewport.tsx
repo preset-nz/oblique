@@ -2,7 +2,15 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
-import { paintScene } from './paintScene';
+import { useSceneStore } from '@/scene/store';
+import {
+  blitScene,
+  computeBufferSize,
+  DISPLAY_LEVEL,
+  ensureBuffer,
+  recompositeBuffer,
+  viewChangeNeedsRecomposite,
+} from './paintScene';
 import { usePanZoom } from './usePanZoom';
 import { screenToDoc, useViewTransformStore } from './viewTransform';
 
@@ -21,16 +29,27 @@ export function Viewport() {
   // SVG overlay's transform attribute stays in lockstep with the canvas
   // paint. That's one cheap attribute update per frame, not a full repaint.
   const view = useViewTransformStore((state) => state.view);
+  // Offscreen composite buffer at WORKING resolution — rebuilt only when
+  // `recompute` is true (scene/documentSize/cache change), reused as-is on
+  // every pan/zoom tick (architecture.md §Compositor: "pan/zoom never
+  // triggers a recomposite").
+  const bufferRef = useRef<OffscreenCanvas | null>(null);
 
   usePanZoom(canvasRef);
 
-  const paint = useCallback(() => {
+  const paint = useCallback((recompute: boolean) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
 
     const dpr = dprRef.current;
-    const { view: currentView } = useViewTransformStore.getState();
+    const { view: currentView, docW, docH } = useViewTransformStore.getState();
+
+    if (recompute) {
+      const [bufW, bufH] = computeBufferSize(docW, docH, DISPLAY_LEVEL);
+      bufferRef.current = ensureBuffer(bufferRef.current, bufW, bufH);
+      recompositeBuffer(bufferRef.current, useSceneStore.getState().scene, DISPLAY_LEVEL);
+    }
 
     // Reset to identity for the clear, then apply document->device transform.
     // devicePixelRatio scales only the backing store (this transform); it
@@ -45,9 +64,7 @@ export function Viewport() {
       currentView.tx * dpr,
       currentView.ty * dpr,
     );
-    ctx.imageSmoothingEnabled = false;
-    const { docW, docH } = useViewTransformStore.getState();
-    paintScene(ctx, docW, docH);
+    blitScene(ctx, bufferRef.current, docW, docH);
   }, []);
 
   // Resize observer: keeps the canvas backing store matched to the
@@ -79,7 +96,7 @@ export function Viewport() {
         hasFitted = true;
         store.fitToWindow();
       }
-      paint();
+      paint(true);
     };
 
     resize();
@@ -88,28 +105,43 @@ export function Viewport() {
     return () => observer.disconnect();
   }, [paint]);
 
-  // Coalesce store-driven repaints (pan/zoom, doc size, freshly-cooked
-  // caches) into one rAF per frame.
+  // Coalesce store-driven repaints (pan/zoom, doc size, scene/order/visibility
+  // changes, freshly-cooked caches) into one rAF per frame. `recompute`
+  // latches true for the frame if *any* trigger since the last paint needed
+  // one — a pure `view`-only change (pan/zoom) never sets it, so a
+  // pan-then-zoom burst still reblits without recompositing.
   useEffect(() => {
     let rafId: number | null = null;
-    const schedule = () => {
+    let recomputePending = false;
+    const schedule = (recompute: boolean) => {
+      if (recompute) recomputePending = true;
       if (rafId !== null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        paint();
+        const recomputeNow = recomputePending;
+        recomputePending = false;
+        paint(recomputeNow);
       });
     };
-    // view/docW/docH repaint; cursorDoc updates every pointermove and must
-    // not reach the canvas paint path.
+    // cursorDoc updates every pointermove and must not reach the canvas paint path.
     const unsubscribeView = useViewTransformStore.subscribe((state, prev) => {
-      if (state.view !== prev.view || state.docW !== prev.docW || state.docH !== prev.docH) {
-        schedule();
+      if (viewChangeNeedsRecomposite(prev, state)) {
+        schedule(true);
+      } else if (state.view !== prev.view) {
+        schedule(false);
       }
     });
+    // Order/visibility/opacity/blend/documentSize mutations swap the scene
+    // object reference — compositing-only, no dirty flag (dirty rule 4), but
+    // still needs a recomposite.
+    const unsubscribeScene = useSceneStore.subscribe((state, prev) => {
+      if (state.scene !== prev.scene) schedule(true);
+    });
     // Any cook writing a fresh bitmap bumps cacheVersion.
-    const unsubscribeCache = useCacheVersionStore.subscribe(() => schedule());
+    const unsubscribeCache = useCacheVersionStore.subscribe(() => schedule(true));
     return () => {
       unsubscribeView();
+      unsubscribeScene();
       unsubscribeCache();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
