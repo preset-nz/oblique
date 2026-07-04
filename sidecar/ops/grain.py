@@ -43,6 +43,9 @@ def grain(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     noise_full = noise_full[:h, :w] * (amount * _MAX_STD)
 
     out = img.copy()
-    rgb = out[..., :3].astype(np.float64) + noise_full[..., None]
+    # Grain respects alpha: noise scales with coverage, so fully transparent
+    # pixels stay untouched and semi-transparent edges grain proportionally.
+    coverage = out[..., 3:4].astype(np.float64) / 255.0
+    rgb = out[..., :3].astype(np.float64) + noise_full[..., None] * coverage
     out[..., :3] = np.clip(rgb, 0.0, 255.0).astype(np.uint8)
     return out

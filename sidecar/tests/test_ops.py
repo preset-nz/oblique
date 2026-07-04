@@ -166,6 +166,22 @@ def test_grain_different_seed_differs():
     assert not np.array_equal(a, b)
 
 
+def test_grain_respects_alpha():
+    rng = np.random.default_rng(13)
+    img = _random_rgba(rng, h=16, w=16)
+    img[:8, :, 3] = 0  # top half fully transparent
+    img[8:, :, 3] = 255  # bottom half fully opaque
+
+    out = grain(img, {"amount": 1.0, "size": 1, "seed": 5})
+
+    # Transparent pixels: RGB byte-identical, no grain lands there.
+    np.testing.assert_array_equal(out[:8, :, :3], img[:8, :, :3])
+    # Opaque pixels: grain applied.
+    assert not np.array_equal(out[8:, :, :3], img[8:, :, :3])
+    # Alpha itself always passes through untouched.
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
 def test_grain_edge_params_do_not_throw():
     rng = np.random.default_rng(12)
     img = _random_rgba(rng)
