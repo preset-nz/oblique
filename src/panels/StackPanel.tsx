@@ -77,17 +77,21 @@ function ParamControl({
 function ModifierRow({
   node,
   modifier,
+  index,
   ops,
 }: {
   node: SceneNode;
   modifier: Modifier;
+  index: number;
   ops: OpDescriptor[];
 }) {
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
   const setModifierEnabled = useSceneStore((s) => s.setModifierEnabled);
   const removeModifier = useSceneStore((s) => s.removeModifier);
+  const reorderModifier = useSceneStore((s) => s.reorderModifier);
 
   const descriptor = ops.find((o) => o.name === modifier.type);
+  const last = node.modifiers.length - 1;
 
   return (
     <div style={{ border: '1px solid #444', padding: 4, marginBottom: 4 }}>
@@ -98,6 +102,21 @@ function ModifierRow({
           onChange={(e) => setModifierEnabled(node.id, modifier.id, e.target.checked)}
         />
         <strong>{modifier.type}</strong>
+        {/* List order IS application order: row 0 cooks first. */}
+        <button
+          type="button"
+          disabled={index === 0}
+          onClick={() => reorderModifier(node.id, modifier.id, index - 1)}
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          disabled={index === last}
+          onClick={() => reorderModifier(node.id, modifier.id, index + 1)}
+        >
+          ↓
+        </button>
         <button type="button" onClick={() => removeModifier(node.id, modifier.id)}>
           Remove
         </button>
@@ -177,8 +196,8 @@ export function StackPanel() {
         ))}
       </select>
 
-      {node.modifiers.map((modifier) => (
-        <ModifierRow key={modifier.id} node={node} modifier={modifier} ops={ops} />
+      {node.modifiers.map((modifier, index) => (
+        <ModifierRow key={modifier.id} node={node} modifier={modifier} index={index} ops={ops} />
       ))}
 
       <AddModifierRow node={node} ops={ops} />
