@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSceneStore } from '@/scene/store';
 
 /**
  * Shared document <-> screen affine transform.
@@ -102,16 +103,13 @@ interface ViewTransformState {
   reset100: () => void;
 }
 
-// Placeholder document is the 1024x1024 calibration checkerboard until
-// Epic 02 introduces real scene/document dimensions.
-const PLACEHOLDER_DOC_SIZE = 1024;
-
 export const useViewTransformStore = create<ViewTransformState>((set, get) => ({
   view: { scale: 1, tx: 0, ty: 0 },
   viewportW: 0,
   viewportH: 0,
-  docW: PLACEHOLDER_DOC_SIZE,
-  docH: PLACEHOLDER_DOC_SIZE,
+  // No document until the first pixel node is imported (scene-store.md).
+  docW: 0,
+  docH: 0,
   cursorDoc: null,
   setView: (view) => set({ view }),
   setViewportSize: (w, h) => set({ viewportW: w, viewportH: h }),
@@ -125,3 +123,21 @@ export const useViewTransformStore = create<ViewTransformState>((set, get) => ({
     set({ view: reset100Transform(viewportW, viewportH, docW, docH) });
   },
 }));
+
+// Keep docW/docH in lockstep with `scene.documentSize` — the scene store is
+// the source of truth (set once, from the first imported pixel node; see
+// `project/import.ts`), this store only mirrors it for paint/fit math. Fit
+// the window the first time a real document appears (0x0 -> non-zero),
+// same "first real size" pattern `Viewport.tsx` uses for the viewport size.
+useSceneStore.subscribe((state, prev) => {
+  const [w, h] = state.scene.documentSize;
+  const [prevW, prevH] = prev.scene.documentSize;
+  if (w === prevW && h === prevH) return;
+
+  const hadDocument =
+    useViewTransformStore.getState().docW > 0 && useViewTransformStore.getState().docH > 0;
+  useViewTransformStore.setState({ docW: w, docH: h });
+  if (!hadDocument && w > 0 && h > 0) {
+    useViewTransformStore.getState().fitToWindow();
+  }
+});

@@ -4,6 +4,7 @@ import { Viewport } from '@/canvas/Viewport';
 import { Toaster } from '@/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { StackPanel } from '@/panels/StackPanel';
 
 export function Layout() {
   return (
@@ -34,8 +35,8 @@ export function Layout() {
                 <TabsTrigger value="vectors">Vectors</TabsTrigger>
                 <TabsTrigger value="history">History</TabsTrigger>
               </TabsList>
-              <TabsContent value="stack" className="flex-1 overflow-hidden p-4">
-                <div className="text-neutral-500 text-sm">Stack content</div>
+              <TabsContent value="stack" className="flex-1 overflow-auto p-4">
+                <StackPanel />
               </TabsContent>
               <TabsContent value="vectors" className="flex-1 overflow-hidden p-4">
                 <div className="text-neutral-500 text-sm">Vectors content</div>

@@ -1,6 +1,8 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
 import { importFiles, tauriImportDeps } from '@/project/import';
+import { useCacheVersionStore } from '@/scene/cache';
+import { paintScene } from './paintScene';
 import { usePanZoom } from './usePanZoom';
 import { screenToDoc, useViewTransformStore } from './viewTransform';
 
@@ -9,24 +11,6 @@ const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 function isImagePath(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
   return IMAGE_EXTENSIONS.has(ext);
-}
-
-// Placeholder calibration fixtures (Epic 02 replaces these with the real
-// scene/document + compositor output).
-const DOC_SIZE = 1024;
-const SQUARE_SIZE = 64;
-const CHECKER_LIGHT = '#3a3a3a';
-const CHECKER_DARK = '#2a2a2a';
-const MARKER_DOC_POINT = { x: 100, y: 100 };
-
-function drawCheckerboard(ctx: CanvasRenderingContext2D) {
-  const squares = DOC_SIZE / SQUARE_SIZE;
-  for (let row = 0; row < squares; row++) {
-    for (let col = 0; col < squares; col++) {
-      ctx.fillStyle = (row + col) % 2 === 0 ? CHECKER_LIGHT : CHECKER_DARK;
-      ctx.fillRect(col * SQUARE_SIZE, row * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE);
-    }
-  }
 }
 
 export function Viewport() {
@@ -62,7 +46,8 @@ export function Viewport() {
       currentView.ty * dpr,
     );
     ctx.imageSmoothingEnabled = false;
-    drawCheckerboard(ctx);
+    const { docW, docH } = useViewTransformStore.getState();
+    paintScene(ctx, docW, docH);
   }, []);
 
   // Resize observer: keeps the canvas backing store matched to the
@@ -103,7 +88,8 @@ export function Viewport() {
     return () => observer.disconnect();
   }, [paint]);
 
-  // Coalesce store-driven repaints (pan/zoom) into one rAF per frame.
+  // Coalesce store-driven repaints (pan/zoom, doc size, freshly-cooked
+  // caches) into one rAF per frame.
   useEffect(() => {
     let rafId: number | null = null;
     const schedule = () => {
@@ -113,20 +99,23 @@ export function Viewport() {
         paint();
       });
     };
-    // Only view changes repaint; cursorDoc updates every pointermove and
-    // must not reach the canvas paint path.
-    const unsubscribe = useViewTransformStore.subscribe((state, prev) => {
-      if (state.view !== prev.view) schedule();
+    // view/docW/docH repaint; cursorDoc updates every pointermove and must
+    // not reach the canvas paint path.
+    const unsubscribeView = useViewTransformStore.subscribe((state, prev) => {
+      if (state.view !== prev.view || state.docW !== prev.docW || state.docH !== prev.docH) {
+        schedule();
+      }
     });
+    // Any cook writing a fresh bitmap bumps cacheVersion.
+    const unsubscribeCache = useCacheVersionStore.subscribe(() => schedule());
     return () => {
-      unsubscribe();
+      unsubscribeView();
+      unsubscribeCache();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [paint]);
 
   const overlayMatrix = `matrix(${view.scale} 0 0 ${view.scale} ${view.tx} ${view.ty})`;
-  const markerRadius = 6 / view.scale;
-  const markerStroke = 2 / view.scale;
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const container = containerRef.current;
@@ -186,16 +175,8 @@ export function Viewport() {
         role="presentation"
         aria-hidden="true"
       >
-        <g transform={overlayMatrix}>
-          <circle
-            cx={MARKER_DOC_POINT.x}
-            cy={MARKER_DOC_POINT.y}
-            r={markerRadius}
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth={markerStroke}
-          />
-        </g>
+        {/* Document-space overlay group; empty until Epic 05/06 (selection, vectors). */}
+        <g transform={overlayMatrix} />
       </svg>
     </div>
   );
