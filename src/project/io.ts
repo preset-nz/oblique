@@ -209,25 +209,33 @@ export async function newProject(
 }
 
 /**
- * Cmd+O entry point: one dialog for both project files and images, routed
- * by extension (project-persistence.md §Behaviour).
+ * Cmd+O entry point (roadmap "Cmd+O is overloaded — split Open vs Import",
+ * 2026-07-05): projects only. Genuinely a different flow from import —
+ * replaces the whole project via `loadProject`, never adds a node.
  */
-export async function openAnythingDialog(): Promise<void> {
+export async function openProjectDialog(): Promise<void> {
+  const selected = await openDialog({
+    filters: [{ name: 'Oblique project', extensions: ['oblique'] }],
+  });
+  if (!selected) return;
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  await loadProject(path);
+}
+
+/**
+ * Cmd+I entry point (roadmap "Cmd+O is overloaded — split Open vs Import",
+ * 2026-07-05): images only, always adds node(s) via `importFiles` — never
+ * touches the current project (no `loadProject` call, ever). Document-size
+ * adoption rules live in `import.ts::importFile` (empty/unset doc only).
+ */
+export async function importImagesDialog(): Promise<void> {
   const selected = await openDialog({
     multiple: true,
-    filters: [{ name: 'Oblique project or image', extensions: ['oblique', 'png', 'jpg', 'jpeg'] }],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
   });
   if (!selected) return;
   const paths = Array.isArray(selected) ? selected : [selected];
-
-  const projects = paths.filter((p) => p.toLowerCase().endsWith('.oblique'));
-  const images = paths.filter((p) => !p.toLowerCase().endsWith('.oblique'));
-  if (projects.length > 0) {
-    await loadProject(projects[0]); // one project at a time; extras ignored
-  }
-  if (images.length > 0) {
-    await importFiles(images, tauriImportDeps);
-  }
+  await importFiles(paths, tauriImportDeps);
 }
 
 // Any scene mutation after the last save marks the project dirty. loadScene

@@ -1,7 +1,14 @@
 //! Native macOS menu bar (roadmap gap "Native app menu + New command",
 //! 2026-07-04): App submenu (About/Services/Hide/Quit — standard macOS
-//! chrome), File (New/Open/Save/Save As/Export PNG), Edit (Undo/Redo plus
-//! the OS-level Cut/Copy/Paste/Select All text-editing predefined items).
+//! chrome), File (New/Open/Import/Save/Save As/Export PNG), Edit (Undo/Redo
+//! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
+//! items).
+//!
+//! Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split
+//! Open vs Import", 2026-07-05): genuinely different flows, not one dialog
+//! routed by extension. Open replaces the whole project (`.oblique` only);
+//! Import adds image node(s) to the current project and never touches the
+//! project file.
 //!
 //! Rust stays plumbing per architecture.md: build the menu, forward menu
 //! events to the webview as plain events. All the actual behaviour (new
@@ -31,6 +38,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 const EVT_FILE_NEW: &str = "menu://file/new";
 const EVT_FILE_OPEN: &str = "menu://file/open";
+const EVT_FILE_IMPORT: &str = "menu://file/import";
 const EVT_FILE_SAVE: &str = "menu://file/save";
 const EVT_FILE_SAVE_AS: &str = "menu://file/save-as";
 const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
@@ -60,6 +68,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let file_new = MenuItem::with_id(app, "file-new", "New", true, Some("CmdOrCtrl+N"))?;
     let file_open = MenuItem::with_id(app, "file-open", "Open…", true, Some("CmdOrCtrl+O"))?;
+    let file_import = MenuItem::with_id(app, "file-import", "Import…", true, Some("CmdOrCtrl+I"))?;
     let file_save = MenuItem::with_id(app, "file-save", "Save", true, Some("CmdOrCtrl+S"))?;
     let file_save_as = MenuItem::with_id(
         app,
@@ -83,6 +92,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         &[
             &file_new,
             &file_open,
+            &file_import,
             &PredefinedMenuItem::separator(app)?,
             &file_save,
             &file_save_as,
@@ -125,6 +135,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let evt = match event.id().0.as_str() {
             "file-new" => EVT_FILE_NEW,
             "file-open" => EVT_FILE_OPEN,
+            "file-import" => EVT_FILE_IMPORT,
             "file-save" => EVT_FILE_SAVE,
             "file-save-as" => EVT_FILE_SAVE_AS,
             "file-export-png" => EVT_FILE_EXPORT_PNG,

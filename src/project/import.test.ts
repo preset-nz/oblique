@@ -127,6 +127,37 @@ describe('importFile', () => {
   });
 });
 
+describe('import document-size gating (roadmap "Import must not always adopt the image\'s size", 2026-07-05)', () => {
+  it('empty/unset doc (no nodes, documentSize [0,0]): first import adopts the image size', async () => {
+    const deps = makeDepsForPaths({ '/a.png': [300, 200] });
+    await importFile('/a.png', deps);
+    expect(useSceneStore.getState().scene.documentSize).toEqual([300, 200]);
+  });
+
+  it('document size already set via document-setup (no nodes yet): import does not adopt the image size', async () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, documentSize: [1024, 768] },
+    }));
+    const deps = makeDepsForPaths({ '/a.png': [300, 200] });
+    await importFile('/a.png', deps);
+
+    expect(useSceneStore.getState().scene.documentSize).toEqual([1024, 768]);
+    const node = useSceneStore.getState().scene.nodes[0] as PixelNode;
+    expect(node.sourceSize).toEqual([300, 200]);
+  });
+
+  it('non-empty composition: import keeps the canvas as-is regardless of documentSize', async () => {
+    const deps = makeDepsForPaths({ '/a.png': [300, 200], '/b.png': [50, 50] });
+    await importFile('/a.png', deps);
+    expect(useSceneStore.getState().scene.documentSize).toEqual([300, 200]);
+
+    await importFile('/b.png', deps);
+    expect(useSceneStore.getState().scene.documentSize).toEqual([300, 200]);
+    const nodes = useSceneStore.getState().scene.nodes as PixelNode[];
+    expect(nodes.find((n) => n.sourcePath === '/b.png')?.sourceSize).toEqual([50, 50]);
+  });
+});
+
 describe('importFiles', () => {
   it('imports serially and preserves a deterministic stack order (last dropped ends on top)', async () => {
     const paths = ['/1.png', '/2.png', '/3.png', '/4.png', '/5.png'];

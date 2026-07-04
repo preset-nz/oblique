@@ -1,4 +1,3 @@
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { toast } from 'sonner';
 import * as sources from '@/scene/sources';
@@ -51,11 +50,15 @@ export async function importFile(path: string, deps: ImportDeps): Promise<Import
     const bytes = await deps.readFile(path);
     const bitmap = await deps.decode(bytes);
 
-    // First pixel node imported into an empty scene sets the document size;
-    // later nodes keep their own size and draw at document origin
-    // (alignment tools are a later concern — see pixel-node-import.md §3).
+    // First pixel node imported into a truly empty/unset scene sets the
+    // document size; once either a node exists OR a document size has been
+    // set explicitly (document-setup dialog, roadmap "size-dialog keep
+    // rule" 2026-07-05), imports keep the canvas as-is and the image comes
+    // in as a node at its own sourceSize.
     const { scene, addPixelNode, setDocumentSize } = useSceneStore.getState();
-    if (scene.nodes.length === 0) {
+    const isDocumentEmpty =
+      scene.nodes.length === 0 && scene.documentSize[0] === 0 && scene.documentSize[1] === 0;
+    if (isDocumentEmpty) {
       setDocumentSize([bitmap.width, bitmap.height]);
     }
 
@@ -87,15 +90,4 @@ export async function importFiles(paths: string[], deps: ImportDeps): Promise<Im
     outcomes.push(await importFile(path, deps));
   }
   return outcomes;
-}
-
-/** Cmd+O entry point: native file dialog, filtered to png/jpg/jpeg. */
-export async function openImportDialog(): Promise<void> {
-  const selected = await openDialog({
-    multiple: true,
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
-  });
-  if (!selected) return;
-  const paths = Array.isArray(selected) ? selected : [selected];
-  await importFiles(paths, tauriImportDeps);
 }

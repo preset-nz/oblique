@@ -23,10 +23,13 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 import { toast } from 'sonner';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
+import * as importModule from './import';
 import type { ProjectIoDeps } from './io';
 import {
+  importImagesDialog,
   loadProject,
   newProject,
+  openProjectDialog,
   parseProject,
   serialiseProject,
   useProjectMetaStore,
@@ -222,5 +225,63 @@ describe('newProject', () => {
     const { undo } = await import('@/scene/history');
     await undo();
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
+  });
+});
+
+describe('openProjectDialog vs importImagesDialog (roadmap: split Open vs Import, 2026-07-05)', () => {
+  it('openProjectDialog only accepts .oblique filters and loads the project, never imports', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue('/proj/x.oblique');
+    (readTextFile as ReturnType<typeof vi.fn>).mockResolvedValue(serialiseProject(sampleScene()));
+    const importFilesSpy = vi.spyOn(importModule, 'importFiles');
+
+    await openProjectDialog();
+
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [{ name: 'Oblique project', extensions: ['oblique'] }],
+      }),
+    );
+    expect(useSceneStore.getState().scene.id).toBe('scene-1');
+    expect(importFilesSpy).not.toHaveBeenCalled();
+  });
+
+  it('openProjectDialog does nothing when the dialog is cancelled', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await openProjectDialog();
+
+    expect(useSceneStore.getState().scene.id).toBe('empty');
+  });
+
+  it('importImagesDialog adds node(s) via importFiles and never calls loadProject', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/pics/a.png']);
+    const importFilesSpy = vi
+      .spyOn(importModule, 'importFiles')
+      .mockResolvedValue([{ path: '/pics/a.png', nodeId: 'n-new' }]);
+
+    await importImagesDialog();
+
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+      }),
+    );
+    expect(importFilesSpy).toHaveBeenCalledWith(['/pics/a.png'], importModule.tauriImportDeps);
+    // Still on the empty scene — importImagesDialog never swaps the project.
+    expect(useSceneStore.getState().scene.id).toBe('empty');
+  });
+
+  it('importImagesDialog does nothing when the dialog is cancelled', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const importFilesSpy = vi.spyOn(importModule, 'importFiles');
+
+    await importImagesDialog();
+
+    expect(importFilesSpy).not.toHaveBeenCalled();
   });
 });

@@ -7,15 +7,18 @@ import { useViewTransformStore } from '@/canvas/viewTransform';
  * Cmd+0 -> fit document to window, Cmd+1 -> 100% zoom. These have no menu
  * item (view-only, no natural File/Edit home), so they stay here.
  *
- * New/Open/Save/Save As/Export PNG/Undo/Redo used to be handled here too.
- * As of the native menu bar (`src-tauri/src/menu.rs` + `src/app/menu.ts`,
- * roadmap "Native app menu + New command") those accelerators are declared
- * on the menu items instead and have been removed from here — on macOS a
- * menu item's accelerator is a native key equivalent consumed by `NSMenu`
- * before the keydown reaches the webview, so a second handler here would
- * be dead code at best and a double-fire risk at worst if that assumption
- * ever proved wrong. See `src/app/menu.ts`'s doc comment for the reasoning
- * and the manual click-test that verifies it.
+ * New/Open/Import/Save/Save As/Export PNG/Undo/Redo used to be handled here
+ * too (Open was a combined Open-or-Import dialog before the roadmap
+ * "Cmd+O is overloaded — split Open vs Import" split, 2026-07-05: Cmd+O is
+ * now Open (projects only), Cmd+I is the new Import (images only)). As of
+ * the native menu bar (`src-tauri/src/menu.rs` + `src/app/menu.ts`, roadmap
+ * "Native app menu + New command") those accelerators are declared on the
+ * menu items instead and have been removed from here — on macOS a menu
+ * item's accelerator is a native key equivalent consumed by `NSMenu` before
+ * the keydown reaches the webview, so a second handler here would be dead
+ * code at best and a double-fire risk at worst if that assumption ever
+ * proved wrong. See `src/app/menu.ts`'s doc comment for the reasoning and
+ * the manual click-test that verifies it.
  *
  * `V`/`M` (tool-state.md) are plain, unmodified keys — checked against every
  * existing accelerator in this file and `app/menu.ts` before wiring: all of
