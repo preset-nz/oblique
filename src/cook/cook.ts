@@ -184,6 +184,79 @@ export const productionCookDeps: CookDeps = {
 };
 
 /**
+ * Subset of `CookDeps` needed by a one-shot full-resolution cook: no cache
+ * writes, no dirty tracking (export.ts, not the scheduler).
+ */
+export interface FullResCookDeps {
+  getNode: (nodeId: string) => SceneNode | undefined;
+  getSource: (nodeId: string) => ImageBitmap | undefined;
+  getOps: () => OpDescriptor[];
+  downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
+  runPython: (
+    width: number,
+    height: number,
+    modifiers: CookModifier[],
+    payload: Uint8Array,
+  ) => Promise<Uint8Array>;
+  encode: (bytes: Uint8Array, width: number, height: number) => Promise<ImageBitmap>;
+}
+
+/** Production full-res deps: same real wiring as `productionCookDeps`, minus cache/dirty. */
+export const productionFullResCookDeps: FullResCookDeps = {
+  getNode: productionCookDeps.getNode,
+  getSource: productionCookDeps.getSource,
+  getOps: productionCookDeps.getOps,
+  downscale: realDownscale,
+  runPython: realRunPython,
+  encode: realEncode,
+};
+
+/**
+ * One-shot full-resolution cook for export (architecture.md's "baked"
+ * factor, 1 — the node's own `sourceSize`, no downscale). Never writes any
+ * cache slot and never clears/sets dirty — that's the scheduler's job, not
+ * export's (locking semantics for a real persisted baked cache are Epic
+ * 07's). Throws on any failure (missing/non-pixel node, no decoded source,
+ * sidecar error) rather than falling back to a lower-resolution bitmap —
+ * export.ts must abort the whole export on this, never substitute a draft
+ * upscale (epic acceptance).
+ */
+export async function cookNodeFullRes(
+  nodeId: string,
+  deps: FullResCookDeps = productionFullResCookDeps,
+): Promise<ImageBitmap> {
+  const rawNode = deps.getNode(nodeId);
+  if (rawNode?.type !== 'pixel') {
+    throw new Error(`node ${nodeId} is not a pixel node`);
+  }
+  const node = rawNode as PixelNode;
+
+  const source = deps.getSource(nodeId);
+  if (!source) {
+    throw new Error(`"${node.label}" has no decoded source loaded`);
+  }
+
+  const factor = 1; // full resolution — node's own sourceSize, no downscale
+  const [width, height] = computeTargetSize(node.sourceSize, factor);
+
+  let resultBytes = deps.downscale(source, width, height);
+  const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps());
+
+  if (cookModifiers.length > 0) {
+    const runs = partitionRuns(cookModifiers);
+    for (const run of runs) {
+      if (run.backend === 'rust') {
+        // deferred: rust ops via `cook_rust` — no rust ops exist yet.
+        throw new Error('rust op backend not yet implemented');
+      }
+      resultBytes = await deps.runPython(width, height, run.modifiers, resultBytes);
+    }
+  }
+
+  return deps.encode(resultBytes, width, height);
+}
+
+/**
  * Cook one node at one resolution level: downscale the source, run the
  * enabled modifier stack through the sidecar (partitioned by backend —
  * today that's always a single Python run, per starter-ops.md), write the

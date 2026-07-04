@@ -49,15 +49,28 @@ export interface BestCache {
 }
 
 /**
+ * Cache lookup, injectable so export (project/export.ts) can point the
+ * exact same composite routine at a local map of one-shot full-res bitmaps
+ * instead of the shared scene/cache module — export never writes the
+ * `baked` cache slot (locking semantics are Epic 07's), so it can't reuse
+ * `cache.get` as-is. Defaults to the real module for every normal caller.
+ */
+export type CacheLookup = (nodeId: string, level: Resolution) => ImageBitmap | undefined;
+
+/**
  * Best available cache for a node at or below `level` — requested level,
  * else next-lower available, cascading down to draft, else `undefined`
  * (draws nothing rather than blocking; architecture.md §Compositor step 3).
  */
-export function pickBestAvailable(nodeId: string, level: Resolution): BestCache | undefined {
+export function pickBestAvailable(
+  nodeId: string,
+  level: Resolution,
+  getCache: CacheLookup = cache.get,
+): BestCache | undefined {
   const startIndex = LEVEL_ORDER.indexOf(level);
   for (let i = startIndex; i < LEVEL_ORDER.length; i++) {
     const candidateLevel = LEVEL_ORDER[i];
-    const bitmap = cache.get(nodeId, candidateLevel);
+    const bitmap = getCache(nodeId, candidateLevel);
     if (bitmap) return { bitmap, level: candidateLevel };
   }
   return undefined;
@@ -135,6 +148,7 @@ function drawSpan(
   span: SceneNode[],
   level: Resolution,
   scene: Scene,
+  getCache: CacheLookup,
 ): void {
   for (const node of span) {
     if (!node.visible || node.output !== 'image') continue;
@@ -149,7 +163,7 @@ function drawSpan(
       continue;
     }
 
-    const best = pickBestAvailable(node.id, level);
+    const best = pickBestAvailable(node.id, level, getCache);
     if (!best) continue; // still cooking (or not yet imported) — draws nothing, per spec
 
     ctx.globalAlpha = node.opacity;
@@ -178,8 +192,18 @@ export function resetCompositeCallCount(): void {
  * bug this replaces). `ctx` is expected to already be document-space (no
  * view transform applied — that's the caller's blit concern); this
  * function never touches pan/zoom.
+ *
+ * `getCache` defaults to the real scene/cache module; export passes a
+ * one-shot lookup over its own local bitmap map instead (see
+ * project/export.ts) so this exact routine can run at full resolution
+ * without ever writing the shared `baked` cache slot.
  */
-export function compositeScene(ctx: Composite2DContext, scene: Scene, level: Resolution): void {
+export function compositeScene(
+  ctx: Composite2DContext,
+  scene: Scene,
+  level: Resolution,
+  getCache: CacheLookup = cache.get,
+): void {
   compositeCallCount++;
 
   const [docW, docH] = scene.documentSize;
@@ -188,7 +212,7 @@ export function compositeScene(ctx: Composite2DContext, scene: Scene, level: Res
   ctx.imageSmoothingEnabled = true;
 
   for (const span of splitIntoSpans(scene.nodes)) {
-    drawSpan(ctx, span, level, scene);
+    drawSpan(ctx, span, level, scene, getCache);
   }
 
   ctx.globalAlpha = 1;

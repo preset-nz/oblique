@@ -1,4 +1,5 @@
 import { useViewTransformStore } from '@/canvas/viewTransform';
+import { exportPng } from '@/project/export';
 import { openAnythingDialog, saveProject } from '@/project/io';
 
 /**
@@ -7,6 +8,8 @@ import { openAnythingDialog, saveProject } from '@/project/io';
  * Cmd+0 -> fit document to window, Cmd+1 -> 100% zoom.
  * Cmd+O -> open dialog (routes .oblique project vs image by extension),
  * Cmd+S / Shift+Cmd+S -> save / save-as.
+ * Shift+Cmd+E -> export PNG (mirrors the Shift+Cmd+<letter> "as"/variant
+ * pattern already used by save-as).
  */
 export function installShortcuts(): () => void {
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -24,6 +27,9 @@ export function installShortcuts(): () => void {
     } else if (e.key === 's') {
       e.preventDefault();
       void saveProject({ as: e.shiftKey });
+    } else if (e.key === 'e' && e.shiftKey) {
+      e.preventDefault();
+      void exportPng();
     }
   };
 

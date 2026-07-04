@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpDescriptor } from '@/sidecar/opsCache';
-import type { Modifier, SceneNode } from '../scene/types';
+import type { Modifier, PixelNode, SceneNode } from '../scene/types';
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn() },
@@ -12,6 +12,8 @@ import {
   type CookDeps,
   computeTargetSize,
   cookNode,
+  cookNodeFullRes,
+  type FullResCookDeps,
   partitionRuns,
   resetCookErrorBurst,
   resolutionFactor,
@@ -21,7 +23,7 @@ function fakeBitmap(): ImageBitmap {
   return {} as unknown as ImageBitmap;
 }
 
-function makeNode(overrides: Partial<SceneNode> = {}): SceneNode {
+function makeNode(overrides: Partial<PixelNode> = {}): SceneNode {
   return {
     id: 'node-1',
     label: 'Layer',
@@ -249,5 +251,91 @@ describe('cookNode', () => {
     await cookNode('node-1', 'draft', deps);
 
     expect(toast.error).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('cookNodeFullRes', () => {
+  function makeFullResDeps(
+    nodeRef: { current: SceneNode },
+    overrides: Partial<FullResCookDeps> = {},
+  ): FullResCookDeps {
+    return {
+      getNode: vi.fn((id: string) => (nodeRef.current.id === id ? nodeRef.current : undefined)),
+      getSource: vi.fn(() => fakeBitmap()),
+      getOps: vi.fn(() => opsFixture),
+      downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
+      runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
+      encode: vi.fn(async () => fakeBitmap()),
+      ...overrides,
+    };
+  }
+
+  it("cooks at the node's own sourceSize (factor 1) — no downscale", async () => {
+    const nodeRef = { current: makeNode({ sourceSize: [800, 400] }) };
+    const deps = makeFullResDeps(nodeRef);
+
+    await cookNodeFullRes('node-1', deps);
+
+    expect(deps.downscale).toHaveBeenCalledWith(expect.anything(), 800, 400);
+  });
+
+  it('scales spatial modifier params by factor 1 (unscaled — full res is the reference size)', async () => {
+    const nodeRef = {
+      current: makeNode({
+        sourceSize: [800, 400],
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      }),
+    };
+    const deps = makeFullResDeps(nodeRef);
+
+    await cookNodeFullRes('node-1', deps);
+
+    const [width, height, modifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect([width, height]).toEqual([800, 400]);
+    expect(modifiers).toEqual([
+      { type: 'gaussian_blur', backend: 'python', params: { radius: 8 } },
+    ]);
+  });
+
+  it('never writes any cache or dirty flag — it has no such deps to call', async () => {
+    const nodeRef = { current: makeNode() };
+    const deps = makeFullResDeps(nodeRef);
+
+    const bitmap = await cookNodeFullRes('node-1', deps);
+
+    expect(bitmap).toBeDefined();
+    expect(deps).not.toHaveProperty('setCache');
+    expect(deps).not.toHaveProperty('clearDirty');
+  });
+
+  it('throws (does not swallow) when the source is missing — never falls back to a lower-res bitmap', async () => {
+    const nodeRef = { current: makeNode() };
+    const deps = makeFullResDeps(nodeRef, { getSource: vi.fn(() => undefined) });
+
+    await expect(cookNodeFullRes('node-1', deps)).rejects.toThrow(/no decoded source/);
+    expect(deps.downscale).not.toHaveBeenCalled();
+  });
+
+  it('throws when the sidecar op run fails — export must abort, not substitute a draft bitmap', async () => {
+    const nodeRef = {
+      current: makeNode({
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      }),
+    };
+    const deps = makeFullResDeps(nodeRef, {
+      runPython: vi.fn(async () => {
+        throw new Error('sidecar down');
+      }),
+    });
+
+    await expect(cookNodeFullRes('node-1', deps)).rejects.toThrow('sidecar down');
+    expect(deps.encode).not.toHaveBeenCalled();
+  });
+
+  it('throws for a non-pixel node', async () => {
+    const nodeRef = { current: { ...makeNode(), type: 'vector' } as unknown as SceneNode };
+    const deps = makeFullResDeps(nodeRef);
+
+    await expect(cookNodeFullRes('node-1', deps)).rejects.toThrow(/not a pixel node/);
   });
 });

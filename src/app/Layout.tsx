@@ -4,6 +4,7 @@ import { Viewport } from '@/canvas/Viewport';
 import { Toaster } from '@/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { DocumentSetup } from '@/panels/document/DocumentSetup';
 import { StackPanel } from '@/panels/StackPanel';
 
 export function Layout() {
@@ -11,8 +12,10 @@ export function Layout() {
     <TooltipProvider>
       <div className="flex flex-col h-screen bg-neutral-950 text-neutral-50">
         {/* Title bar */}
-        <div className="border-b border-neutral-800 px-4 py-3 flex items-center">
+        <div className="border-b border-neutral-800 px-4 py-3 flex items-center gap-3">
           <span className="text-sm font-medium">{PRODUCT_NAME}</span>
+          <div className="flex-1" />
+          <DocumentSetup />
         </div>
 
         {/* Main grid */}
