@@ -55,10 +55,14 @@ module.exports = {
       name: 'tauri-frame-ipc-only-via-sidecar-transport',
       severity: 'error',
       comment:
-        'Nobody outside src/sidecar/tauriTransport.ts touches Tauri IPC for frames (as built, ' +
-        'client.ts is transport-injected for testability).',
+        'Nobody outside src/sidecar/tauriTransport.ts touches Tauri IPC for the sidecar frame ' +
+        'protocol (as built, client.ts is transport-injected for testability). Scoped to the ' +
+        'two @tauri-apps/api submodules the frame transport actually uses (core: invoke, ' +
+        'event: listen) — narrowed 2026-07-04 (pixel-node-import story) so other Tauri API ' +
+        'surfaces (e.g. @tauri-apps/api/webview for drag-drop) remain usable elsewhere; the ' +
+        'architecture note this gate encodes is specifically "Tauri IPC for frames".',
       from: { pathNot: '^src/sidecar/tauriTransport\\.ts$' },
-      to: { path: 'node_modules/@tauri-apps/api' },
+      to: { path: 'node_modules/@tauri-apps/api/(core|event)' },
     },
     {
       name: 'ui-stays-dumb',

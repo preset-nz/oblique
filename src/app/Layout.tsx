@@ -1,6 +1,7 @@
 import { StatusBar } from '@/app/StatusBar';
 import { PRODUCT_NAME } from '@/branding';
 import { Viewport } from '@/canvas/Viewport';
+import { Toaster } from '@/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -49,6 +50,7 @@ export function Layout() {
         {/* Status bar */}
         <StatusBar />
       </div>
+      <Toaster />
     </TooltipProvider>
   );
 }

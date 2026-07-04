@@ -1,6 +1,15 @@
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
+import { importFiles, tauriImportDeps } from '@/project/import';
 import { usePanZoom } from './usePanZoom';
 import { screenToDoc, useViewTransformStore } from './viewTransform';
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
+
+function isImagePath(path: string): boolean {
+  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  return IMAGE_EXTENSIONS.has(ext);
+}
 
 // Placeholder calibration fixtures (Epic 02 replaces these with the real
 // scene/document + compositor output).
@@ -134,6 +143,34 @@ export function Viewport() {
 
   const handlePointerLeave = useCallback(() => {
     useViewTransformStore.getState().setCursorDoc(null);
+  }, []);
+
+  // Drop target: real Tauri drag-drop event, NOT the HTML5 drop API — the
+  // webview's HTML5 drop handler never carries real filesystem paths (see
+  // pixel-node-import.md §Flow).
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop') return;
+        const paths = event.payload.paths.filter(isImagePath);
+        if (paths.length === 0) return;
+        void importFiles(paths, tauriImportDeps);
+      })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   return (

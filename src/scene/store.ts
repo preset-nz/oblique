@@ -34,6 +34,9 @@ interface SceneState {
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
 
+  /** Sets `scene.documentSize`. Compositing-only — no dirty flag (rule 4). */
+  setDocumentSize: (size: [number, number]) => void;
+
   addModifier: (nodeId: string, type: string, defaults: Modifier['params']) => string;
   removeModifier: (nodeId: string, modId: string) => void;
   reorderModifier: (nodeId: string, modId: string, toIndex: number) => void;
@@ -103,6 +106,10 @@ export const useSceneStore = create<SceneState>((set) => ({
     set((s) => ({
       scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, ...patch })) },
     }));
+  },
+
+  setDocumentSize: (size) => {
+    set((s) => ({ scene: { ...s.scene, documentSize: size } }));
   },
 
   addModifier: (nodeId, type, defaults) => {
