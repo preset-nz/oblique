@@ -48,6 +48,9 @@ function sampleScene(): Scene {
         blendMode: 'normal',
         opacity: 1,
         dirty: { draft: false, working: false },
+        // Round-trip acceptance for node-transform-2d.md: plain scene data,
+        // must survive save/load verbatim.
+        transform2d: { x: 12, y: -4, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 6 },
         sourcePath: '/pics/a.png',
         sourceSize: [200, 100],
         // biome-ignore lint/suspicious/noExplicitAny: PixelNode via SceneNode[] slot

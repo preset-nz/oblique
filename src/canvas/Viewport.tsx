@@ -1,8 +1,13 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
+import { destSizeFor } from '@/compositor/composite';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
+import { beginTransaction, endTransaction } from '@/scene/history';
+import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
+import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
+import { topmostNodeAt } from './hitTest';
 import {
   blitScene,
   computeBufferSize,
@@ -11,10 +16,20 @@ import {
   recompositeBuffer,
   viewChangeNeedsRecomposite,
 } from './paintScene';
+import { TransformBox } from './TransformBox';
+import { applyMove, type Point } from './transform2d';
 import { usePanZoom } from './usePanZoom';
 import { screenToDoc, useViewTransformStore } from './viewTransform';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
+
+/** Document-px direction per arrow key for the selected-node nudge. */
+const NUDGE_DELTA: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
 
 function isImagePath(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
@@ -36,6 +51,129 @@ export function Viewport() {
   const bufferRef = useRef<OffscreenCanvas | null>(null);
 
   usePanZoom(canvasRef);
+
+  const selection = useSelectionStore((s) => s.selection);
+  const selectNode = useSelectionStore((s) => s.selectNode);
+  const setNodeTransform = useSceneStore((s) => s.setNodeTransform);
+  const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
+
+  /** Client coords -> document space, sharing the same view transform as canvas paint. */
+  const toDoc = useCallback((clientX: number, clientY: number): Point => {
+    const container = containerRef.current;
+    if (!container) return { x: 0, y: 0 };
+    const rect = container.getBoundingClientRect();
+    const { view: currentView } = useViewTransformStore.getState();
+    return screenToDoc(currentView, { x: clientX - rect.left, y: clientY - rect.top });
+  }, []);
+
+  // Move tool (interim, per this story's carve-out — tool-state.md hasn't
+  // landed yet): plain left-button drag starting on the selected node's
+  // transformed bounds moves it, arrow keys nudge it; usePanZoom already
+  // claims space-held/middle-button drags for panning, so this only needs to
+  // defer to those. Drag on empty canvas is a no-op (not a pan) until
+  // tool-state.md gives it one; that's the "simplest honest interim" the
+  // brief calls for.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let spaceHeld = false;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        spaceHeld = true;
+        return;
+      }
+
+      // Arrow-key nudge: 1 px, Shift = 10 px (node-transform-2d.md §Tools).
+      // Skipped while a text field has focus — InputNumber owns ArrowUp/Down
+      // for value stepping there. Each keydown is its own undo step (the
+      // store-subscribe capture coalesces nothing outside a transaction).
+      const step = NUDGE_DELTA[e.key];
+      if (!step || selection.kind !== 'node') return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      const node = useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId);
+      if (!node) return;
+      e.preventDefault();
+      const px = e.shiftKey ? 10 : 1;
+      setNodeTransform(
+        node.id,
+        applyMove(node.transform2d ?? IDENTITY_TRANSFORM_2D, {
+          x: step[0] * px,
+          y: step[1] * px,
+        }),
+      );
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceHeld = false;
+    };
+
+    let dragNodeId: string | null = null;
+    let dragStartTransform = IDENTITY_TRANSFORM_2D;
+    let dragStartDoc: Point = { x: 0, y: 0 };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
+
+      const docPt = toDoc(e.clientX, e.clientY);
+      const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
+      if (!hit) return;
+
+      if (selection.kind !== 'node' || selection.nodeId !== hit.id) {
+        selectNode(hit.id);
+      }
+
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      dragNodeId = hit.id;
+      dragStartTransform = hit.transform2d ?? IDENTITY_TRANSFORM_2D;
+      dragStartDoc = docPt;
+      beginTransaction();
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragNodeId) return;
+      const docPt = toDoc(e.clientX, e.clientY);
+      const next = applyMove(dragStartTransform, {
+        x: docPt.x - dragStartDoc.x,
+        y: docPt.y - dragStartDoc.y,
+      });
+      setNodeTransform(dragNodeId, next);
+    };
+
+    const endDrag = (e: PointerEvent) => {
+      if (!dragNodeId) return;
+      canvas.releasePointerCapture(e.pointerId);
+      dragNodeId = null;
+      endTransaction();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', endDrag);
+      canvas.removeEventListener('pointercancel', endDrag);
+    };
+  }, [selection, selectNode, setNodeTransform, toDoc]);
+
+  const selectedNode = useSceneStore((s) =>
+    selectedNodeId ? s.scene.nodes.find((n) => n.id === selectedNodeId) : undefined,
+  );
+  const documentSize = useSceneStore((s) => s.scene.documentSize);
 
   const paint = useCallback((recompute: boolean) => {
     const canvas = canvasRef.current;
@@ -207,8 +345,21 @@ export function Viewport() {
         role="presentation"
         aria-hidden="true"
       >
-        {/* Document-space overlay group; empty until Epic 05/06 (selection, vectors). */}
-        <g transform={overlayMatrix} />
+        {/* Document-space overlay group; TransformBox is the only occupant until
+            marquees/vector editing land (Epic 05/06). */}
+        <g transform={overlayMatrix}>
+          {selectedNode && selectedNode.output === 'image' && (
+            <TransformBox
+              node={selectedNode}
+              extent={{
+                w: destSizeFor(selectedNode, 'baked', documentSize)[0],
+                h: destSizeFor(selectedNode, 'baked', documentSize)[1],
+              }}
+              viewScale={view.scale}
+              toDoc={toDoc}
+            />
+          )}
+        </g>
       </svg>
     </div>
   );

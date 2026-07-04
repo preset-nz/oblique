@@ -14,6 +14,9 @@ export type Composite2DContext = Pick<
   | 'imageSmoothingEnabled'
   | 'save'
   | 'restore'
+  | 'translate'
+  | 'rotate'
+  | 'scale'
   | 'beginPath'
   | 'rect'
   | 'clip'
@@ -143,6 +146,41 @@ export function destSizeFor(
   return [srcW * factor, srcH * factor];
 }
 
+/**
+ * Applies a node's `transform2d` around `ctx`'s current origin: translate by
+ * (x, y) scaled to `level` (the whole buffer is level-scaled — see
+ * `computeBufferSize` — so a document-space translation must scale with it
+ * too, unlike scale/rotation which are level-invariant ratios/angles), then
+ * rotate and scale around the node's own centre (`destW/2, destH/2`). One
+ * `save()`/`restore()` pair brackets the node's whole draw call, whether or
+ * not it actually carries a transform — always balanced, so the early
+ * `continue`s below (missing source, no cache) never leak an unmatched
+ * `save()`.
+ */
+function withNodeTransform(
+  ctx: Composite2DContext,
+  node: SceneNode,
+  destW: number,
+  destH: number,
+  level: Resolution,
+  draw: () => void,
+): void {
+  ctx.save();
+  const t = node.transform2d;
+  if (t) {
+    const factor = resolutionFactorFor(level);
+    const cx = destW / 2;
+    const cy = destH / 2;
+    ctx.translate(t.x * factor, t.y * factor);
+    ctx.translate(cx, cy);
+    ctx.rotate(t.rotation);
+    ctx.scale(t.scaleX, t.scaleY);
+    ctx.translate(-cx, -cy);
+  }
+  draw();
+  ctx.restore();
+}
+
 function drawSpan(
   ctx: Composite2DContext,
   span: SceneNode[],
@@ -157,18 +195,22 @@ function drawSpan(
 
     if (isPixelNode(node) && sources.isSourceMissing(node.id)) {
       // Diagnostic chrome, not scene content — always plain source-over/full-alpha.
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-      drawStripedPlaceholder(ctx, destW, destH);
+      withNodeTransform(ctx, node, destW, destH, level, () => {
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        drawStripedPlaceholder(ctx, destW, destH);
+      });
       continue;
     }
 
     const best = pickBestAvailable(node.id, level, getCache);
     if (!best) continue; // still cooking (or not yet imported) — draws nothing, per spec
 
-    ctx.globalAlpha = node.opacity;
-    ctx.globalCompositeOperation = mapBlendMode(node.blendMode);
-    ctx.drawImage(best.bitmap, 0, 0, destW, destH);
+    withNodeTransform(ctx, node, destW, destH, level, () => {
+      ctx.globalAlpha = node.opacity;
+      ctx.globalCompositeOperation = mapBlendMode(node.blendMode);
+      ctx.drawImage(best.bitmap, 0, 0, destW, destH);
+    });
   }
 }
 

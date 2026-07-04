@@ -64,6 +64,9 @@ function fakeCtx(): Composite2DContext & {
     }),
     save: vi.fn(),
     restore: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    scale: vi.fn(),
     beginPath: vi.fn(),
     rect: vi.fn(),
     clip: vi.fn(),
@@ -81,6 +84,9 @@ function fakeCtx(): Composite2DContext & {
 beforeEach(() => {
   cache.clearAll();
   sources.clearAll();
+  // clearAll only drops decoded bitmaps — the transient missing-flags store
+  // needs its own reset or striped-placeholder state leaks between tests.
+  sources.useSourceMissingStore.setState({ missing: {} });
   resetCompositeCallCount();
 });
 
@@ -234,5 +240,71 @@ describe('compositeScene', () => {
     compositeScene(ctx, scene, 'working');
     compositeScene(ctx, scene, 'working');
     expect(getCompositeCallCount()).toBe(2);
+  });
+});
+
+describe('transform2d — compositing-only node transform (node-transform-2d.md)', () => {
+  it('an absent transform2d draws identically to before (no save/translate/rotate/scale side effects)', () => {
+    const node = makeNode('n1');
+    cache.set('n1', 'baked', fakeBitmap());
+    const scene = makeScene([node]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+
+    expect(ctx.drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 200, 100);
+    expect(ctx.translate).not.toHaveBeenCalled();
+    expect(ctx.rotate).not.toHaveBeenCalled();
+    expect(ctx.scale).not.toHaveBeenCalled();
+    // Still balanced save/restore around every node's draw, transform or not.
+    expect(ctx.save).toHaveBeenCalledTimes(1);
+    expect(ctx.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it('a translate-only transform2d at baked level translates by exactly (x, y)', () => {
+    const node = makeNode('n1', {
+      transform2d: { x: 30, y: 10, scaleX: 1, scaleY: 1, rotation: 0 },
+    });
+    cache.set('n1', 'baked', fakeBitmap());
+    const scene = makeScene([node]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+
+    // translate(x*factor, y*factor) then translate(cx, cy) then translate(-cx, -cy)
+    // nets to a pure (x, y) shift at factor 1 (baked).
+    expect(ctx.translate).toHaveBeenNthCalledWith(1, 30, 10);
+    expect(ctx.rotate).toHaveBeenCalledWith(0);
+    expect(ctx.scale).toHaveBeenCalledWith(1, 1);
+  });
+
+  it('scales the translation by the level factor (working = half) but leaves scale/rotation untouched', () => {
+    const node = makeNode('n1', {
+      sourceSize: [200, 100],
+      transform2d: { x: 40, y: 20, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 4 },
+    });
+    cache.set('n1', 'working', fakeBitmap());
+    const scene = makeScene([node]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+
+    expect(ctx.translate).toHaveBeenNthCalledWith(1, 20, 10); // 40*0.5, 20*0.5
+    expect(ctx.rotate).toHaveBeenCalledWith(Math.PI / 4);
+    expect(ctx.scale).toHaveBeenCalledWith(2, 0.5);
+  });
+
+  it('brackets every node draw (transformed or not) in a balanced save/restore, never leaking on early continue', () => {
+    const missing = makeNode('missing', {
+      transform2d: { x: 5, y: 5, scaleX: 1, scaleY: 1, rotation: 0 },
+    });
+    sources.useSourceMissingStore.getState().setMissing('missing', true);
+    const noCache = makeNode('noCache');
+    const scene = makeScene([missing, noCache]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+
+    // missing-source path: withNodeTransform's own save/restore, plus
+    // drawStripedPlaceholder's internal clip save/restore = 2; no-cache path
+    // draws nothing and must never leak an unmatched save.
+    expect(ctx.save).toHaveBeenCalledTimes(2);
+    expect(ctx.restore).toHaveBeenCalledTimes(2);
   });
 });

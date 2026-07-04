@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BlendMode, Modifier, PixelNode, Scene, SceneNode } from './types';
+import type { BlendMode, Modifier, PixelNode, Scene, SceneNode, Transform2D } from './types';
 
 function makeEmptyScene(): Scene {
   return {
@@ -33,6 +33,13 @@ interface SceneState {
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
+
+  /**
+   * Replaces a node's `transform2d` wholesale (move/scale/rotate drag).
+   * Compositing-only — no dirty flag, no recook (dirty rule 4 extends to
+   * transform2d; node-transform-2d.md).
+   */
+  setNodeTransform: (id: string, transform2d: Transform2D) => void;
 
   /** Sets `scene.documentSize`. Compositing-only — no dirty flag (rule 4). */
   setDocumentSize: (size: [number, number]) => void;
@@ -108,6 +115,14 @@ export const useSceneStore = create<SceneState>((set) => ({
     // dirty flag per dirty rule 4.
     set((s) => ({
       scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, ...patch })) },
+    }));
+  },
+
+  setNodeTransform: (id, transform2d) => {
+    // Compositing-only mutation — no dirty flag per dirty rule 4 (see
+    // Transform2D's doc comment in scene/types.ts).
+    set((s) => ({
+      scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, transform2d })) },
     }));
   },
 

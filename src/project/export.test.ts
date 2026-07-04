@@ -63,9 +63,14 @@ function makeScene(nodes: SceneNode[], documentSize: [number, number] = [200, 10
 }
 
 /** Records every drawImage call so tests can assert the composite actually ran. */
-function fakeCtx(): Composite2DContext & { drawCalls: number } {
+function fakeCtx(): Composite2DContext & {
+  drawCalls: number;
+  translateCalls: [number, number][];
+} {
+  const translateCalls: [number, number][] = [];
   const ctx = {
     drawCalls: 0,
+    translateCalls,
     globalAlpha: 1,
     globalCompositeOperation: 'source-over' as GlobalCompositeOperation,
     imageSmoothingEnabled: false,
@@ -74,6 +79,11 @@ function fakeCtx(): Composite2DContext & { drawCalls: number } {
     }),
     save: vi.fn(),
     restore: vi.fn(),
+    translate: vi.fn((x: number, y: number) => {
+      translateCalls.push([x, y]);
+    }),
+    rotate: vi.fn(),
+    scale: vi.fn(),
     beginPath: vi.fn(),
     rect: vi.fn(),
     clip: vi.fn(),
@@ -85,7 +95,10 @@ function fakeCtx(): Composite2DContext & { drawCalls: number } {
     lineTo: vi.fn(),
     stroke: vi.fn(),
   };
-  return ctx as unknown as Composite2DContext & { drawCalls: number };
+  return ctx as unknown as Composite2DContext & {
+    drawCalls: number;
+    translateCalls: [number, number][];
+  };
 }
 
 function makeDeps(
@@ -148,6 +161,19 @@ describe('exportPng', () => {
     expect(deps.ctx.drawCalls).toBeGreaterThan(0); // compositeScene actually drew something
     expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
     expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("applies a node's transform2d in the export composite (baked level — translation unscaled)", async () => {
+    const nodes = [
+      pixelNode('a', {
+        transform2d: { x: 30, y: 10, scaleX: 1, scaleY: 1, rotation: 0 },
+      }),
+    ];
+    const deps = makeDeps(makeScene(nodes));
+
+    await exportPng(deps);
+
+    expect(deps.ctx.translateCalls[0]).toEqual([30, 10]);
   });
 
   it("aborts (no save, no draft substitution) when a node's full-res cook fails", async () => {

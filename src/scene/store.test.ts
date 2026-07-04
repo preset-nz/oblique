@@ -118,6 +118,37 @@ describe('setNodeProp', () => {
   });
 });
 
+describe('setNodeTransform', () => {
+  it('replaces the node transform wholesale', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a')] },
+    }));
+    const t = { x: 30, y: -10, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 4 };
+    useSceneStore.getState().setNodeTransform('a', t);
+    expect(useSceneStore.getState().scene.nodes[0].transform2d).toEqual(t);
+  });
+
+  it('dirties NOTHING in a 5-node stack — dragging fires zero cooks (node-transform-2d.md acceptance)', () => {
+    const clean = { draft: false, working: false } as const;
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: ['a', 'b', 'c', 'd', 'e'].map((id) => pixelNode(id, { dirty: { ...clean } })),
+      },
+    }));
+    // A drag is many setNodeTransform calls in a row — none may dirty.
+    for (let i = 1; i <= 3; i++) {
+      useSceneStore
+        .getState()
+        .setNodeTransform('c', { x: i * 10, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+    }
+    for (const node of useSceneStore.getState().scene.nodes) {
+      expect(node.dirty).toEqual(clean);
+    }
+    expect(useSceneStore.getState().scene.nodes[2].transform2d?.x).toBe(30);
+  });
+});
+
 describe('addModifier', () => {
   it('appends a modifier with the given type and defaults', () => {
     useSceneStore.setState((s) => ({
