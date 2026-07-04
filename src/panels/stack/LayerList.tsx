@@ -1,10 +1,11 @@
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { Slider } from '@/components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import * as cache from '@/scene/cache';
 import { useCacheVersionStore } from '@/scene/cache';
+import { deleteNode } from '@/scene/deleteNode';
 import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode } from '@/scene/types';
 
@@ -162,6 +163,22 @@ function LayerRow({
           >
             ↓
           </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Delete layer"
+                className="ml-auto text-neutral-500 hover:text-red-400"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteNode(node.id);
+                }}
+              >
+                <Trash2 size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Delete layer (no undo yet)</TooltipContent>
+          </Tooltip>
         </div>
         <Slider
           value={[Math.round(node.opacity * 100)]}
