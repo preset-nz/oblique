@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useSceneStore } from '@/scene/store';
 import type { Modifier } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
+import { opLabel } from '@/sidecar/opsCache';
 
 function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
   const params: Modifier['params'] = {};
@@ -31,7 +32,9 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
     const usable = ops.filter((op) => !op.name.startsWith('debug_'));
     const q = query.trim().toLowerCase();
     if (!q) return usable;
-    return usable.filter((op) => op.name.toLowerCase().includes(q));
+    return usable.filter(
+      (op) => op.name.toLowerCase().includes(q) || opLabel(op).toLowerCase().includes(q),
+    );
   }, [ops, query]);
 
   function pick(descriptor: OpDescriptor) {
@@ -90,10 +93,13 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
             <button
               key={op.name}
               type="button"
-              className="rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+              className="flex flex-col rounded px-2 py-1 text-left hover:bg-neutral-800"
               onClick={() => pick(op)}
             >
-              {op.name}
+              <span className="text-xs">{opLabel(op)}</span>
+              {op.description && (
+                <span className="truncate text-[10px] text-neutral-500">{op.description}</span>
+              )}
             </button>
           ))}
         </div>

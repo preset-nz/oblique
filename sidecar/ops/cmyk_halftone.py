@@ -77,6 +77,8 @@ def _screen_channel(
 
 @op(
     "cmyk_halftone",
+    label="CMYK Halftone",
+    description="Screen-printed CMYK dot raster: classic screen angles with optional seeded misregistration.",
     params=[
         # Dogfood fix (Epic 04 stack-rows): the original max=32.0 was a
         # guess that was too timid — chunky poster-scale halftones want a

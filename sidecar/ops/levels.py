@@ -11,6 +11,8 @@ from ops import P, op
 
 @op(
     "levels",
+    label="Levels",
+    description="Classic black/white/gamma tonal remap via a single LUT.",
     params=[
         P("black", "float", min=0.0, max=255.0, default=0.0, step=1.0),
         P("white", "float", min=0.0, max=255.0, default=255.0, step=1.0),

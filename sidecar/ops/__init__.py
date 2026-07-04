@@ -68,6 +68,21 @@ class ParamSpec:
 P = ParamSpec
 """Short alias used at op-registration call sites (`P("radius", "float", ...)`)."""
 
+# Internal-name tokens that should render fully upper-cased in a derived
+# label, rather than Title-Cased (e.g. "cmyk" -> "CMYK", not "Cmyk").
+_ACRONYMS = {"cmyk", "dla"}
+
+
+def default_label(name: str) -> str:
+    """Derive a presentation label from a stable internal op name:
+    snake_case -> Title Case, with known acronym tokens upper-cased
+    outright (`cmyk_halftone` -> "CMYK Halftone"). Pure and total; the
+    internal `name` itself is never altered — this is presentation only.
+    """
+    tokens = name.split("_")
+    words = [t.upper() if t in _ACRONYMS else t.capitalize() for t in tokens]
+    return " ".join(words)
+
 
 @dataclass(frozen=True)
 class Op:
@@ -75,23 +90,48 @@ class Op:
     backend: Literal["python"]
     params: list[ParamSpec]
     fn: OpFn
+    label: str = ""
+    description: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "name": self.name,
             "backend": self.backend,
             "params": [p.to_dict() for p in self.params],
+            "label": self.label or default_label(self.name),
         }
+        if self.description:
+            d["description"] = self.description
+        return d
 
 
 OPS: dict[str, Op] = {}
 
 
-def op(name: str, params: list[ParamSpec] | None = None) -> Callable[[OpFn], OpFn]:
-    """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray."""
+def op(
+    name: str,
+    params: list[ParamSpec] | None = None,
+    *,
+    label: str = "",
+    description: str = "",
+) -> Callable[[OpFn], OpFn]:
+    """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray.
+
+    `label`/`description` are presentation-only metadata surfaced through
+    `list_ops` — the stable identifier for scene files, scope keys and
+    dispatch stays `name`, always. When `label` is omitted, one is derived
+    from `name` at serialisation time (see `default_label`).
+    """
 
     def decorator(fn: OpFn) -> OpFn:
-        OPS[name] = Op(name=name, backend="python", params=params or [], fn=fn)
+        OPS[name] = Op(
+            name=name,
+            backend="python",
+            params=params or [],
+            fn=fn,
+            label=label,
+            description=description,
+        )
         return fn
 
     return decorator

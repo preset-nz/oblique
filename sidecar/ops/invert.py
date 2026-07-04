@@ -9,7 +9,11 @@ import numpy as np
 from ops import op
 
 
-@op("invert")
+@op(
+    "invert",
+    label="Invert",
+    description="Photographic negative of the RGB channels; alpha untouched.",
+)
 def invert(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     out = img.copy()
     out[..., :3] = 255 - out[..., :3]

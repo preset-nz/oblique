@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from main import dispatch
-from ops import OPS
+from ops import OPS, default_label, op
 from ops.cmyk_halftone import cmyk_halftone
 from ops.gaussian_blur import gaussian_blur
 from ops.grain import grain
@@ -293,3 +293,42 @@ def test_cmyk_halftone_over_mode_darkens_input():
     out = cmyk_halftone(img, {"dot_size": 4.0, "mode": "over"})
 
     assert (out[..., :3].astype(int) <= img[..., :3].astype(int)).all()
+
+
+def test_default_label_title_cases_snake_case_names():
+    assert default_label("gaussian_blur") == "Gaussian Blur"
+    assert default_label("invert") == "Invert"
+    assert default_label("colour_crush") == "Colour Crush"
+
+
+def test_default_label_upper_cases_known_acronyms():
+    assert default_label("cmyk_halftone") == "CMYK Halftone"
+    assert default_label("dla") == "DLA"
+    assert default_label("dla_growth") == "DLA Growth"
+
+
+def test_every_registered_non_debug_op_has_a_description():
+    for name, entry in OPS.items():
+        if name.startswith("debug_"):
+            continue
+        assert entry.description, f"{name} is missing a user-facing description"
+
+
+def test_op_to_dict_includes_label_and_description():
+    xerox_entry = OPS["xerox"].to_dict()
+    assert xerox_entry["label"] == "Xerox"
+    assert "description" in xerox_entry
+    assert xerox_entry["description"]
+
+
+def test_op_to_dict_derives_label_when_not_supplied():
+    @op("temp_test_op_for_label_fallback")
+    def _temp(img, params):  # noqa: ANN001, ARG001
+        return img
+
+    try:
+        entry = OPS["temp_test_op_for_label_fallback"].to_dict()
+        assert entry["label"] == "Temp Test Op For Label Fallback"
+        assert "description" not in entry
+    finally:
+        del OPS["temp_test_op_for_label_fallback"]

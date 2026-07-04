@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useSceneStore } from '@/scene/store';
 import type { Modifier, SceneNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
+import { opLabel } from '@/sidecar/opsCache';
 import { modifierScopeKey } from './modifierScope';
 import { useRowCollapseStore } from './rowCollapse';
 import { nudgeModelIndex } from './stackOrder';
@@ -115,7 +116,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
           aria-expanded={expanded}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <span className="truncate">{modifier.type}</span>
+          <span className="truncate">{descriptor ? opLabel(descriptor) : modifier.type}</span>
         </button>
 
         <Popover>

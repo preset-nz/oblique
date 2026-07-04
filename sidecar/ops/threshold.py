@@ -16,6 +16,8 @@ _LUMA_R, _LUMA_G, _LUMA_B = 0.2126, 0.7152, 0.0722
 
 @op(
     "threshold",
+    label="Threshold",
+    description="Hard (or smoothstepped) luminance cut to pure black and white.",
     params=[
         P("level", "float", min=0.0, max=255.0, default=127.0, step=1.0),
         P("smooth", "float", min=0.0, max=64.0, default=0.0, step=1.0),
