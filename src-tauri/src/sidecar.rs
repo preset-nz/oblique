@@ -1,11 +1,13 @@
 //! Supervises the Python ops sidecar as a long-lived child process.
 //!
 //! Rust is a **dumb relay**: it never parses the framed-stdio protocol.
-//! `sidecar_send` writes raw bytes verbatim to the child's stdin; the
-//! stdout reader thread emits whatever byte chunks it reads as
-//! `sidecar-frame` events. Frame reassembly (the length-prefixed header
-//! format) happens entirely in the TypeScript client — Rust just moves
-//! bytes.
+//! `sidecar_send` writes the raw invoke body verbatim to the child's
+//! stdin; the stdout reader thread pushes raw byte chunks through the
+//! IPC channel registered by `sidecar_subscribe`. Both directions use
+//! Tauri 2 raw-bytes IPC — never JSON number arrays; that path cost
+//! ~120 ms per 0.1 MP cook (measured 2026-07-04). Frame reassembly (the
+//! length-prefixed header format) happens entirely in the TypeScript
+//! client — Rust just moves bytes.
 //!
 //! See guidance/projects/oblique/design/architecture.md
 //! Section "Python sidecar protocol" for the frame format Rust
@@ -19,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request as IpcRequest};
 use tauri::{AppHandle, Emitter, Manager};
 
 const CRASH_WINDOW: Duration = Duration::from_secs(30);
@@ -26,10 +29,14 @@ const CRASH_GIVEUP_COUNT: usize = 5;
 const RESPAWN_DELAY: Duration = Duration::from_secs(1);
 const STDOUT_CHUNK_SIZE: usize = 64 * 1024;
 
-/// Shared handle to the running child's stdin. `None` while the sidecar is down.
+/// Shared handle to the running child's stdin (`None` while the sidecar is
+/// down) and the webview's raw frame channel (`None` until the webview
+/// calls `sidecar_subscribe`; chunks read before that are dropped, which
+/// is safe because requests only originate from a subscribed webview).
 #[derive(Default)]
 pub struct SidecarState {
     stdin: Mutex<Option<ChildStdin>>,
+    frame_channel: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -106,7 +113,11 @@ fn supervise(app: AppHandle) {
 
         let last_stderr = Arc::new(Mutex::new(String::new()));
         spawn_stderr_reader(stderr, Arc::clone(&last_stderr));
-        spawn_stdout_reader(app.clone(), stdout);
+        let frame_channel = app
+            .try_state::<SidecarState>()
+            .map(|state| Arc::clone(&state.frame_channel))
+            .unwrap_or_default();
+        spawn_stdout_reader(frame_channel, stdout);
 
         emit_status(&app, true, None);
 
@@ -147,14 +158,20 @@ fn record_crash_and_check_giveup(crash_times: &mut Vec<Instant>) -> bool {
     crash_times.len() >= CRASH_GIVEUP_COUNT
 }
 
-fn spawn_stdout_reader(app: AppHandle, mut stdout: impl Read + Send + 'static) {
+fn spawn_stdout_reader(
+    frame_channel: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
+    mut stdout: impl Read + Send + 'static,
+) {
     thread::spawn(move || {
         let mut buf = vec![0u8; STDOUT_CHUNK_SIZE];
         loop {
             match stdout.read(&mut buf) {
                 Ok(0) => break, // EOF: child closed stdout
                 Ok(n) => {
-                    let _ = app.emit("sidecar-frame", buf[..n].to_vec());
+                    let guard = frame_channel.lock().expect("frame channel mutex poisoned");
+                    if let Some(channel) = guard.as_ref() {
+                        let _ = channel.send(InvokeResponseBody::Raw(buf[..n].to_vec()));
+                    }
                 }
                 Err(_) => break,
             }
@@ -178,12 +195,30 @@ fn spawn_stderr_reader(stderr: impl Read + Send + 'static, last_line: Arc<Mutex<
     });
 }
 
+/// Register the webview's frame channel. Chunks from the sidecar's stdout
+/// are pushed through it as raw bytes (`InvokeResponseBody::Raw`) — no
+/// JSON serialisation on the hot path.
 #[tauri::command]
-pub fn sidecar_send(state: tauri::State<SidecarState>, bytes: Vec<u8>) -> Result<(), String> {
+pub fn sidecar_subscribe(
+    state: tauri::State<SidecarState>,
+    channel: Channel<InvokeResponseBody>,
+) -> Result<(), String> {
+    *state
+        .frame_channel
+        .lock()
+        .map_err(|_| "frame channel mutex poisoned".to_string())? = Some(channel);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sidecar_send(state: tauri::State<SidecarState>, request: IpcRequest<'_>) -> Result<(), String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("sidecar_send expects a raw byte body".to_string());
+    };
     let mut guard = state.stdin.lock().map_err(|_| "sidecar stdin mutex poisoned".to_string())?;
     match guard.as_mut() {
         Some(stdin) => stdin
-            .write_all(&bytes)
+            .write_all(bytes)
             .and_then(|_| stdin.flush())
             .map_err(|err| format!("failed to write to sidecar stdin: {err}")),
         None => Err("sidecar is not running".to_string()),

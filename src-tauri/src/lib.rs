@@ -13,7 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(sidecar::SidecarState::default())
-        .invoke_handler(tauri::generate_handler![greet, sidecar::sidecar_send])
+        .invoke_handler(tauri::generate_handler![greet, sidecar::sidecar_send, sidecar::sidecar_subscribe])
         .setup(|app| {
             sidecar::start(app.handle().clone());
             Ok(())
