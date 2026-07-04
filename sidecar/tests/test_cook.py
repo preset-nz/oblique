@@ -37,6 +37,9 @@ def test_cook_full_five_op_stack_round_trips():
 
     response_header, response_payload = handle_cook(header, payload)
 
+    timings = response_header.pop("timings_ms")
+    assert [t["type"] for t in timings] == [m["type"] for m in header["modifiers"]]
+    assert all(t["ms"] >= 0 for t in timings)
     assert response_header == {"id": "cook-1", "ok": True, "width": w, "height": h}
     assert len(response_payload) == w * h * 4
 

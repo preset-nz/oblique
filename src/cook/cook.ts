@@ -153,7 +153,7 @@ async function realRunPython(
   // imports this module with injected `CookDeps` (which never reaches
   // this function) — only a real production cook pulls it in.
   const { sidecarClient } = await import('@/sidecar/singleton');
-  const { payload: result } = await sidecarClient.request(
+  const { header, payload: result } = await sidecarClient.request(
     {
       op: 'cook',
       width,
@@ -162,6 +162,12 @@ async function realRunPython(
     },
     payload,
   );
+  if (Array.isArray(header.timings_ms)) {
+    const perOp = (header.timings_ms as { type: string; ms: number }[])
+      .map((t) => `${t.type} ${t.ms}ms`)
+      .join(', ');
+    console.debug(`[cook] sidecar ops ${width}x${height}: ${perOp}`);
+  }
   return result;
 }
 
@@ -213,8 +219,14 @@ export async function cookNode(
   const factor = resolutionFactor(level);
   const [width, height] = computeTargetSize(node.sourceSize, factor);
 
+  // Phase timings, logged at debug level. performance.now() reads are
+  // sub-microsecond against phases costing milliseconds — measuring here
+  // cannot skew the result. console.debug is invisible (and near-free)
+  // unless devtools' Verbose level is on.
+  const t0 = performance.now();
   try {
     let resultBytes = deps.downscale(source, width, height);
+    const tDownscale = performance.now();
     const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps());
 
     if (cookModifiers.length > 0) {
@@ -228,8 +240,15 @@ export async function cookNode(
         resultBytes = await deps.runPython(width, height, run.modifiers, resultBytes);
       }
     }
+    const tSidecar = performance.now();
 
     const bitmap = await deps.encode(resultBytes, width, height);
+    const tEncode = performance.now();
+    console.debug(
+      `[cook] ${node.label} ${level} ${width}x${height}: total ${(tEncode - t0).toFixed(1)}ms ` +
+        `(downscale ${(tDownscale - t0).toFixed(1)}, sidecar+ipc ${(tSidecar - tDownscale).toFixed(1)}, ` +
+        `encode ${(tEncode - tSidecar).toFixed(1)})`,
+    );
     deps.setCache(nodeId, level, bitmap);
 
     const current = deps.getNode(nodeId);

@@ -15,6 +15,7 @@ naming the op, no partial results (validated up front, before folding).
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import numpy as np
@@ -69,9 +70,26 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
 
     img = np.frombuffer(payload, dtype=np.uint8).copy().reshape(height, width, 4)
 
+    # Per-op wall time in ms, returned in the header for client-side debug
+    # logging. perf_counter reads cost ~ns against ops that cost ms, so the
+    # measurement can't skew what it measures.
+    timings_ms: list[dict[str, Any]] = []
     for modifier in modifiers:
         entry = OPS[modifier["type"]]
+        started = time.perf_counter()
         img = entry.fn(img, modifier.get("params", {}))
+        timings_ms.append(
+            {
+                "type": modifier["type"],
+                "ms": round((time.perf_counter() - started) * 1000, 2),
+            }
+        )
 
     result = np.ascontiguousarray(img, dtype=np.uint8).tobytes()
-    return {"id": request_id, "ok": True, "width": width, "height": height}, result
+    return {
+        "id": request_id,
+        "ok": True,
+        "width": width,
+        "height": height,
+        "timings_ms": timings_ms,
+    }, result
