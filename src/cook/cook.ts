@@ -3,7 +3,8 @@ import * as cache from '@/scene/cache';
 import { rasterizeMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
-import type { MaskDef, Modifier, PixelNode, SceneNode } from '@/scene/types';
+import type { MaskDef, Modifier, PixelNode, SceneNode, VectorNode } from '@/scene/types';
+import { rasterizeVector } from '@/scene/vectorRasterize';
 import { type OpDescriptor, useOpsCacheStore } from '@/sidecar/opsCache';
 
 /** Cook targets DRAFT (1/8) and WORKING (1/2); BAKED is Epic 07's job. */
@@ -152,6 +153,8 @@ function reportCookFailure(message: string): void {
 export interface CookDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getSource: (nodeId: string) => ImageBitmap | undefined;
+  /** `Scene.documentSize` — a vector node's raster spans this (vector-node-model.md's Sizing note), it has no `sourceSize` of its own. */
+  getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
   getMask: (maskId: string) => MaskDef | undefined;
   /** Rasterise a mask to a single-channel plane at the cook target size (scene/maskRasterize.ts; needs OffscreenCanvas, so injected). */
@@ -164,6 +167,14 @@ export interface CookDeps {
   ) => Uint8Array;
   /** Draw `source` into an offscreen surface at `[w, h]` and read back RGBA8 bytes. */
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
+  /** Rasterise a vector node's paths at the cook target size — a vector node's "source pixels" (scene/vectorRasterize.ts; needs OffscreenCanvas, so injected, same pattern as `rasterizeMask`). */
+  rasterizeVector: (
+    paths: VectorNode['paths'],
+    fillRule: VectorNode['fillRule'],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
   /** One sidecar `cook` call for a same-backend run. */
   runPython: (
     width: number,
@@ -234,10 +245,12 @@ async function realRunPython(
 export const productionCookDeps: CookDeps = {
   getNode: (nodeId) => useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId),
   getSource: (nodeId) => sources.get(nodeId),
+  getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   getOps: () => useOpsCacheStore.getState().ops,
   getMask: (maskId) => useSceneStore.getState().scene.masks?.[maskId],
   rasterizeMask,
   downscale: realDownscale,
+  rasterizeVector,
   runPython: realRunPython,
   encode: realEncode,
   setCache: cache.set,
@@ -355,17 +368,27 @@ export async function cookNode(
   deps: CookDeps = productionCookDeps,
 ): Promise<void> {
   const rawNode = deps.getNode(nodeId);
-  if (rawNode?.type !== 'pixel') return;
-  // Only PixelNode carries sourcePath/sourceSize; the cast is safe once
-  // `type === 'pixel'` is checked (mirrors the pattern in project/import.ts).
-  const node = rawNode as PixelNode;
+  if (rawNode?.type !== 'pixel' && rawNode?.type !== 'vector') return;
+  // PixelNode/VectorNode are the two source-pixel-producing node types
+  // today; the cast is safe once `type` is checked (mirrors the pattern in
+  // project/import.ts).
+  const node = rawNode as PixelNode | VectorNode;
 
-  const source = deps.getSource(nodeId);
-  if (!source) return; // source-missing nodes stay dirty; paintScene shows the striped placeholder.
+  const factor = resolutionFactor(level);
+  // A vector node has no `sourceSize` of its own — its raster always spans
+  // `Scene.documentSize` (vector-node-model.md's Sizing note).
+  const nodeExtent = node.type === 'pixel' ? node.sourceSize : deps.getDocumentSize();
+  const [width, height] = computeTargetSize(nodeExtent, factor);
+
+  // A missing pixel source is not a cook failure (no toast, dirty stays
+  // set, paintScene shows the striped placeholder) — checked before the
+  // try block below, which is reserved for actual op/sidecar failures.
+  // Vector nodes have no equivalent "missing" state: rasterizeVector always
+  // has something to draw (an empty paths array rasterises to nothing).
+  const source = node.type === 'pixel' ? deps.getSource(nodeId) : undefined;
+  if (node.type === 'pixel' && !source) return;
 
   const modifiersAtStart = node.modifiers;
-  const factor = resolutionFactor(level);
-  const [width, height] = computeTargetSize(node.sourceSize, factor);
 
   // Phase timings, logged at debug level. performance.now() reads are
   // sub-microsecond against phases costing milliseconds — measuring here
@@ -373,11 +396,14 @@ export async function cookNode(
   // unless devtools' Verbose level is on.
   const t0 = performance.now();
   try {
-    let resultBytes = deps.downscale(source, width, height);
+    let resultBytes =
+      node.type === 'pixel'
+        ? deps.downscale(source as ImageBitmap, width, height)
+        : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
     const tDownscale = performance.now();
     const rasterizeFor = (maskId: string) => {
       const mask = deps.getMask(maskId);
-      return mask ? deps.rasterizeMask(mask, node.sourceSize, width, height, factor) : undefined;
+      return mask ? deps.rasterizeMask(mask, nodeExtent, width, height, factor) : undefined;
     };
     const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps(), rasterizeFor);
 

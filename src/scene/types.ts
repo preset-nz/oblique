@@ -105,6 +105,60 @@ export function isPixelNode(node: SceneNode): node is PixelNode {
   return node.type === 'pixel';
 }
 
+/**
+ * A single document-space `{x, y}` control point — anchors, tangent handles,
+ * and lasso points all share this shape.
+ */
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+/**
+ * One point on a `VectorPath` (vector-node-model.md). `point` is the anchor
+ * itself; `handleIn`/`handleOut` are the incoming/outgoing cubic Bezier
+ * control points, document-space absolute coordinates (not deltas) — absence
+ * of a handle means that side is a corner (straight segment, no curvature).
+ * A symmetric/smooth anchor is just both handles present and consistent;
+ * this story stores geometry only, no smoothing metadata (path-editing.md's
+ * job).
+ */
+export interface AnchorPoint {
+  point: Point2D;
+  handleIn?: Point2D;
+  handleOut?: Point2D;
+}
+
+/**
+ * An ordered list of anchors forming one contour. `closed` connects the
+ * last anchor back to the first (using the last anchor's `handleOut` and
+ * the first anchor's `handleIn`, same as any other segment) — an open path
+ * never gets a closing segment.
+ */
+export interface VectorPath {
+  anchors: AnchorPoint[];
+  closed: boolean;
+}
+
+/**
+ * A vector shape node (vector-node-model.md): `paths` rasterise to the
+ * node's *source pixels* at cook time (vectorRasterize.ts) — same role a
+ * decoded file plays for `PixelNode`. No `sourcePath`/`sourceSize`: the
+ * raster always spans `Scene.documentSize` at the cook target's resolution
+ * factor (cheap and correct for masks; bounding-box tightness is a later
+ * concern if memory ever hurts). `fillRule` matches the Canvas 2D `Path2D`
+ * fill rule of the same name.
+ */
+export interface VectorNode extends SceneNode {
+  type: 'vector';
+  paths: VectorPath[];
+  fillRule: 'nonzero' | 'evenodd';
+}
+
+export function isVectorNode(node: SceneNode): node is VectorNode {
+  return node.type === 'vector';
+}
+
 // Epic 08 will replace this with the real Camera type from the source spec;
 // `never` keeps `cameras` strictly empty (and tsc-clean) until then.
 export type Camera = never;

@@ -7,6 +7,7 @@ import type {
   Scene,
   SceneNode,
   Transform2D,
+  VectorNode,
 } from './types';
 
 function makeEmptyScene(): Scene {
@@ -38,6 +39,14 @@ interface SceneState {
   addPixelNode: (
     partial: Pick<PixelNode, 'sourcePath' | 'sourceSize'> & Partial<PixelNode>,
   ) => string;
+
+  /**
+   * Insert a new vector node at the top of the stack (index 0). No
+   * `sourcePath`/`sourceSize` — its raster spans `Scene.documentSize`
+   * (vector-node-model.md's Sizing note). Dirtied on creation like
+   * `addPixelNode` so the scheduler cooks its first raster.
+   */
+  addVectorNode: (partial: Pick<VectorNode, 'paths' | 'fillRule'> & Partial<VectorNode>) => string;
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
@@ -123,6 +132,28 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       dirty: dirtyBoth(),
       sourcePath: partial.sourcePath,
       sourceSize: partial.sourceSize,
+    };
+    set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
+    return id;
+  },
+
+  addVectorNode: (partial) => {
+    const id = crypto.randomUUID();
+    const node: VectorNode = {
+      id,
+      label: partial.label ?? 'Vector',
+      type: 'vector',
+      state: partial.state ?? 'active',
+      output: partial.output ?? 'image',
+      transform: partial.transform,
+      cameraId: partial.cameraId ?? null,
+      modifiers: partial.modifiers ?? [],
+      visible: partial.visible ?? true,
+      blendMode: partial.blendMode ?? 'normal',
+      opacity: partial.opacity ?? 1,
+      dirty: dirtyBoth(),
+      paths: partial.paths,
+      fillRule: partial.fillRule,
     };
     set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
     return id;

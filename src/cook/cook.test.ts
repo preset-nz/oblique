@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpDescriptor } from '@/sidecar/opsCache';
-import type { Modifier, PixelNode, SceneNode } from '../scene/types';
+import type { Modifier, PixelNode, SceneNode, VectorNode } from '../scene/types';
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn() },
@@ -44,17 +44,49 @@ function makeNode(overrides: Partial<PixelNode> = {}): SceneNode {
   } as SceneNode;
 }
 
+function makeVectorNode(overrides: Partial<VectorNode> = {}): SceneNode {
+  return {
+    id: 'node-1',
+    label: 'Vector',
+    type: 'vector',
+    state: 'active',
+    output: 'image',
+    cameraId: null,
+    modifiers: [],
+    visible: true,
+    blendMode: 'normal',
+    opacity: 1,
+    dirty: { draft: true, working: true },
+    paths: [
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 0, y: 0 } },
+          { point: { x: 10, y: 0 } },
+          { point: { x: 5, y: 10 } },
+        ],
+      },
+    ],
+    fillRule: 'nonzero',
+    ...overrides,
+  } as SceneNode;
+}
+
 /** A minimal CookDeps with all browser/sidecar edges stubbed; individual fields overridable per test. */
 function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> = {}): CookDeps {
   return {
     getNode: vi.fn((id: string) => (nodeRef.current.id === id ? nodeRef.current : undefined)),
     getSource: vi.fn(() => fakeBitmap()),
+    getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
     getOps: vi.fn(() => opsFixture),
     getMask: vi.fn(() => undefined),
     rasterizeMask: vi.fn(
       (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
     ),
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
+    rasterizeVector: vi.fn(
+      (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+    ),
     runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
     encode: vi.fn(async () => fakeBitmap()),
     setCache: vi.fn(),
@@ -354,6 +386,64 @@ describe('cookNode', () => {
     await cookNode('node-1', 'draft', deps);
 
     expect(toast.error).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('cookNode — vector nodes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCookErrorBurst();
+  });
+
+  it('rasterises the node paths (not getSource/downscale) at documentSize x factor', async () => {
+    const nodeRef = { current: makeVectorNode() };
+    const deps = makeDeps(nodeRef);
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.getSource).not.toHaveBeenCalled();
+    expect(deps.downscale).not.toHaveBeenCalled();
+    expect(deps.rasterizeVector).toHaveBeenCalledWith(
+      (nodeRef.current as unknown as VectorNode).paths,
+      'nonzero',
+      100, // documentSize [800,400] x draft factor 1/8
+      50,
+      1 / 8,
+    );
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything());
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
+  it('rasterizeVector throwing is caught like any other cook failure: dirty stays set, one toast', async () => {
+    const nodeRef = { current: makeVectorNode() };
+    const deps = makeDeps(nodeRef, {
+      rasterizeVector: vi.fn(() => {
+        throw new Error('bad path');
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.setCache).not.toHaveBeenCalled();
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs enabled modifiers over the rasterised paths, same as a pixel node', async () => {
+    const nodeRef = {
+      current: makeVectorNode({
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      }),
+    };
+    const deps = makeDeps(nodeRef);
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.runPython).toHaveBeenCalledTimes(1);
+    const [, , modifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(modifiers).toEqual([
+      { type: 'gaussian_blur', backend: 'python', params: { radius: 1 } },
+    ]);
   });
 });
 

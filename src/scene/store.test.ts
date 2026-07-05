@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from './store';
-import type { Modifier, PixelNode, Scene } from './types';
+import type { Modifier, PixelNode, Scene, VectorPath } from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -54,6 +54,44 @@ describe('addPixelNode', () => {
     useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
     const node = useSceneStore.getState().scene.nodes[0];
     expect(node.dirty).toEqual({ draft: true, working: true });
+  });
+});
+
+const trianglePaths: VectorPath[] = [
+  {
+    closed: true,
+    anchors: [{ point: { x: 0, y: 0 } }, { point: { x: 10, y: 0 } }, { point: { x: 5, y: 10 } }],
+  },
+];
+
+describe('addVectorNode', () => {
+  it('inserts the new node at index 0 (stack top)', () => {
+    useSceneStore.getState().addVectorNode({ paths: trianglePaths, fillRule: 'nonzero' });
+    const secondId = useSceneStore
+      .getState()
+      .addVectorNode({ paths: trianglePaths, fillRule: 'evenodd' });
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes[0].id).toBe(secondId);
+    expect(nodes).toHaveLength(2);
+  });
+
+  it('marks the new node dirty at both levels', () => {
+    useSceneStore.getState().addVectorNode({ paths: trianglePaths, fillRule: 'nonzero' });
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('carries paths/fillRule, no sourcePath/sourceSize', () => {
+    const id = useSceneStore
+      .getState()
+      .addVectorNode({ paths: trianglePaths, fillRule: 'evenodd' });
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node.id).toBe(id);
+    expect(node.type).toBe('vector');
+    expect(node).toMatchObject({ paths: trianglePaths, fillRule: 'evenodd' });
+    expect(node).not.toHaveProperty('sourcePath');
+    expect(node).not.toHaveProperty('sourceSize');
   });
 });
 

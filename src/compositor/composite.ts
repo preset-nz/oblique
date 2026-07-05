@@ -139,9 +139,10 @@ export function destSizeFor(
   documentSize: [number, number],
 ): [number, number] {
   const factor = resolutionFactorFor(level);
-  // deferred: non-pixel node types (vector/mesh/splat) draw at documentSize
-  // until their own source-size concept lands (Milestone B+); only PixelNode
-  // carries sourceSize today.
+  // A vector node's raster always spans documentSize (vector-node-model.md's
+  // Sizing note — no sourceSize of its own); mesh/splat nodes will get their
+  // own source-size concept in Milestone B. Only PixelNode carries
+  // sourceSize today.
   const [srcW, srcH] = isPixelNode(node) ? node.sourceSize : documentSize;
   return [srcW * factor, srcH * factor];
 }

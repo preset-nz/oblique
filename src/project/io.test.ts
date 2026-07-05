@@ -126,6 +126,35 @@ describe('serialise/parse round trip', () => {
     expect(serialiseProject(sampleScene())).not.toContain('"masks"');
   });
 
+  it('scene with a vector node round-trips verbatim (vector-node-model.md)', () => {
+    const scene = sampleScene();
+    scene.nodes.push({
+      id: 'n2',
+      label: 'Triangle',
+      type: 'vector',
+      state: 'active',
+      output: 'image',
+      modifiers: [],
+      visible: true,
+      blendMode: 'normal',
+      opacity: 1,
+      dirty: { draft: false, working: false },
+      paths: [
+        {
+          closed: true,
+          anchors: [
+            { point: { x: 0, y: 0 }, handleOut: { x: 5, y: -5 } },
+            { point: { x: 20, y: 0 }, handleIn: { x: 15, y: -5 } },
+            { point: { x: 10, y: 20 } },
+          ],
+        },
+      ],
+      fillRule: 'evenodd',
+      // biome-ignore lint/suspicious/noExplicitAny: VectorNode via SceneNode[] slot
+    } as any);
+    expect(parseProject(serialiseProject(scene))).toEqual(scene);
+  });
+
   it('rejects non-JSON', () => {
     expect(() => parseProject('nope{')).toThrow(/not valid JSON/);
   });
