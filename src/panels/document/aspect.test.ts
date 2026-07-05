@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ASPECT_PRESETS,
+  BASE_PRESETS,
   computeDocumentSize,
   DEFAULT_LONG_EDGE,
   describeDocumentSize,
+  describeLongEdge,
   longEdgeOf,
   nextDocumentSize,
 } from './aspect';
@@ -61,6 +63,26 @@ describe('nextDocumentSize', () => {
       DEFAULT_LONG_EDGE,
       DEFAULT_LONG_EDGE,
     ]);
+  });
+});
+
+describe('describeLongEdge', () => {
+  it('identifies an exact base-preset match regardless of orientation', () => {
+    expect(describeLongEdge([1920, 1200])).toBe('1080p');
+    expect(describeLongEdge([1200, 1920])).toBe('1080p');
+    expect(describeLongEdge([3508, 2480])).toBe('a4');
+  });
+
+  it('returns null for a long edge no preset uses', () => {
+    expect(describeLongEdge([2048, 1536])).toBeNull();
+    expect(describeLongEdge([0, 0])).toBeNull();
+  });
+
+  it('base preset + aspect round-trips through computeDocumentSize', () => {
+    for (const base of BASE_PRESETS) {
+      const size = computeDocumentSize(base.longEdge, 4 / 3, 'portrait');
+      expect(describeLongEdge(size)).toBe(base.id);
+    }
   });
 });
 

@@ -16,6 +16,29 @@ export const ASPECT_PRESETS: AspectPreset[] = [
   { id: '1:2', label: '1:2', ratio: 2 },
 ];
 
+export interface BasePreset {
+  id: string;
+  label: string;
+  /** Pixel size of the document's longest side. */
+  longEdge: number;
+}
+
+/** Paper sizes at 300 DPI; video sizes by their standard long edge. */
+export const BASE_PRESETS: BasePreset[] = [
+  { id: 'a6', label: 'A6', longEdge: 1748 },
+  { id: 'a5', label: 'A5', longEdge: 2480 },
+  { id: 'a4', label: 'A4', longEdge: 3508 },
+  { id: '720p', label: '720p', longEdge: 1280 },
+  { id: '1080p', label: '1080p', longEdge: 1920 },
+  { id: '4k', label: '4K', longEdge: 3840 },
+];
+
+/** Which base preset (by id) matches a document's long edge exactly — for UI display. */
+export function describeLongEdge(documentSize: [number, number]): string | null {
+  const longEdge = Math.max(documentSize[0], documentSize[1]);
+  return BASE_PRESETS.find((p) => p.longEdge === longEdge)?.id ?? null;
+}
+
 /** Long-edge pixel size to use for an empty document (no existing size to derive from). */
 export const DEFAULT_LONG_EDGE = 2048;
 
