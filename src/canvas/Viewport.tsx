@@ -32,6 +32,8 @@ import { TransformBox } from './TransformBox';
 import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
 import { usePanZoom } from './usePanZoom';
+import { PenTool } from './vector/PenTool';
+import { MIN_ANCHORS_TO_CLOSE, usePenStateStore } from './vector/penState';
 import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
@@ -46,6 +48,12 @@ const NUDGE_DELTA: Record<string, [number, number]> = {
 
 /** Screen-space "snap closed" radius for the lasso's return-to-start check — converted to a document-space threshold via the live view scale so it feels constant at any zoom (marqueeGeometry.ts's `isNearStart` itself is pure document-space). */
 const LASSO_CLOSE_SCREEN_PX = 8;
+
+/** Screen-space "click the first anchor closes the path" radius for the pen tool — same conversion idiom as `LASSO_CLOSE_SCREEN_PX`, reusing `isNearStart` (pure point-distance, not marquee-specific). */
+const PEN_CLOSE_SCREEN_PX = 8;
+
+/** Screen-space movement threshold that tells a plain click (corner anchor) apart from a click-drag (smooth anchor, pen-tool.md). */
+const PEN_DRAG_SCREEN_PX = 3;
 
 function isImagePath(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
@@ -79,17 +87,24 @@ export function Viewport() {
   const setMarquee = useMarqueeStateStore((s) => s.setMarquee);
   const clearMarquee = useMarqueeStateStore((s) => s.clear);
 
-  // Tool-switch-away clears the marquee (epic acceptance: "no orphaned
-  // overlay state"). Reactive on `tool` rather than living inside
-  // `setTool` itself — covers both the `M`/`V` shortcuts (app/shortcuts.ts)
-  // and ToolbarRail clicks without toolState.ts needing to know marquees
-  // exist. Every tool change clears (including switching between the three
-  // marquee tools themselves — "one active marquee at a time" per tool).
+  const penAnchors = usePenStateStore((s) => s.anchors);
+  const cancelPen = usePenStateStore((s) => s.cancel);
+
+  // Tool-switch-away clears the marquee and the in-progress pen path (epic
+  // acceptance: "no orphaned overlay state"). Reactive on `tool` rather than
+  // living inside `setTool` itself — covers both the `M`/`V` shortcuts
+  // (app/shortcuts.ts) and ToolbarRail clicks without toolState.ts needing
+  // to know marquees/pen exist. Every tool change clears (including
+  // switching between the three marquee tools themselves — "one active
+  // marquee at a time" per tool — and switching away from `pen` mid-draw).
   const prevToolRef = useRef(tool);
   useEffect(() => {
-    if (prevToolRef.current !== tool) clearMarquee();
+    if (prevToolRef.current !== tool) {
+      clearMarquee();
+      cancelPen();
+    }
     prevToolRef.current = tool;
-  }, [tool, clearMarquee]);
+  }, [tool, clearMarquee, cancelPen]);
 
   /** Client coords -> document space, sharing the same view transform as canvas paint. */
   const toDoc = useCallback((clientX: number, clientY: number): Point => {
@@ -122,13 +137,26 @@ export function Viewport() {
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
-      // Escape clears node selection from any tool (de-select, tool-state.md)
-      // and the active marquee (marquees.md). Both are UI-only state —
-      // neither ever touches the scene store, so neither can create an undo
-      // step.
+      // Escape clears node selection from any tool (de-select, tool-state.md),
+      // the active marquee (marquees.md), and cancels an in-progress pen
+      // path (pen-tool.md — "no scene mutation"). All three are UI-only
+      // state — none of them ever touches the scene store, so none can
+      // create an undo step.
       if (e.key === 'Escape' && !isEditableTarget) {
         clearSelection();
         clearMarquee();
+        usePenStateStore.getState().cancel();
+        return;
+      }
+
+      // Enter finishes the in-progress pen path (pen-tool.md): closes it
+      // with >= 3 anchors, finishes it open with exactly 2, no-ops
+      // otherwise. Reads the store directly (not the `penAnchors` render
+      // value) for the same reason the Delete/marquee branch below does —
+      // this effect shouldn't re-run on every anchor placed.
+      if (e.key === 'Enter' && !isEditableTarget && tool === 'pen') {
+        e.preventDefault();
+        usePenStateStore.getState().finishOnEnter();
         return;
       }
 
@@ -204,6 +232,13 @@ export function Viewport() {
     // invisible 3-point speck a couple of pixels in.
     let lassoLeftStart = false;
 
+    // Pen draw state (pen-tool.md). A pointerdown always either closes the
+    // path (click on the first anchor, >= 3 anchors already placed) or opens
+    // a *pending* anchor — corner vs. smooth is only decided at pointerup,
+    // once we know whether the pointer moved (drag) or not (click).
+    let penPendingAnchor: Point | null = null;
+    let penPendingMoved = false;
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
 
@@ -236,6 +271,25 @@ export function Viewport() {
         lassoStart = docPt;
         lassoLeftStart = false;
         setMarquee({ kind: 'lasso', points: [docPt], closed: false });
+        return;
+      }
+
+      if (tool === 'pen') {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        const docPt = toDoc(e.clientX, e.clientY);
+        const anchors = usePenStateStore.getState().anchors;
+        const viewScale = useViewTransformStore.getState().view.scale;
+        const closeThresholdDoc = PEN_CLOSE_SCREEN_PX / Math.max(viewScale, 0.0001);
+        if (
+          anchors.length >= MIN_ANCHORS_TO_CLOSE &&
+          isNearStart(docPt, anchors[0].point, closeThresholdDoc)
+        ) {
+          usePenStateStore.getState().finishClosed();
+          return;
+        }
+        penPendingAnchor = docPt;
+        penPendingMoved = false;
         return;
       }
 
@@ -300,6 +354,22 @@ export function Viewport() {
         return;
       }
 
+      if (tool === 'pen') {
+        const docPt = toDoc(e.clientX, e.clientY);
+        // Rubber-band target updates on every move, dragging an anchor's
+        // handle or not — it's the segment from the last COMMITTED anchor
+        // to the live cursor (pen-tool.md).
+        usePenStateStore.getState().setCursor(docPt);
+        if (penPendingAnchor) {
+          const viewScale = useViewTransformStore.getState().view.scale;
+          const dragThresholdDoc = PEN_DRAG_SCREEN_PX / Math.max(viewScale, 0.0001);
+          const dx = docPt.x - penPendingAnchor.x;
+          const dy = docPt.y - penPendingAnchor.y;
+          if (dx * dx + dy * dy > dragThresholdDoc * dragThresholdDoc) penPendingMoved = true;
+        }
+        return;
+      }
+
       if (!dragNodeId) return;
       const docPt = toDoc(e.clientX, e.clientY);
       const next = applyMove(dragStartTransform, {
@@ -356,6 +426,19 @@ export function Viewport() {
             setMarquee({ kind: 'lasso', points: current.points, closed: true });
           }
         }
+        return;
+      }
+
+      if (penPendingAnchor) {
+        canvas.releasePointerCapture(e.pointerId);
+        const docPt = toDoc(e.clientX, e.clientY);
+        if (penPendingMoved) {
+          usePenStateStore.getState().placeSmooth(penPendingAnchor, docPt);
+        } else {
+          usePenStateStore.getState().placeCorner(penPendingAnchor);
+        }
+        penPendingAnchor = null;
+        penPendingMoved = false;
         return;
       }
 
@@ -603,6 +686,7 @@ export function Viewport() {
               toDoc={toDoc}
             />
           )}
+          {tool === 'pen' && penAnchors.length > 0 && <PenTool viewScale={view.scale} />}
         </g>
       </svg>
       <MarqueeToolbar />

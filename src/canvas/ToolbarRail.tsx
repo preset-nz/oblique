@@ -1,4 +1,4 @@
-import { Circle, Hand, Lasso, Move, Square } from 'lucide-react';
+import { Circle, Hand, Lasso, Move, PenTool as PenToolIcon, Square } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type Tool, useToolStateStore } from './toolState';
 
@@ -15,6 +15,7 @@ const TOOLS: ToolButtonSpec[] = [
   { tool: 'select-rect', label: 'Rectangle select (M)', icon: Square },
   { tool: 'select-ellipse', label: 'Ellipse select', icon: Circle },
   { tool: 'select-lasso', label: 'Lasso select', icon: Lasso },
+  { tool: 'pen', label: 'Pen', icon: PenToolIcon },
 ];
 
 /**

@@ -9,9 +9,12 @@ import { create } from 'zustand';
  * `select-rect` / `select-ellipse` / `select-lasso` exist in the type and
  * the toolbar now so the marquee story (marquees.md) has buttons to wire
  * up; marquee drawing itself is out of scope here.
+ *
+ * `pen` (Epic 06, pen-tool.md) draws a `VectorNode` — its in-progress path
+ * lives in `canvas/vector/penState.ts`, not here (same separation as
+ * marquees: this store only ever answers "what does my pointer do").
  */
-export type Tool = 'pan' | 'move' | 'select-rect' | 'select-ellipse' | 'select-lasso';
-// future: 'pen' (Epic 06 vector authoring)
+export type Tool = 'pan' | 'move' | 'select-rect' | 'select-ellipse' | 'select-lasso' | 'pen';
 
 interface ToolStateStore {
   tool: Tool;
