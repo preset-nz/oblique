@@ -77,8 +77,9 @@ export function opParamsToSchema(descriptor: OpDescriptor): PropertySchema {
     version: 1,
     groups: [
       {
+        // No title: the StackRow header already shows the op label right
+        // above this panel.
         id: descriptor.name,
-        title: descriptor.name,
         rows: descriptor.params.map(paramToField),
       },
     ],
