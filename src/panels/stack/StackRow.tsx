@@ -49,7 +49,11 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const setModifierMask = useSceneStore((s) => s.setModifierMask);
   const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
-  const vectorNodes = useSceneStore((s) => s.scene.nodes.filter(isVectorNode));
+  // Select the stable nodes array and filter during render — a selector
+  // returning a fresh array per call trips React 19's getSnapshot-must-be-
+  // cached invariant and loops forever.
+  const sceneNodes = useSceneStore((s) => s.scene.nodes);
+  const vectorNodes = sceneNodes.filter(isVectorNode);
   // Which kind of mask (if any) this modifier's maskId resolves to
   // (vector-modifier-masks.md's resolution rule: masks table first, then
   // maskRefs) — drives the Blend indicator's tooltip wording.
