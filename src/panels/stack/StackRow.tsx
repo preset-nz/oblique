@@ -47,10 +47,14 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const setModifierMask = useSceneStore((s) => s.setModifierMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
   const marquee = useMarqueeStateStore((s) => s.marquee);
-  const expanded = useRowCollapseStore((s) => s.isExpanded(modifier.id));
+  const rowExpanded = useRowCollapseStore((s) => s.isExpanded(modifier.id));
   const toggleExpanded = useRowCollapseStore((s) => s.toggle);
 
   const descriptor = ops.find((o) => o.name === modifier.type);
+  // Param-less ops (e.g. invert) have nothing to expand. An UNKNOWN op stays
+  // expandable so the PropertyPanel empty state can explain itself.
+  const expandable = !descriptor || descriptor.params.length > 0;
+  const expanded = expandable && rowExpanded;
   const up = nudgeModelIndex(displayIndex, 'up', length);
   const down = nudgeModelIndex(displayIndex, 'down', length);
 
@@ -138,10 +142,19 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
         <button
           type="button"
           className="flex flex-1 items-center gap-1 truncate text-left text-xs"
-          onClick={() => toggleExpanded(modifier.id)}
-          aria-expanded={expanded}
+          onClick={() => expandable && toggleExpanded(modifier.id)}
+          aria-expanded={expandable ? expanded : undefined}
         >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {expandable ? (
+            expanded ? (
+              <ChevronDown size={14} />
+            ) : (
+              <ChevronRight size={14} />
+            )
+          ) : (
+            // Spacer keeps param-less rows' labels aligned with expandable ones.
+            <span className="w-3.5 shrink-0" />
+          )}
           <span className="truncate">{descriptor ? opLabel(descriptor) : modifier.type}</span>
           {modifier.maskId && (
             <Tooltip>
