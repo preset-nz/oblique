@@ -198,6 +198,11 @@ export function Viewport() {
     let rectDrawAnchor: Point | null = null;
     let lassoDrawing = false;
     let lassoStart: Point = { x: 0, y: 0 };
+    // Return-to-start may only close the lasso once the pointer has LEFT
+    // the start's snap radius: the first few pointermoves of any drag are
+    // still inside it, so without this guard the path self-closed as an
+    // invisible 3-point speck a couple of pixels in.
+    let lassoLeftStart = false;
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
@@ -229,6 +234,7 @@ export function Viewport() {
         const docPt = toDoc(e.clientX, e.clientY);
         lassoDrawing = true;
         lassoStart = docPt;
+        lassoLeftStart = false;
         setMarquee({ kind: 'lasso', points: [docPt], closed: false });
         return;
       }
@@ -283,7 +289,9 @@ export function Viewport() {
         const points = current?.kind === 'lasso' ? current.points : [lassoStart];
         const viewScale = useViewTransformStore.getState().view.scale;
         const closeThresholdDoc = LASSO_CLOSE_SCREEN_PX / Math.max(viewScale, 0.0001);
-        if (isDrawnLasso(points) && isNearStart(docPt, lassoStart, closeThresholdDoc)) {
+        const nearStart = isNearStart(docPt, lassoStart, closeThresholdDoc);
+        if (!nearStart) lassoLeftStart = true;
+        if (lassoLeftStart && nearStart && isDrawnLasso(points)) {
           lassoDrawing = false;
           setMarquee({ kind: 'lasso', points, closed: true });
           return;

@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { DASH_SCREEN_PX } from './MarqueeBox';
 import { type Point, translatePoints } from './marqueeGeometry';
 import { useMarqueeStateStore } from './marqueeState';
 
@@ -66,6 +67,7 @@ export function LassoMarquee({ points, closed, viewScale, toDoc }: LassoMarqueeP
       fill="transparent"
       stroke="#38bdf8"
       strokeWidth={strokeWidth}
+      strokeDasharray={`${DASH_SCREEN_PX * strokeWidth} ${DASH_SCREEN_PX * strokeWidth}`}
       style={{ pointerEvents: closed ? 'auto' : 'none', cursor: closed ? 'move' : 'default' }}
       onPointerDown={startMove}
     />

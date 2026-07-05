@@ -25,6 +25,9 @@ import { useMarqueeStateStore } from './marqueeState';
 
 const HANDLE_SCREEN_RADIUS = 5;
 
+/** Screen-space dash length for marquee outlines — shared with `LassoMarquee.tsx`. */
+export const DASH_SCREEN_PX = 4;
+
 type DragState =
   | { kind: 'move'; start: Rect; startPointerDoc: Point }
   | { kind: 'resize'; start: Rect; handle: HandleId };
@@ -43,6 +46,9 @@ export function MarqueeBox({ kind, rect, viewScale, toDoc }: MarqueeBoxProps) {
   const invScale = 1 / Math.max(viewScale, 0.0001);
   const radius = HANDLE_SCREEN_RADIUS * invScale;
   const strokeWidth = invScale;
+  // Dashed outline distinguishes a selection marquee from TransformBox's
+  // solid node bounds; dash length is screen-constant like the stroke width.
+  const dash = `${DASH_SCREEN_PX * invScale} ${DASH_SCREEN_PX * invScale}`;
 
   function startDrag(e: React.PointerEvent, drag: DragState) {
     e.stopPropagation();
@@ -86,6 +92,7 @@ export function MarqueeBox({ kind, rect, viewScale, toDoc }: MarqueeBoxProps) {
           fill="transparent"
           stroke="#38bdf8"
           strokeWidth={strokeWidth}
+          strokeDasharray={dash}
           style={{ pointerEvents: 'auto', cursor: 'move' }}
           onPointerDown={startMove}
         />
@@ -98,6 +105,7 @@ export function MarqueeBox({ kind, rect, viewScale, toDoc }: MarqueeBoxProps) {
           fill="transparent"
           stroke="#38bdf8"
           strokeWidth={strokeWidth}
+          strokeDasharray={dash}
           style={{ pointerEvents: 'auto', cursor: 'move' }}
           onPointerDown={startMove}
         />

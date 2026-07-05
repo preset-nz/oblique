@@ -78,8 +78,12 @@ export function MarqueeToolbar() {
         onChange={(v) => setParams({ expand: v })}
       />
       <label htmlFor="marquee-invert" className="flex items-center gap-2 text-xs">
+        {/* border-neutral-500 override: the theme's dark `--input` border is
+            15%-alpha white — invisible against this dark toolbar. Call-site
+            fix only; the shared Checkbox wrapper waits for the colour pass. */}
         <Checkbox
           id="marquee-invert"
+          className="border-neutral-500"
           checked={params.invert}
           onCheckedChange={(checked) => setParams({ invert: checked === true })}
         />
