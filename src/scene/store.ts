@@ -309,10 +309,17 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   setNodeTransform: (id, transform2d) => {
     // Compositing-only mutation — no dirty flag per dirty rule 4 (see
-    // Transform2D's doc comment in scene/types.ts).
-    set((s) => ({
-      scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, transform2d })) },
-    }));
+    // Transform2D's doc comment in scene/types.ts) — EXCEPT when the node
+    // carries a vector-masked modifier: vector masks are document-pinned
+    // (VectorMaskRef's doc comment), so the mask must re-rasterise in the
+    // node's new frame. The narrow, deliberate exception to rule 4.
+    set((s) => {
+      const nodes = updateNode(s.scene.nodes, id, (n) => {
+        const hasVectorMask = n.modifiers.some((m) => m.maskId && s.scene.maskRefs?.[m.maskId]);
+        return hasVectorMask ? { ...n, transform2d, dirty: dirtyBoth() } : { ...n, transform2d };
+      });
+      return { scene: { ...s.scene, nodes } };
+    });
   },
 
   setDocumentSize: (size) => {

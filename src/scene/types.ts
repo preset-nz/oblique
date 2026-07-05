@@ -67,22 +67,22 @@ export interface MaskDef {
  * which stays 1:1 with its modifier (a baked shape has nowhere else to
  * live).
  *
- * `appliedTransform2d` is a snapshot of the CONSUMING node's (the modifier's
- * own node, not the referenced VectorNode's) transform2d at reference-apply
- * time — same role as `MaskDef.appliedTransform2d`, same reason: a node's
- * own cook buffer is always produced untransformed at its own origin
- * (node-transform-2d.md — transform2d is compositing-only), but a vector
- * node's `paths` are authored in document/composited space. Without
- * undoing the consumer's placement, the mask would only land correctly on
- * a document-aligned consumer (identity transform2d, sourceSize ==
- * documentSize) — true by coincidence for a fresh single-image document,
- * false in general. Snapshotting (not tracking live) keeps this consistent
- * with the "transform2d never recooks" rule, exactly like `MaskDef`.
+ * Vector masks are DOCUMENT-PINNED (Georg's call, 2026-07-06 dogfood): the
+ * mask reads where the shape sits in the document, always — unlike
+ * `MaskDef.appliedTransform2d`'s apply-time snapshot, which glues a baked
+ * mask to the consumer's pixels. The rasteriser maps document space into
+ * the consumer's local buffer through the consumer's CURRENT transform2d
+ * at cook time (cook.ts passes it), so moving the consumer re-rasterises
+ * the mask in its new frame — a deliberate, narrow exception to the
+ * "transform2d never recooks" rule (dirty rule 4), scoped to nodes whose
+ * modifiers carry a vector mask (`store.ts`'s `setNodeTransform`). If
+ * attach-time transforms on the reference itself are ever wanted
+ * (node-graph territory), that's a new field and a new story — not
+ * snapshot semantics by the back door.
  */
 export interface VectorMaskRef {
   id: string;
   nodeId: string; // a VectorNode's id
-  appliedTransform2d: Transform2D;
   featherPx: number;
   expand: number;
   invert: boolean;

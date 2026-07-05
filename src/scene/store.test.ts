@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from './store';
 import type { Modifier, PixelNode, Scene, VectorNode, VectorPath } from './types';
-import { IDENTITY_TRANSFORM_2D } from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -452,7 +451,7 @@ describe('setModifierMask / removeModifierMask', () => {
 });
 
 describe('setModifierVectorMask', () => {
-  const ref = { appliedTransform2d: IDENTITY_TRANSFORM_2D, featherPx: 4, expand: 0, invert: false };
+  const ref = { featherPx: 4, expand: 0, invert: false };
 
   function nodesWithVectorAndTwoConsumers() {
     useSceneStore.setState((s) => ({
@@ -536,6 +535,23 @@ describe('setModifierVectorMask', () => {
     expect(scene.maskRefs).toEqual({});
   });
 
+  it('setNodeTransform dirties a vector-masked consumer (document-pinned) but leaves plain nodes clean', () => {
+    nodesWithVectorAndTwoConsumers();
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+    for (const id of ['v1', 'a', 'b']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+
+    const move = { x: 25, y: -10, scaleX: 1, scaleY: 1, rotation: 0 };
+    useSceneStore.getState().setNodeTransform('a', move); // vector-masked → recook in the new frame
+    useSceneStore.getState().setNodeTransform('b', move); // unmasked → dirty rule 4 holds
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.nodes.find((n) => n.id === 'a')?.dirty).toEqual({ draft: true, working: true });
+    expect(scene.nodes.find((n) => n.id === 'b')?.dirty).toEqual({ draft: false, working: false });
+  });
+
   it('deleting the referenced vector node prunes the ref AND clears the dependent maskId', () => {
     nodesWithVectorAndTwoConsumers();
     const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
@@ -563,13 +579,11 @@ describe('setVectorPaths — cross-node dirty (vector-modifier-masks.md)', () =>
       },
     }));
     useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', {
-      appliedTransform2d: IDENTITY_TRANSFORM_2D,
       featherPx: 0,
       expand: 0,
       invert: false,
     });
     useSceneStore.getState().setModifierVectorMask('b', 'm2', 'v1', {
-      appliedTransform2d: IDENTITY_TRANSFORM_2D,
       featherPx: 10,
       expand: 0,
       invert: true,

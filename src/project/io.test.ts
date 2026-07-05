@@ -177,7 +177,6 @@ describe('serialise/parse round trip', () => {
       'ref-1': {
         id: 'ref-1',
         nodeId: 'v1',
-        appliedTransform2d: { x: 12, y: -4, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 6 },
         featherPx: 6,
         expand: 1,
         invert: true,

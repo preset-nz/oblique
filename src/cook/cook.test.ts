@@ -85,8 +85,16 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
       (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
     ),
     rasterizeVectorMask: vi.fn(
-      (_paths, _fillRule, _ref, _consumerSourceSize, w: number, h: number, _factor: number) =>
-        new Uint8Array(w * h),
+      (
+        _paths,
+        _fillRule,
+        _ref,
+        _consumerTransform,
+        _consumerSourceSize,
+        w: number,
+        h: number,
+        _factor: number,
+      ) => new Uint8Array(w * h),
     ),
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
     rasterizeVector: vi.fn(
@@ -255,14 +263,15 @@ describe('cookNode — masks', () => {
     const ref = {
       id: 'ref-1',
       nodeId: 'v1',
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
       featherPx: 4,
       expand: 0,
       invert: false,
     };
+    const consumerTransform = { x: 30, y: -12, scaleX: 2, scaleY: 1, rotation: 0.3 };
     const nodeRef = {
       current: makeNode({
         sourceSize: [800, 400],
+        transform2d: consumerTransform,
         modifiers: [
           {
             id: 'm1',
@@ -291,6 +300,7 @@ describe('cookNode — masks', () => {
       vectorNode.paths,
       vectorNode.fillRule,
       ref,
+      consumerTransform, // the consumer's CURRENT transform2d — document-pinned, never a snapshot
       [800, 400], // the CONSUMING node's own sourceSize, not the vector node's
       100,
       50,
@@ -321,7 +331,6 @@ describe('cookNode — masks', () => {
       getVectorMaskRef: vi.fn(() => ({
         id: 'shared-1',
         nodeId: 'v1',
-        appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
         featherPx: 0,
         expand: 0,
         invert: false,
@@ -338,7 +347,6 @@ describe('cookNode — masks', () => {
     const ref = {
       id: 'ref-1',
       nodeId: 'gone',
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
       featherPx: 0,
       expand: 0,
       invert: false,
@@ -579,8 +587,16 @@ describe('cookNodeFullRes', () => {
         (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
       ),
       rasterizeVectorMask: vi.fn(
-        (_paths, _fillRule, _ref, _consumerSourceSize, w: number, h: number, _factor: number) =>
-          new Uint8Array(w * h),
+        (
+          _paths,
+          _fillRule,
+          _ref,
+          _consumerTransform,
+          _consumerSourceSize,
+          w: number,
+          h: number,
+          _factor: number,
+        ) => new Uint8Array(w * h),
       ),
       downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
       runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),

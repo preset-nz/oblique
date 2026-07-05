@@ -299,7 +299,6 @@ describe('dirty-diff correctness on restore', () => {
     sources.set('p', fakeBitmap());
     sources.set('v', fakeBitmap());
     useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', {
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
       featherPx: 0,
       expand: 0,
       invert: false,
@@ -327,6 +326,35 @@ describe('dirty-diff correctness on restore', () => {
     // The consumer's own modifiers/maskId are identical on both sides of the
     // undo — only the referenced geometry changed — so this is exactly the
     // resolution-through-maskRefs case cookAffectingChanged must catch.
+    expect(restored?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('marks a vector-masked node dirty when undo changes only its transform2d (document-pinned)', async () => {
+    const consumer = pixelNode('p', {
+      modifiers: [{ id: 'mod-1', type: 'blur', enabled: true, params: {} }],
+    });
+    useSceneStore.setState({ scene: emptyScene([consumer, vectorNode('v')]) });
+    sources.set('p', fakeBitmap());
+    sources.set('v', fakeBitmap());
+    useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    history.clear();
+
+    useSceneStore
+      .getState()
+      .setNodeTransform('p', { x: 40, y: -5, scaleX: 1, scaleY: 1, rotation: 0 });
+    useSceneStore.getState().clearDirty('p', 'draft');
+    useSceneStore.getState().clearDirty('p', 'working');
+
+    await history.undo(fakeDeps());
+
+    // For an unmasked node a transform-only undo stays clean (rule 4); for a
+    // vector-masked one the transform is a cook input, so undo must recook.
+    const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
+    expect(restored?.transform2d).toBeUndefined();
     expect(restored?.dirty).toEqual({ draft: true, working: true });
   });
 

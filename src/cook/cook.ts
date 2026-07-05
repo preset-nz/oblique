@@ -4,11 +4,13 @@ import { rasterizeMask, rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
+  IDENTITY_TRANSFORM_2D,
   isVectorNode,
   type MaskDef,
   type Modifier,
   type PixelNode,
   type SceneNode,
+  type Transform2D,
   type VectorMaskRef,
   type VectorNode,
 } from '@/scene/types';
@@ -179,7 +181,8 @@ export interface CookDeps {
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
-    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    consumerTransform2d: Transform2D,
     consumerSourceSize: [number, number],
     width: number,
     height: number,
@@ -279,6 +282,7 @@ function makeRasterizeFor(
     'getNode' | 'getMask' | 'getVectorMaskRef' | 'rasterizeMask' | 'rasterizeVectorMask'
   >,
   nodeExtent: [number, number],
+  consumerTransform2d: Transform2D,
   width: number,
   height: number,
   factor: number,
@@ -295,6 +299,7 @@ function makeRasterizeFor(
       vectorNode.paths,
       vectorNode.fillRule,
       ref,
+      consumerTransform2d,
       nodeExtent,
       width,
       height,
@@ -341,7 +346,8 @@ export interface FullResCookDeps {
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
-    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    consumerTransform2d: Transform2D,
     consumerSourceSize: [number, number],
     width: number,
     height: number,
@@ -400,7 +406,14 @@ export async function cookNodeFullRes(
   const [width, height] = computeTargetSize(node.sourceSize, factor);
 
   let resultBytes = deps.downscale(source, width, height);
-  const rasterizeFor = makeRasterizeFor(deps, node.sourceSize, width, height, factor);
+  const rasterizeFor = makeRasterizeFor(
+    deps,
+    node.sourceSize,
+    node.transform2d ?? IDENTITY_TRANSFORM_2D,
+    width,
+    height,
+    factor,
+  );
   const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
 
   if (cookModifiers.length > 0) {
@@ -474,7 +487,14 @@ export async function cookNode(
         ? deps.downscale(source as ImageBitmap, width, height)
         : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
     const tDownscale = performance.now();
-    const rasterizeFor = makeRasterizeFor(deps, nodeExtent, width, height, factor);
+    const rasterizeFor = makeRasterizeFor(
+      deps,
+      nodeExtent,
+      node.transform2d ?? IDENTITY_TRANSFORM_2D,
+      width,
+      height,
+      factor,
+    );
     const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps(), rasterizeFor);
 
     if (cookModifiers.length > 0) {

@@ -163,11 +163,25 @@ function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
   return { ref, geometry };
 }
 
+function hasVectorMask(node: SceneNode, scene: Scene): boolean {
+  return node.modifiers.some((m) => m.maskId && scene.maskRefs?.[m.maskId]);
+}
+
 function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB: Scene): boolean {
   if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
   const refA = a.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneA));
   const refB = b.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneB));
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
+  // Document-pinned vector masks rasterise through the consumer's CURRENT
+  // transform2d (store.ts setNodeTransform's rule-4 exception), so for a
+  // vector-masked node the transform IS a cook input — an undo that only
+  // moves such a node must recook it or the mask paints in the old frame.
+  if (
+    (hasVectorMask(a, sceneA) || hasVectorMask(b, sceneB)) &&
+    JSON.stringify(a.transform2d) !== JSON.stringify(b.transform2d)
+  ) {
+    return true;
+  }
   const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
   const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
   if (JSON.stringify(pa) !== JSON.stringify(pb)) return true;

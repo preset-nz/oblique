@@ -12,6 +12,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { InputNumber } from '@/components/InputNumber';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isMaskableMarquee, marqueeToMaskShape, useMarqueeStateStore } from '@/scene/marquee';
@@ -64,6 +66,8 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
     return undefined;
   });
   const marquee = useMarqueeStateStore((s) => s.marquee);
+  const maskParams = useMarqueeStateStore((s) => s.params);
+  const setMaskParams = useMarqueeStateStore((s) => s.setParams);
   const rowExpanded = useRowCollapseStore((s) => s.isExpanded(modifier.id));
   const toggleExpanded = useRowCollapseStore((s) => s.toggle);
   const [vectorPickerOpen, setVectorPickerOpen] = useState(false);
@@ -110,20 +114,16 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
 
   /**
    * Attach a *live* vector reference (vector-modifier-masks.md): the
-   * feather/expand/invert come from the SAME marquee-params store the
-   * "mask from selection" flow reads — reusing its existing tuning UI
-   * rather than building a second one, since the story's v1 scope has no
-   * post-apply mask editor for either kind (deferred: a Vectors-tab-era
-   * pass, per the epic's build order).
+   * feather/expand/invert come from the marquee-params store, which the
+   * picker popover now exposes directly (dogfood 2026-07-06 — the
+   * MarqueeToolbar only shows with an active marquee, so the vector flow
+   * had no way to reach these). No transform snapshot: vector masks are
+   * document-pinned (VectorMaskRef's doc comment) — the cook path reads
+   * the consumer's current transform2d fresh every cook.
    */
   function maskFromVectorNode(vectorNodeId: string) {
     const params = useMarqueeStateStore.getState().params;
-    // Snapshot THIS node's (the consumer's) current transform — same
-    // reason as maskFromSelection's appliedTransform2d: the vector path is
-    // document-space, but this node's own cook buffer is node-local, and
-    // moving the consumer later must not re-rasterise or recook.
     setModifierVectorMask(node.id, modifier.id, vectorNodeId, {
-      appliedTransform2d: node.transform2d ?? IDENTITY_TRANSFORM_2D,
       featherPx: params.featherPx,
       expand: params.expand,
       invert: params.invert,
@@ -256,7 +256,40 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
               {modifier.maskId ? 'Replace mask from vector node' : 'Mask from vector node'}
             </button>
             {vectorPickerOpen && (
-              <div className="ml-4 flex flex-col border-l border-neutral-800 pl-2">
+              <div className="ml-4 flex flex-col gap-1 border-l border-neutral-800 pl-2">
+                {/* Same tuning params the marquee flow uses (shared store),
+                    surfaced here because MarqueeToolbar only renders with an
+                    active marquee — the vector flow otherwise had no way to
+                    set feather/expand/invert (dogfood 2026-07-06). Applied
+                    per-reference at pick time. */}
+                <InputNumber
+                  label="Feather"
+                  value={maskParams.featherPx}
+                  min={0}
+                  max={500}
+                  step={1}
+                  onChange={(v) => setMaskParams({ featherPx: v })}
+                />
+                <InputNumber
+                  label="Expand"
+                  value={maskParams.expand}
+                  min={-500}
+                  max={500}
+                  step={1}
+                  onChange={(v) => setMaskParams({ expand: v })}
+                />
+                <label
+                  htmlFor={`vector-mask-invert-${modifier.id}`}
+                  className="flex items-center gap-2 text-xs"
+                >
+                  <Checkbox
+                    id={`vector-mask-invert-${modifier.id}`}
+                    className="border-neutral-500"
+                    checked={maskParams.invert}
+                    onCheckedChange={(checked) => setMaskParams({ invert: checked === true })}
+                  />
+                  Invert
+                </label>
                 {vectorNodes.map((v) => (
                   <button
                     key={v.id}
@@ -264,6 +297,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
                     className="truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
                     onClick={() => maskFromVectorNode(v.id)}
                   >
+                    <Spline size={12} className="mr-1 inline" />
                     {v.label}
                   </button>
                 ))}

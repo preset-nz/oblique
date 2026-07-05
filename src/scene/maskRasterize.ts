@@ -246,15 +246,17 @@ export function rasterizeMask(
  * per-modifier reference, not the node — the story's explicit split, so the
  * same node can be soft on one modifier and hard-inverted on another).
  *
- * `consumerSourceSize`/`ref.appliedTransform2d` map document space into the
- * CONSUMING node's own local buffer, exactly like `rasterizeMask`'s
- * `sourceSize`/`mask.appliedTransform2d` — a vector node's paths are
+ * `consumerSourceSize`/`consumerTransform2d` map document space into the
+ * CONSUMING node's own local buffer — like `rasterizeMask`'s
+ * `sourceSize`/`mask.appliedTransform2d`, except the transform is the
+ * consumer's CURRENT one, passed fresh each cook, never a snapshot: vector
+ * masks are document-pinned (VectorMaskRef's doc comment; Georg 2026-07-06)
+ * — the mask reads where the shape sits in the document, and moving the
+ * consumer recooks it in its new frame. A vector node's paths are
  * document-space, but the modifier being masked cooks into its own node-
  * local buffer (node-transform-2d.md: a node's raster is always produced
- * untransformed at its own origin), so skipping this step would only be
- * correct by coincidence (consumer's transform2d identity, sourceSize ==
- * documentSize). Production-only, same shape as `rasterizeMask` — injected
- * via `CookDeps.rasterizeVectorMask`.
+ * untransformed at its own origin). Production-only, same shape as
+ * `rasterizeMask` — injected via `CookDeps.rasterizeVectorMask`.
  *
  * The referenced VectorNode's OWN `transform2d` is deliberately NOT applied
  * here (only the consumer's is) — vector nodes have no transform UI yet
@@ -266,7 +268,8 @@ export function rasterizeMask(
 export function rasterizeVectorMask(
   paths: VectorPath[],
   fillRule: 'nonzero' | 'evenodd',
-  ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+  ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+  consumerTransform2d: Transform2D,
   consumerSourceSize: [number, number],
   width: number,
   height: number,
@@ -276,10 +279,10 @@ export function rasterizeVectorMask(
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
 
-  // Document space -> consuming-node-local (via the apply-time transform
-  // snapshot), then node-local -> target px (cook factor) — same mapping
-  // `rasterizeMask` does for a baked shape.
-  const m = docToLocalMatrix(ref.appliedTransform2d, consumerSourceSize[0], consumerSourceSize[1]);
+  // Document space -> consuming-node-local (via the consumer's CURRENT
+  // transform — document-pinned), then node-local -> target px (cook
+  // factor) — same mapping `rasterizeMask` does for a baked shape.
+  const m = docToLocalMatrix(consumerTransform2d, consumerSourceSize[0], consumerSourceSize[1]);
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
 
