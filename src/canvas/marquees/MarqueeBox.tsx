@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { useMarqueeStateStore } from '@/scene/marquee';
 import { CURSOR_FOR_HANDLE, type HandleId, SCALE_HANDLES } from '../boxHandles';
 import {
   moveRect,
@@ -8,7 +9,6 @@ import {
   rectHandlePositions,
   resizeRect,
 } from './marqueeGeometry';
-import { useMarqueeStateStore } from './marqueeState';
 
 /**
  * Shared body for `RectMarquee.tsx` and `EllipseMarquee.tsx` — both are the

@@ -1,11 +1,10 @@
 import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import type { MarqueeShape } from '@/scene/marquee';
+import { useMarqueeStateStore } from '@/scene/marquee';
 import { docToScreen, useViewTransformStore } from '../viewTransform';
 import { lassoBounds, type Rect } from './marqueeGeometry';
-import type { MarqueeShape } from './marqueeState';
-import { useMarqueeStateStore } from './marqueeState';
 
 const TOOLBAR_OFFSET_PX = 8;
 
@@ -16,11 +15,11 @@ function boundsFor(marquee: MarqueeShape): Rect {
 /**
  * Floating panel near the active marquee (features/05-selection/
  * marquees.md): feather (px, document-space — scales with cook resolution
- * like any other spatial param, starter-ops.md), expand/contract, invert,
- * and a "mask from selection" action. The mask action's consumer
- * (`selection-to-mask.md`) isn't built yet, so the button stays disabled
- * with a tooltip — feather/expand/invert are stored here now so that story
- * has something to read once it lands.
+ * like any other spatial param, starter-ops.md), expand/contract and
+ * invert. The values live in the marquee store; StackRow's "Mask from
+ * selection" action (selection-to-mask.md) consumes them at apply time —
+ * the apply itself is per-modifier, so it lives on the modifier row, not
+ * on this target-less floating panel.
  *
  * Positioned in screen space (`docToScreen`) near the marquee's document-
  * space bounds — this is DOM chrome, not marquee geometry, so it's the one
@@ -89,18 +88,12 @@ export function MarqueeToolbar() {
         />
         Invert
       </label>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            disabled
-            className="w-full rounded border border-dashed border-neutral-700 py-1 text-xs text-neutral-500 disabled:opacity-50"
-          >
-            Mask from selection
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Coming soon — lands with selection-to-mask.md</TooltipContent>
-      </Tooltip>
+      {/* The apply action lives on the modifier row (StackRow's ⋮ menu),
+          not here — a mask needs an explicit target modifier, which this
+          floating toolbar can't know (selection-to-mask.md's journey). */}
+      <div className="text-[10px] leading-snug text-neutral-500">
+        Apply via a modifier's ⋮ menu → Mask from selection
+      </div>
     </div>
   );
 }

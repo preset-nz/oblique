@@ -16,7 +16,39 @@ export interface Modifier {
   type: string; // op name from sidecar list_ops
   enabled: boolean;
   params: Record<string, number | string | boolean>;
-  maskId?: string; // Epic 05+; present in the type now
+  maskId?: string; // references Scene.masks (selection-to-mask.md); per-MODIFIER scope, deliberately not per-node
+}
+
+/**
+ * The geometry a mask rasterises from (selection-to-mask.md) — the marquee's
+ * shape as drawn, document-space coordinates. Stored as a path, never a
+ * baked bitmap: the bitmap is derived at cook time (maskRasterize.ts) and
+ * rebuilt like any cache. A lasso is always closed here (an open lasso
+ * can't become a mask).
+ */
+export type MaskShape =
+  | { kind: 'rect'; rect: { x: number; y: number; w: number; h: number } }
+  | { kind: 'ellipse'; rect: { x: number; y: number; w: number; h: number } }
+  | { kind: 'lasso'; points: { x: number; y: number }[] };
+
+/**
+ * One modifier mask (selection-to-mask.md). `shape` stays in document space
+ * exactly as the marquee was drawn; `appliedTransform2d` snapshots the
+ * node's transform at apply time so rasterisation can map document → node-
+ * local pixels once, forever. The snapshot — not the live transform — is
+ * what keeps the epic acceptance true: moving a masked node later never
+ * re-rasterises or recooks (the mask rides along, glued to the node pixels
+ * it was applied to). `featherPx`/`expand` are document-space px (spatial
+ * params — the rasteriser scales them by the cook resolution factor, same
+ * convention as gaussian_blur.radius).
+ */
+export interface MaskDef {
+  id: string;
+  shape: MaskShape;
+  appliedTransform2d: Transform2D;
+  featherPx: number;
+  expand: number;
+  invert: boolean;
 }
 
 /**
@@ -84,4 +116,11 @@ export interface Scene {
   defaultCameraId: string | null;
   resolution: Resolution; // current global cook target ('working' default)
   documentSize: [number, number];
+  /**
+   * Modifier masks by id (selection-to-mask.md), referenced from
+   * `Modifier.maskId`. Optional so pre-mask `.oblique` files load verbatim —
+   * treat absence as empty. 1:1 with modifiers today (see the story's open
+   * question); entries are pruned when their modifier/node goes.
+   */
+  masks?: Record<string, MaskDef>;
 }

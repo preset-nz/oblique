@@ -127,9 +127,23 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
   decode: realDecode,
 };
 
-/** Cook-affecting fields only (dirty rule 4): modifiers, and (pixel nodes) sourcePath/sourceSize. */
-function cookAffectingChanged(a: SceneNode, b: SceneNode): boolean {
+/**
+ * Cook-affecting fields only (dirty rule 4): modifiers (maskId changes ride
+ * along via the modifiers JSON), the mask DEFINITIONS those modifiers
+ * reference (same maskId, edited geometry/feather — invisible to the
+ * modifiers array, so compared explicitly), and (pixel nodes)
+ * sourcePath/sourceSize.
+ */
+function cookAffectingChanged(
+  a: SceneNode,
+  b: SceneNode,
+  masksA: Scene['masks'],
+  masksB: Scene['masks'],
+): boolean {
   if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
+  const refA = a.modifiers.map((m) => (m.maskId ? (masksA?.[m.maskId] ?? null) : null));
+  const refB = b.modifiers.map((m) => (m.maskId ? (masksB?.[m.maskId] ?? null) : null));
+  if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
   const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
   const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
   return JSON.stringify(pa) !== JSON.stringify(pb);
@@ -189,7 +203,7 @@ async function restoreScene(
   const nodes = target.nodes.map((node) => {
     const previous = currentById.get(node.id);
     const dirty =
-      !previous || cookAffectingChanged(previous, node)
+      !previous || cookAffectingChanged(previous, node, current.masks, target.masks)
         ? { draft: true, working: true }
         : { draft: false, working: false };
     return { ...node, dirty };

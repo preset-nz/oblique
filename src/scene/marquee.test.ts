@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
-import { DEFAULT_MARQUEE_PARAMS, useMarqueeStateStore } from './marqueeState';
+import {
+  DEFAULT_MARQUEE_PARAMS,
+  isMaskableMarquee,
+  marqueeToMaskShape,
+  useMarqueeStateStore,
+} from './marquee';
 
 function emptyScene(): Scene {
   return {
@@ -51,6 +56,41 @@ describe('marquee state store', () => {
     useMarqueeStateStore.getState().clear();
     expect(useMarqueeStateStore.getState().marquee).toBeNull();
     expect(useMarqueeStateStore.getState().params).toEqual(DEFAULT_MARQUEE_PARAMS);
+  });
+});
+
+describe('isMaskableMarquee', () => {
+  it('accepts a drawn rect/ellipse, rejects a degenerate one', () => {
+    expect(isMaskableMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } })).toBe(true);
+    expect(isMaskableMarquee({ kind: 'ellipse', rect: { x: 0, y: 0, w: 10, h: 10 } })).toBe(true);
+    expect(isMaskableMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 0.5, h: 10 } })).toBe(false);
+    expect(isMaskableMarquee(null)).toBe(false);
+  });
+
+  it('accepts only a closed lasso with enough points', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 5, y: 10 },
+    ];
+    expect(isMaskableMarquee({ kind: 'lasso', points, closed: true })).toBe(true);
+    expect(isMaskableMarquee({ kind: 'lasso', points, closed: false })).toBe(false);
+    expect(isMaskableMarquee({ kind: 'lasso', points: points.slice(0, 2), closed: true })).toBe(
+      false,
+    );
+  });
+});
+
+describe('marqueeToMaskShape', () => {
+  it('passes rect/ellipse geometry through and drops the lasso closed flag', () => {
+    expect(marqueeToMaskShape({ kind: 'ellipse', rect: { x: 1, y: 2, w: 3, h: 4 } })).toEqual({
+      kind: 'ellipse',
+      rect: { x: 1, y: 2, w: 3, h: 4 },
+    });
+    expect(marqueeToMaskShape({ kind: 'lasso', points: [{ x: 1, y: 1 }], closed: true })).toEqual({
+      kind: 'lasso',
+      points: [{ x: 1, y: 1 }],
+    });
   });
 });
 

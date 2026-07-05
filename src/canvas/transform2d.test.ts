@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
+import { applyMatrix, docToLocalMatrix } from '@/scene/maskRasterize';
+import { IDENTITY_TRANSFORM_2D, type Transform2D } from '@/scene/types';
 import {
   applyMove,
   applyRotate,
@@ -169,5 +170,28 @@ describe('handlePositions / boundsCorners — identity transform matches the un-
   it('the se handle sits at the bottom-right corner', () => {
     const handles = handlePositions(IDENTITY_TRANSFORM_2D, EXTENT);
     expect(handles.se).toEqual({ x: 200, y: 100 });
+  });
+});
+
+describe('scene/maskRasterize.ts docToLocalMatrix inverts localToWorld', () => {
+  // scene/ reimplements the inverse as a flat matrix (it must not import
+  // canvas/); this cross-check is what keeps the two implementations
+  // honest with each other (see maskRasterize.ts's module doc).
+  it('round-trips arbitrary points through localToWorld then the inverse matrix', () => {
+    const t: Transform2D = { x: 37, y: -12, scaleX: 1.7, scaleY: 0.6, rotation: 0.83 };
+    const extent = { w: 320, h: 180 };
+    const m = docToLocalMatrix(t, extent.w, extent.h);
+
+    for (const local of [
+      { x: 0, y: 0 },
+      { x: 320, y: 180 },
+      { x: 160, y: 90 },
+      { x: 12.5, y: 173.2 },
+    ]) {
+      const world = localToWorld(local, t, extent);
+      const back = applyMatrix(m, world.x, world.y);
+      expect(back.x).toBeCloseTo(local.x, 6);
+      expect(back.y).toBeCloseTo(local.y, 6);
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
+import { useMarqueeStateStore } from '@/scene/marquee';
 import { DASH_SCREEN_PX } from './MarqueeBox';
 import { type Point, translatePoints } from './marqueeGeometry';
-import { useMarqueeStateStore } from './marqueeState';
 
 /**
  * Lasso marquee overlay (features/05-selection/marquees.md). Freehand path,

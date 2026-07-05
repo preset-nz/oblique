@@ -276,6 +276,78 @@ describe('setModifierEnabled', () => {
   });
 });
 
+describe('setModifierMask / removeModifierMask', () => {
+  const maskDef = {
+    shape: { kind: 'rect' as const, rect: { x: 10, y: 10, w: 40, h: 20 } },
+    appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+    featherPx: 6,
+    expand: 0,
+    invert: false,
+  };
+
+  function nodeWithModifier() {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          pixelNode('n1', {
+            modifiers: [modifier('m1')],
+            dirty: { draft: false, working: false },
+          }),
+        ],
+      },
+    }));
+  }
+
+  it('stores the mask, points the modifier at it, and dirties both levels', () => {
+    nodeWithModifier();
+    const maskId = useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.masks?.[maskId]).toEqual({ ...maskDef, id: maskId });
+    expect(scene.nodes[0].modifiers[0].maskId).toBe(maskId);
+    expect(scene.nodes[0].dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('replacing a mask reuses the same id (a replace IS an edit)', () => {
+    nodeWithModifier();
+    const first = useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
+    const second = useSceneStore
+      .getState()
+      .setModifierMask('n1', 'm1', { ...maskDef, featherPx: 20 });
+
+    expect(second).toBe(first);
+    const scene = useSceneStore.getState().scene;
+    expect(scene.masks?.[first]?.featherPx).toBe(20);
+    expect(Object.keys(scene.masks ?? {})).toHaveLength(1);
+  });
+
+  it('removeModifierMask drops the maskId and prunes the orphaned entry', () => {
+    nodeWithModifier();
+    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
+    useSceneStore.getState().removeModifierMask('n1', 'm1');
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.nodes[0].modifiers[0].maskId).toBeUndefined();
+    expect(scene.masks).toEqual({});
+    expect(scene.nodes[0].dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('removing a masked modifier prunes its mask entry (1:1)', () => {
+    nodeWithModifier();
+    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
+    useSceneStore.getState().removeModifier('n1', 'm1');
+    expect(useSceneStore.getState().scene.masks).toEqual({});
+  });
+
+  it('removing a node prunes its modifiers’ mask entries', () => {
+    nodeWithModifier();
+    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
+    useSceneStore.getState().removeNode('n1');
+    expect(useSceneStore.getState().scene.masks).toEqual({});
+  });
+});
+
 describe('markDirty', () => {
   it('rule 1: marking draft dirty also dirties working', () => {
     useSceneStore.setState((s) => ({

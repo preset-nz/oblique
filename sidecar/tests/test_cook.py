@@ -118,6 +118,122 @@ def test_cook_rejects_mismatched_payload_size():
     assert response_payload == b""
 
 
+def _masked_header(w: int, h: int, request_id: str = "cook-mask") -> dict:
+    return {
+        "id": request_id,
+        "op": "cook",
+        "width": w,
+        "height": h,
+        "modifiers": [{"type": "invert", "params": {}}],
+        "masks": [{"modifierIndex": 0, "mask_bytes": w * h}],
+    }
+
+
+def test_cook_masked_invert_blends_only_inside_mask():
+    """Half-plane mask on invert: left half inverted, right half untouched."""
+    w, h = 8, 6
+    payload = _rgba_payload(h, w, seed=7)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[:, : w // 2] = 255
+
+    response_header, response_payload = handle_cook(
+        _masked_header(w, h), payload + mask.tobytes()
+    )
+
+    assert response_header["ok"] is True
+    assert len(response_payload) == w * h * 4
+    original = np.frombuffer(payload, dtype=np.uint8).reshape(h, w, 4)
+    result = np.frombuffer(response_payload, dtype=np.uint8).reshape(h, w, 4)
+    left, right = result[:, : w // 2], result[:, w // 2 :]
+    np.testing.assert_array_equal(left[..., :3], 255 - original[:, : w // 2, :3])
+    np.testing.assert_array_equal(left[..., 3], original[:, : w // 2, 3])
+    np.testing.assert_array_equal(right, original[:, w // 2 :])
+
+
+def test_cook_mask_value_128_is_a_feathered_50_50_blend():
+    """A uniform 128 mask blends op output and input at 128/255 weight."""
+    w, h = 4, 4
+    payload = _rgba_payload(h, w, seed=8)
+    mask = np.full((h, w), 128, dtype=np.uint8)
+
+    _response_header, response_payload = handle_cook(
+        _masked_header(w, h), payload + mask.tobytes()
+    )
+
+    original = np.frombuffer(payload, dtype=np.uint8).reshape(h, w, 4)
+    inverted = original.copy()
+    inverted[..., :3] = 255 - inverted[..., :3]
+    weight = 128.0 / 255.0
+    expected = np.clip(
+        np.rint(
+            weight * inverted.astype(np.float32)
+            + (1.0 - weight) * original.astype(np.float32)
+        ),
+        0,
+        255,
+    ).astype(np.uint8)
+    np.testing.assert_array_equal(
+        np.frombuffer(response_payload, dtype=np.uint8).reshape(h, w, 4), expected
+    )
+
+
+def test_cook_empty_masks_array_matches_omitted_masks_byte_for_byte():
+    w, h = 6, 5
+    payload = _rgba_payload(h, w, seed=9)
+    base = {
+        "id": "cook-nomask",
+        "op": "cook",
+        "width": w,
+        "height": h,
+        "modifiers": [{"type": "invert", "params": {}}],
+    }
+
+    _h1, without_key = handle_cook(base, payload)
+    _h2, with_empty = handle_cook({**base, "masks": []}, payload)
+
+    assert without_key == with_empty
+
+
+def test_cook_rejects_mask_modifier_index_out_of_range():
+    w, h = 4, 4
+    payload = _rgba_payload(h, w, seed=10)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    header = _masked_header(w, h)
+    header["masks"] = [{"modifierIndex": 1, "mask_bytes": w * h}]
+
+    response_header, response_payload = handle_cook(header, payload + mask.tobytes())
+
+    assert response_header["ok"] is False
+    assert "modifierIndex" in response_header["error"]
+    assert response_payload == b""
+
+
+def test_cook_rejects_wrong_mask_bytes():
+    w, h = 4, 4
+    payload = _rgba_payload(h, w, seed=11)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    header = _masked_header(w, h)
+    header["masks"][0]["mask_bytes"] = w * h - 1
+
+    response_header, response_payload = handle_cook(header, payload + mask.tobytes())
+
+    assert response_header["ok"] is False
+    assert "must be" in response_header["error"]
+    assert response_payload == b""
+
+
+def test_cook_rejects_payload_missing_declared_mask_plane():
+    w, h = 4, 4
+    payload = _rgba_payload(h, w, seed=12)
+
+    # Header declares one mask, payload carries the image only.
+    response_header, response_payload = handle_cook(_masked_header(w, h), payload)
+
+    assert response_header["ok"] is False
+    assert "payload bytes" in response_header["error"]
+    assert response_payload == b""
+
+
 @pytest.mark.perf
 def test_cook_512x512_five_op_stack_under_50ms():
     """WORKING-scale perf smoke test (story acceptance).

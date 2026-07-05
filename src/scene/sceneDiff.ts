@@ -17,6 +17,12 @@ export function sceneChangedIgnoringDirty(a: Scene, b: Scene): boolean {
   }
   if (a.resolution !== b.resolution) return true;
   if (a.defaultCameraId !== b.defaultCameraId) return true;
+  // Mask edits are real edits (selection-to-mask.md): same-id mask entries
+  // with different geometry/feather must register here or history/scheduler
+  // treat them as cook churn.
+  if (a.masks !== b.masks && JSON.stringify(a.masks ?? {}) !== JSON.stringify(b.masks ?? {})) {
+    return true;
+  }
 
   for (let i = 0; i < a.nodes.length; i++) {
     const na = a.nodes[i];

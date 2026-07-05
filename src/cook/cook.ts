@@ -1,8 +1,9 @@
 import { toast } from 'sonner';
 import * as cache from '@/scene/cache';
+import { rasterizeMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
-import type { Modifier, PixelNode, SceneNode } from '@/scene/types';
+import type { MaskDef, Modifier, PixelNode, SceneNode } from '@/scene/types';
 import { type OpDescriptor, useOpsCacheStore } from '@/sidecar/opsCache';
 
 /** Cook targets DRAFT (1/8) and WORKING (1/2); BAKED is Epic 07's job. */
@@ -29,6 +30,8 @@ export interface CookModifier {
   type: string;
   backend: 'python' | 'rust';
   params: Modifier['params'];
+  /** Rasterised mask plane (1 byte/px, cook target size) when the modifier carries a maskId — attached by `cookNode`, consumed by the frame packing (selection-to-mask.md). */
+  mask?: Uint8Array;
 }
 
 /**
@@ -43,14 +46,17 @@ export function buildCookModifiers(
   modifiers: Modifier[],
   factor: number,
   ops: OpDescriptor[],
+  /** Rasterises a modifier's mask at the cook target size — injected so this stays pure/testable; absent = masks ignored (export paths pass it, tests may not). */
+  rasterizeFor?: (maskId: string) => Uint8Array | undefined,
 ): CookModifier[] {
   const opByName = new Map(ops.map((o) => [o.name, o]));
   return modifiers
     .filter((m) => m.enabled)
     .map((m) => {
+      const mask = m.maskId && rasterizeFor ? rasterizeFor(m.maskId) : undefined;
       const descriptor = opByName.get(m.type);
       const backend = descriptor?.backend ?? 'python';
-      if (!descriptor) return { type: m.type, backend, params: m.params };
+      if (!descriptor) return { type: m.type, backend, params: m.params, mask };
 
       const paramSpecByName = new Map(descriptor.params.map((p) => [p.name, p]));
       const params: Modifier['params'] = {};
@@ -59,8 +65,47 @@ export function buildCookModifiers(
         params[key] =
           spec?.scale === 'spatial' && typeof value === 'number' ? value * factor : value;
       }
-      return { type: m.type, backend, params };
+      return { type: m.type, backend, params, mask };
     });
+}
+
+export interface MaskHeaderEntry {
+  /** Index into THIS request's `modifiers` array (per run, not per stack). */
+  modifierIndex: number;
+  mask_bytes: number;
+}
+
+/**
+ * Frame-format extension (selection-to-mask.md §What this costs): mask
+ * planes append after the image payload in modifier order; the header's
+ * `masks` array carries per-mask lengths so the sidecar can slice them back
+ * out. With zero masked modifiers this returns the image untouched and no
+ * `masks` array — the request stays byte-identical to the pre-mask format
+ * (story acceptance; pinned by cook.test.ts).
+ */
+export function packMaskedPayload(
+  image: Uint8Array,
+  modifiers: CookModifier[],
+): { masks?: MaskHeaderEntry[]; payload: Uint8Array } {
+  const entries: MaskHeaderEntry[] = [];
+  const planes: Uint8Array[] = [];
+  modifiers.forEach((m, i) => {
+    if (m.mask) {
+      entries.push({ modifierIndex: i, mask_bytes: m.mask.byteLength });
+      planes.push(m.mask);
+    }
+  });
+  if (entries.length === 0) return { payload: image };
+
+  const total = image.byteLength + planes.reduce((n, p) => n + p.byteLength, 0);
+  const payload = new Uint8Array(total);
+  payload.set(image, 0);
+  let offset = image.byteLength;
+  for (const plane of planes) {
+    payload.set(plane, offset);
+    offset += plane.byteLength;
+  }
+  return { masks: entries, payload };
 }
 
 export interface CookRun {
@@ -108,6 +153,15 @@ export interface CookDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
+  getMask: (maskId: string) => MaskDef | undefined;
+  /** Rasterise a mask to a single-channel plane at the cook target size (scene/maskRasterize.ts; needs OffscreenCanvas, so injected). */
+  rasterizeMask: (
+    mask: MaskDef,
+    sourceSize: [number, number],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
   /** Draw `source` into an offscreen surface at `[w, h]` and read back RGBA8 bytes. */
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
   /** One sidecar `cook` call for a same-backend run. */
@@ -153,14 +207,19 @@ async function realRunPython(
   // imports this module with injected `CookDeps` (which never reaches
   // this function) — only a real production cook pulls it in.
   const { sidecarClient } = await import('@/sidecar/singleton');
+  const packed = packMaskedPayload(payload, modifiers);
   const { header, payload: result } = await sidecarClient.request(
     {
       op: 'cook',
       width,
       height,
       modifiers: modifiers.map((m) => ({ type: m.type, params: m.params })),
+      // Spread-omitted when no modifier is masked — keeps the zero-mask
+      // request byte-identical to the pre-mask frame format (story
+      // acceptance).
+      ...(packed.masks ? { masks: packed.masks } : {}),
     },
-    payload,
+    packed.payload,
   );
   if (Array.isArray(header.timings_ms)) {
     const perOp = (header.timings_ms as { type: string; ms: number }[])
@@ -176,6 +235,8 @@ export const productionCookDeps: CookDeps = {
   getNode: (nodeId) => useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId),
   getSource: (nodeId) => sources.get(nodeId),
   getOps: () => useOpsCacheStore.getState().ops,
+  getMask: (maskId) => useSceneStore.getState().scene.masks?.[maskId],
+  rasterizeMask,
   downscale: realDownscale,
   runPython: realRunPython,
   encode: realEncode,
@@ -191,6 +252,14 @@ export interface FullResCookDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
+  getMask: (maskId: string) => MaskDef | undefined;
+  rasterizeMask: (
+    mask: MaskDef,
+    sourceSize: [number, number],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
   runPython: (
     width: number,
@@ -206,6 +275,8 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getNode: productionCookDeps.getNode,
   getSource: productionCookDeps.getSource,
   getOps: productionCookDeps.getOps,
+  getMask: productionCookDeps.getMask,
+  rasterizeMask: productionCookDeps.rasterizeMask,
   downscale: realDownscale,
   runPython: realRunPython,
   encode: realEncode,
@@ -240,7 +311,11 @@ export async function cookNodeFullRes(
   const [width, height] = computeTargetSize(node.sourceSize, factor);
 
   let resultBytes = deps.downscale(source, width, height);
-  const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps());
+  const rasterizeFor = (maskId: string) => {
+    const mask = deps.getMask(maskId);
+    return mask ? deps.rasterizeMask(mask, node.sourceSize, width, height, factor) : undefined;
+  };
+  const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
 
   if (cookModifiers.length > 0) {
     const runs = partitionRuns(cookModifiers);
@@ -300,7 +375,11 @@ export async function cookNode(
   try {
     let resultBytes = deps.downscale(source, width, height);
     const tDownscale = performance.now();
-    const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps());
+    const rasterizeFor = (maskId: string) => {
+      const mask = deps.getMask(maskId);
+      return mask ? deps.rasterizeMask(mask, node.sourceSize, width, height, factor) : undefined;
+    };
+    const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps(), rasterizeFor);
 
     if (cookModifiers.length > 0) {
       const runs = partitionRuns(cookModifiers);

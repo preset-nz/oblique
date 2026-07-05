@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import type { BlendMode, Modifier, PixelNode, Scene, SceneNode, Transform2D } from './types';
+import type {
+  BlendMode,
+  MaskDef,
+  Modifier,
+  PixelNode,
+  Scene,
+  SceneNode,
+  Transform2D,
+} from './types';
 
 function makeEmptyScene(): Scene {
   return {
@@ -55,6 +63,15 @@ interface SceneState {
   ) => void;
   setModifierEnabled: (nodeId: string, modId: string, enabled: boolean) => void;
 
+  /**
+   * Attach (or replace) a modifier's mask (selection-to-mask.md). Reuses the
+   * modifier's existing maskId when present — replacing a mask is the same
+   * dirty/recook path as editing it. Returns the mask id.
+   */
+  setModifierMask: (nodeId: string, modId: string, def: Omit<MaskDef, 'id'>) => string;
+  /** Detach and delete a modifier's mask (masks are 1:1 with modifiers today). */
+  removeModifierMask: (nodeId: string, modId: string) => void;
+
   markDirty: (nodeId: string, level: 'draft' | 'working') => void;
   clearDirty: (nodeId: string, level: 'draft' | 'working') => void;
 
@@ -68,7 +85,25 @@ function updateNode(nodes: SceneNode[], id: string, fn: (node: SceneNode) => Sce
   return nodes.map((n) => (n.id === id ? fn(n) : n));
 }
 
-export const useSceneStore = create<SceneState>((set) => ({
+/**
+ * Drop mask entries no modifier references any more (masks are 1:1 with
+ * modifiers — deleting a modifier or node deletes its mask). Returns the
+ * same object when nothing was pruned so scene identity is preserved.
+ */
+function pruneMasks(masks: Scene['masks'], nodes: SceneNode[]): Scene['masks'] {
+  if (!masks) return masks;
+  const referenced = new Set<string>();
+  for (const node of nodes) {
+    for (const modifier of node.modifiers) {
+      if (modifier.maskId) referenced.add(modifier.maskId);
+    }
+  }
+  const kept = Object.entries(masks).filter(([id]) => referenced.has(id));
+  if (kept.length === Object.keys(masks).length) return masks;
+  return Object.fromEntries(kept);
+}
+
+export const useSceneStore = create<SceneState>((set, get) => ({
   scene: makeEmptyScene(),
 
   addPixelNode: (partial) => {
@@ -94,7 +129,10 @@ export const useSceneStore = create<SceneState>((set) => ({
   },
 
   removeNode: (id) => {
-    set((s) => ({ scene: { ...s.scene, nodes: s.scene.nodes.filter((n) => n.id !== id) } }));
+    set((s) => {
+      const nodes = s.scene.nodes.filter((n) => n.id !== id);
+      return { scene: { ...s.scene, nodes, masks: pruneMasks(s.scene.masks, nodes) } };
+    });
   },
 
   reorderNode: (id, toIndex) => {
@@ -147,16 +185,14 @@ export const useSceneStore = create<SceneState>((set) => ({
   },
 
   removeModifier: (nodeId, modId) => {
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          modifiers: n.modifiers.filter((m) => m.id !== modId),
-          dirty: dirtyBoth(),
-        })),
-      },
-    }));
+    set((s) => {
+      const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
+        ...n,
+        modifiers: n.modifiers.filter((m) => m.id !== modId),
+        dirty: dirtyBoth(),
+      }));
+      return { scene: { ...s.scene, nodes, masks: pruneMasks(s.scene.masks, nodes) } };
+    });
   },
 
   reorderModifier: (nodeId, modId, toIndex) => {
@@ -204,6 +240,44 @@ export const useSceneStore = create<SceneState>((set) => ({
         })),
       },
     }));
+  },
+
+  setModifierMask: (nodeId, modId, def) => {
+    // Reuse the existing maskId if the modifier already has one — a
+    // replace IS an edit, and keeping the id stable means undo restores
+    // land on the same entry. Dirty per rule 4: masking changes the pixel
+    // result exactly like a param edit.
+    const existing = get()
+      .scene.nodes.find((n) => n.id === nodeId)
+      ?.modifiers.find((m) => m.id === modId)?.maskId;
+    const maskId = existing ?? crypto.randomUUID();
+    set((s) => ({
+      scene: {
+        ...s.scene,
+        masks: { ...s.scene.masks, [maskId]: { ...def, id: maskId } },
+        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...n,
+          modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, maskId } : m)),
+          dirty: dirtyBoth(),
+        })),
+      },
+    }));
+    return maskId;
+  },
+
+  removeModifierMask: (nodeId, modId) => {
+    set((s) => {
+      const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
+        ...n,
+        modifiers: n.modifiers.map((m) => {
+          if (m.id !== modId) return m;
+          const { maskId: _dropped, ...rest } = m;
+          return rest;
+        }),
+        dirty: dirtyBoth(),
+      }));
+      return { scene: { ...s.scene, nodes, masks: pruneMasks(s.scene.masks, nodes) } };
+    });
   },
 
   markDirty: (nodeId, level) => {

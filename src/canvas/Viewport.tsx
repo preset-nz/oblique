@@ -4,6 +4,7 @@ import { destSizeFor } from '@/compositor/composite';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
 import { beginTransaction, endTransaction } from '@/scene/history';
+import { useMarqueeStateStore } from '@/scene/marquee';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
@@ -18,7 +19,6 @@ import {
   isNearStart,
   rectFromDrag,
 } from './marquees/marqueeGeometry';
-import { useMarqueeStateStore } from './marquees/marqueeState';
 import { RectMarquee } from './marquees/RectMarquee';
 import {
   blitScene,

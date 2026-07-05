@@ -1,0 +1,210 @@
+import type { MaskDef, MaskShape, Transform2D } from './types';
+
+/**
+ * Mask rasterisation (selection-to-mask.md §Model): a `MaskDef`'s document-
+ * space shape becomes a single-channel byte plane (1 byte/px, 0..255) at the
+ * cook target size. The bitmap is derived state — rebuilt per cook level,
+ * never persisted.
+ *
+ * Split like `cook.ts`'s downscale: the pure maths (`docToLocalMatrix`,
+ * `boxBlurMask`, `invertMask`) are unit-tested here; the OffscreenCanvas
+ * composition (`rasterizeMask`) is a thin production-only wrapper injected
+ * through `CookDeps.rasterizeMask` so cook tests never need a canvas.
+ *
+ * Coordinate mapping: the shape is drawn in document space, but the cook
+ * buffer is the node's own source pixels. `MaskDef.appliedTransform2d` (the
+ * node's transform snapshot at apply time) maps document → node-local via
+ * the inverse of `canvas/transform2d.ts`'s `localToWorld` — reimplemented
+ * here as a flat 2D matrix because `scene/` must not import `canvas/`
+ * (depcruise). `canvas/transform2d.test.ts` cross-checks the two stay
+ * inverses of each other.
+ */
+
+/** Column-major 2D affine matrix, `[a, b, c, d, e, f]` as `ctx.setTransform` takes it. */
+export type Matrix2D = [number, number, number, number, number, number];
+
+/**
+ * Document-space → node-local matrix for a node with transform `t` and
+ * source extent `w`×`h` — the inverse of localToWorld's
+ * `world = centre + R(rotation)·S(scale)·(local - localCentre)`:
+ * `local = S⁻¹·R⁻¹·(world - centre) + localCentre`.
+ */
+export function docToLocalMatrix(t: Transform2D, w: number, h: number): Matrix2D {
+  const cos = Math.cos(t.rotation);
+  const sin = Math.sin(t.rotation);
+  const sx = t.scaleX === 0 ? 0 : 1 / t.scaleX;
+  const sy = t.scaleY === 0 ? 0 : 1 / t.scaleY;
+  const cx = t.x + w / 2;
+  const cy = t.y + h / 2;
+
+  // Row 1 of S⁻¹·R⁻¹ is (cos, sin)/scaleX; row 2 is (-sin, cos)/scaleY.
+  const a = cos * sx;
+  const c = sin * sx;
+  const b = -sin * sy;
+  const d = cos * sy;
+  const e = w / 2 - (a * cx + c * cy);
+  const f = h / 2 - (b * cx + d * cy);
+  return [a, b, c, d, e, f];
+}
+
+/** Apply a `Matrix2D` to a point — test helper and lasso pre-transform. */
+export function applyMatrix(m: Matrix2D, x: number, y: number): { x: number; y: number } {
+  return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
+}
+
+/**
+ * In-place three-pass box blur approximating a gaussian of sigma ≈ radius/2
+ * (Kovesi's classic approximation) on a single-channel plane. Chosen over
+ * `ctx.filter = 'blur(...)'` because canvas filters are unevenly supported
+ * in WKWebView, and over a true gaussian because three box passes are
+ * indistinguishable for a feather. Each pass is a running-sum sliding
+ * window, O(px) regardless of radius. Radius is in target-resolution px
+ * (the caller scales featherPx by the cook factor first).
+ */
+export function boxBlurMask(data: Uint8Array, width: number, height: number, radius: number): void {
+  const r = Math.round(radius);
+  if (r < 1) return;
+  const boxes = boxSizesForGaussian(r, 3);
+  const scratch = new Float32Array(data.length);
+  const plane = Float32Array.from(data);
+  for (const size of boxes) {
+    boxBlurPass(plane, scratch, width, height, (size - 1) / 2);
+  }
+  for (let i = 0; i < data.length; i++) {
+    data[i] = Math.max(0, Math.min(255, Math.round(plane[i])));
+  }
+}
+
+/** Standard box-size derivation for approximating a gaussian with `n` box passes. */
+function boxSizesForGaussian(sigma: number, n: number): number[] {
+  const wIdeal = Math.sqrt((12 * sigma * sigma) / n + 1);
+  let wl = Math.floor(wIdeal);
+  if (wl % 2 === 0) wl--;
+  const wu = wl + 2;
+  const mIdeal = (12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4);
+  const m = Math.round(mIdeal);
+  return Array.from({ length: n }, (_, i) => (i < m ? wl : wu));
+}
+
+/** One horizontal + one vertical running-sum box pass with edge clamping. */
+function boxBlurPass(
+  plane: Float32Array,
+  scratch: Float32Array,
+  width: number,
+  height: number,
+  r: number,
+): void {
+  const rr = Math.max(0, Math.round(r));
+  const norm = 1 / (2 * rr + 1);
+
+  // Horizontal: plane -> scratch.
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let sum = 0;
+    for (let x = -rr; x <= rr; x++) sum += plane[row + clamp(x, width)];
+    for (let x = 0; x < width; x++) {
+      scratch[row + x] = sum * norm;
+      sum += plane[row + clamp(x + rr + 1, width)] - plane[row + clamp(x - rr, width)];
+    }
+  }
+
+  // Vertical: scratch -> plane.
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    for (let y = -rr; y <= rr; y++) sum += scratch[clamp(y, height) * width + x];
+    for (let y = 0; y < height; y++) {
+      plane[y * width + x] = sum * norm;
+      sum +=
+        scratch[clamp(y + rr + 1, height) * width + x] - scratch[clamp(y - rr, height) * width + x];
+    }
+  }
+}
+
+function clamp(i: number, n: number): number {
+  return i < 0 ? 0 : i >= n ? n - 1 : i;
+}
+
+/** In-place `255 - v` — the mask's `invert` flag, applied after feathering. */
+export function invertMask(data: Uint8Array): void {
+  for (let i = 0; i < data.length; i++) data[i] = 255 - data[i];
+}
+
+function shapePath(shape: MaskShape): Path2D {
+  const path = new Path2D();
+  switch (shape.kind) {
+    case 'rect':
+      path.rect(shape.rect.x, shape.rect.y, shape.rect.w, shape.rect.h);
+      break;
+    case 'ellipse':
+      path.ellipse(
+        shape.rect.x + shape.rect.w / 2,
+        shape.rect.y + shape.rect.h / 2,
+        shape.rect.w / 2,
+        shape.rect.h / 2,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      break;
+    case 'lasso': {
+      const [first, ...rest] = shape.points;
+      path.moveTo(first.x, first.y);
+      for (const p of rest) path.lineTo(p.x, p.y);
+      path.closePath();
+      break;
+    }
+  }
+  return path;
+}
+
+/**
+ * Rasterise `mask` for a node with source extent `sourceSize`, at the cook
+ * target `width`×`height` (= sourceSize × factor). Production-only (needs
+ * OffscreenCanvas/Path2D) — cook tests inject a fake via `CookDeps`.
+ *
+ * Expand/contract is a stroke-based offset: expanding strokes the path
+ * boundary in fill colour (width 2×expand ≈ dilate by expand px), contracting
+ * knocks the boundary band out with destination-out (≈ erode). Simplest
+ * honest offset — exact polygon offsetting is not worth its dependency for a
+ * feathered selection edge.
+ */
+export function rasterizeMask(
+  mask: MaskDef,
+  sourceSize: [number, number],
+  width: number,
+  height: number,
+  factor: number,
+): Uint8Array {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
+
+  // Document space -> node-local (via the apply-time transform snapshot),
+  // then node-local -> target px (cook factor).
+  const m = docToLocalMatrix(mask.appliedTransform2d, sourceSize[0], sourceSize[1]);
+  ctx.setTransform(factor, 0, 0, factor, 0, 0);
+  ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+
+  const path = shapePath(mask.shape);
+  ctx.fillStyle = '#fff';
+  ctx.fill(path);
+
+  if (mask.expand !== 0) {
+    ctx.lineWidth = Math.abs(mask.expand) * 2;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#fff';
+    if (mask.expand < 0) ctx.globalCompositeOperation = 'destination-out';
+    ctx.stroke(path);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  const image = ctx.getImageData(0, 0, width, height);
+  const plane = new Uint8Array(width * height);
+  for (let i = 0; i < plane.length; i++) plane[i] = image.data[i * 4 + 3];
+
+  const featherRadius = mask.featherPx * factor;
+  if (featherRadius >= 0.5) boxBlurMask(plane, width, height, featherRadius);
+  if (mask.invert) invertMask(plane);
+  return plane;
+}

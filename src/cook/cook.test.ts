@@ -10,10 +10,12 @@ import { toast } from 'sonner';
 import {
   buildCookModifiers,
   type CookDeps,
+  type CookModifier,
   computeTargetSize,
   cookNode,
   cookNodeFullRes,
   type FullResCookDeps,
+  packMaskedPayload,
   partitionRuns,
   resetCookErrorBurst,
   resolutionFactor,
@@ -48,6 +50,10 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
     getNode: vi.fn((id: string) => (nodeRef.current.id === id ? nodeRef.current : undefined)),
     getSource: vi.fn(() => fakeBitmap()),
     getOps: vi.fn(() => opsFixture),
+    getMask: vi.fn(() => undefined),
+    rasterizeMask: vi.fn(
+      (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
+    ),
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
     runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
     encode: vi.fn(async () => fakeBitmap()),
@@ -108,6 +114,103 @@ describe('buildCookModifiers', () => {
       opsFixture,
     );
     expect(built).toEqual([{ type: 'unknown_op', backend: 'python', params: { amount: 5 } }]);
+  });
+});
+
+describe('buildCookModifiers — masks', () => {
+  const maskedModifiers: Modifier[] = [
+    { id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 }, maskId: 'mask-1' },
+    { id: 'm2', type: 'levels', enabled: true, params: { black: 10 } },
+    { id: 'm3', type: 'levels', enabled: false, params: { black: 5 }, maskId: 'mask-2' },
+  ];
+
+  it('attaches the rasterised plane to masked modifiers only', () => {
+    const plane = new Uint8Array(16);
+    const rasterizeFor = vi.fn((maskId: string) => (maskId === 'mask-1' ? plane : undefined));
+
+    const built = buildCookModifiers(maskedModifiers, 1, opsFixture, rasterizeFor);
+
+    expect(built[0].mask).toBe(plane);
+    expect(built[1].mask).toBeUndefined();
+    // The disabled modifier is filtered before its mask is ever rasterised.
+    expect(rasterizeFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores masks entirely when no rasteriser is supplied', () => {
+    const built = buildCookModifiers(maskedModifiers, 1, opsFixture);
+    expect(built.every((m) => m.mask === undefined)).toBe(true);
+  });
+});
+
+describe('packMaskedPayload', () => {
+  const image = Uint8Array.from([1, 2, 3, 4]);
+
+  it('zero masked modifiers: image untouched, no masks array (byte-identical request)', () => {
+    const modifiers: CookModifier[] = [
+      { type: 'levels', backend: 'python', params: {} },
+      { type: 'gaussian_blur', backend: 'python', params: {} },
+    ];
+    const packed = packMaskedPayload(image, modifiers);
+    expect(packed.masks).toBeUndefined();
+    expect(packed.payload).toBe(image); // same reference — not even a copy
+  });
+
+  it('appends mask planes after the image in modifier order with per-mask lengths', () => {
+    const maskA = Uint8Array.from([10, 11]);
+    const maskB = Uint8Array.from([20, 21, 22]);
+    const modifiers: CookModifier[] = [
+      { type: 'levels', backend: 'python', params: {}, mask: maskA },
+      { type: 'gaussian_blur', backend: 'python', params: {} },
+      { type: 'invert', backend: 'python', params: {}, mask: maskB },
+    ];
+
+    const packed = packMaskedPayload(image, modifiers);
+
+    expect(packed.masks).toEqual([
+      { modifierIndex: 0, mask_bytes: 2 },
+      { modifierIndex: 2, mask_bytes: 3 },
+    ]);
+    expect(Array.from(packed.payload)).toEqual([1, 2, 3, 4, 10, 11, 20, 21, 22]);
+  });
+});
+
+describe('cookNode — masks', () => {
+  it('rasterises a masked modifier at the cook target size and hands the plane to the run', async () => {
+    const maskDef = {
+      id: 'mask-1',
+      shape: { kind: 'rect' as const, rect: { x: 0, y: 0, w: 100, h: 100 } },
+      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      featherPx: 4,
+      expand: 0,
+      invert: false,
+    };
+    const nodeRef = {
+      current: makeNode({
+        sourceSize: [800, 400],
+        modifiers: [
+          {
+            id: 'm1',
+            type: 'gaussian_blur',
+            enabled: true,
+            params: { radius: 8 },
+            maskId: 'mask-1',
+          },
+        ],
+      }),
+    };
+    const plane = new Uint8Array(100 * 50);
+    const deps = makeDeps(nodeRef, {
+      getMask: vi.fn((id: string) => (id === 'mask-1' ? maskDef : undefined)),
+      rasterizeMask: vi.fn(() => plane),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    // Rasterised at the DRAFT target size with the DRAFT factor — the mask
+    // downscales in lockstep with the source (story acceptance).
+    expect(deps.rasterizeMask).toHaveBeenCalledWith(maskDef, [800, 400], 100, 50, 1 / 8);
+    const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runModifiers[0].mask).toBe(plane);
   });
 });
 
@@ -263,6 +366,10 @@ describe('cookNodeFullRes', () => {
       getNode: vi.fn((id: string) => (nodeRef.current.id === id ? nodeRef.current : undefined)),
       getSource: vi.fn(() => fakeBitmap()),
       getOps: vi.fn(() => opsFixture),
+      getMask: vi.fn(() => undefined),
+      rasterizeMask: vi.fn(
+        (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
+      ),
       downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
       runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
       encode: vi.fn(async () => fakeBitmap()),
