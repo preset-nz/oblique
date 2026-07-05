@@ -52,6 +52,43 @@ export interface MaskDef {
 }
 
 /**
+ * A modifier mask that stays *live* against a VectorNode's current paths
+ * (vector-modifier-masks.md) — the epic's "editable forever" half, sitting
+ * alongside `MaskDef`'s apply-time bake. `Modifier.maskId` resolves against
+ * `Scene.masks` first (a baked shape), then `Scene.maskRefs` (this type);
+ * the two id spaces are otherwise identical strings, so a modifier never
+ * needs to know which kind it has.
+ *
+ * `featherPx`/`expand`/`invert` live HERE, not on the `VectorNode` — the
+ * story's explicit call: the reference decides how soft/expanded/inverted
+ * the mask reads, the node just supplies geometry. That is also what makes
+ * reuse free: many `VectorMaskRef` entries (one per modifier that wants its
+ * own feather/invert) can point at the same `nodeId`, unlike `MaskDef`,
+ * which stays 1:1 with its modifier (a baked shape has nowhere else to
+ * live).
+ *
+ * `appliedTransform2d` is a snapshot of the CONSUMING node's (the modifier's
+ * own node, not the referenced VectorNode's) transform2d at reference-apply
+ * time — same role as `MaskDef.appliedTransform2d`, same reason: a node's
+ * own cook buffer is always produced untransformed at its own origin
+ * (node-transform-2d.md — transform2d is compositing-only), but a vector
+ * node's `paths` are authored in document/composited space. Without
+ * undoing the consumer's placement, the mask would only land correctly on
+ * a document-aligned consumer (identity transform2d, sourceSize ==
+ * documentSize) — true by coincidence for a fresh single-image document,
+ * false in general. Snapshotting (not tracking live) keeps this consistent
+ * with the "transform2d never recooks" rule, exactly like `MaskDef`.
+ */
+export interface VectorMaskRef {
+  id: string;
+  nodeId: string; // a VectorNode's id
+  appliedTransform2d: Transform2D;
+  featherPx: number;
+  expand: number;
+  invert: boolean;
+}
+
+/**
  * Uniform 2D node transform (Epic 05, node-transform-2d.md, locked
  * 2026-07-04) — move/scale/rotate, identical across every node type.
  * Applied by the compositor at draw time only: compositing-only, never
@@ -177,4 +214,12 @@ export interface Scene {
    * question); entries are pruned when their modifier/node goes.
    */
   masks?: Record<string, MaskDef>;
+  /**
+   * Live vector-referenced modifier masks (vector-modifier-masks.md),
+   * `Modifier.maskId`'s second resolution target after `Scene.masks`.
+   * Optional so pre-Epic-06 `.oblique` files load verbatim — treat absence
+   * as empty. Entries are pruned when their modifier, node, or referenced
+   * vector node goes (see `store.ts`'s `pruneMaskState`).
+   */
+  maskRefs?: Record<string, VectorMaskRef>;
 }

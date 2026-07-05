@@ -143,16 +143,30 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
  * undo/redo across a path-editing.md edit must register here or
  * `restoreScene` leaves the node clean while a stale cached bitmap (from
  * before/after the edit it's undoing) keeps painting.
+ *
+ * A mask reference resolves through BOTH tables (cook.ts's
+ * `makeRasterizeFor` rule): a baked `MaskDef`, or a `VectorMaskRef` plus
+ * the referenced vector node's live paths/fillRule — the referenced
+ * GEOMETRY is part of the consumer's cook inputs (vector-modifier-masks.md
+ * cross-node dirty), so an undo that only changes the referenced vector
+ * node's paths must dirty the consumer too, not just the vector node.
  */
-function cookAffectingChanged(
-  a: SceneNode,
-  b: SceneNode,
-  masksA: Scene['masks'],
-  masksB: Scene['masks'],
-): boolean {
+function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
+  if (!maskId) return null;
+  const baked = scene.masks?.[maskId];
+  if (baked) return baked;
+  const ref = scene.maskRefs?.[maskId];
+  if (!ref) return null;
+  const target = scene.nodes.find((n) => n.id === ref.nodeId);
+  const geometry =
+    target && isVectorNode(target) ? { paths: target.paths, fillRule: target.fillRule } : null;
+  return { ref, geometry };
+}
+
+function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB: Scene): boolean {
   if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
-  const refA = a.modifiers.map((m) => (m.maskId ? (masksA?.[m.maskId] ?? null) : null));
-  const refB = b.modifiers.map((m) => (m.maskId ? (masksB?.[m.maskId] ?? null) : null));
+  const refA = a.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneA));
+  const refB = b.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneB));
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
   const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
   const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
@@ -216,7 +230,7 @@ async function restoreScene(
   const nodes = target.nodes.map((node) => {
     const previous = currentById.get(node.id);
     const dirty =
-      !previous || cookAffectingChanged(previous, node, current.masks, target.masks)
+      !previous || cookAffectingChanged(previous, node, current, target)
         ? { draft: true, working: true }
         : { draft: false, working: false };
     return { ...node, dirty };

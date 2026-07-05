@@ -8,13 +8,15 @@ import {
   EyeOff,
   MoreVertical,
   RotateCcw,
+  Spline,
   Trash2,
 } from 'lucide-react';
+import { useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isMaskableMarquee, marqueeToMaskShape, useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';
-import { IDENTITY_TRANSFORM_2D, type Modifier, type SceneNode } from '@/scene/types';
+import { IDENTITY_TRANSFORM_2D, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
 import { modifierScopeKey } from './modifierScope';
@@ -45,10 +47,22 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const addModifier = useSceneStore((s) => s.addModifier);
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
   const setModifierMask = useSceneStore((s) => s.setModifierMask);
+  const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
+  const vectorNodes = useSceneStore((s) => s.scene.nodes.filter(isVectorNode));
+  // Which kind of mask (if any) this modifier's maskId resolves to
+  // (vector-modifier-masks.md's resolution rule: masks table first, then
+  // maskRefs) — drives the Blend indicator's tooltip wording.
+  const maskKind = useSceneStore((s) => {
+    if (!modifier.maskId) return undefined;
+    if (s.scene.masks?.[modifier.maskId]) return 'selection';
+    if (s.scene.maskRefs?.[modifier.maskId]) return 'vector';
+    return undefined;
+  });
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const rowExpanded = useRowCollapseStore((s) => s.isExpanded(modifier.id));
   const toggleExpanded = useRowCollapseStore((s) => s.toggle);
+  const [vectorPickerOpen, setVectorPickerOpen] = useState(false);
 
   const descriptor = ops.find((o) => o.name === modifier.type);
   // Param-less ops (e.g. invert) have nothing to expand. An UNKNOWN op stays
@@ -88,6 +102,29 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
     // Consumed — same "no orphaned overlay state" rule as every other
     // marquee exit.
     state.clear();
+  }
+
+  /**
+   * Attach a *live* vector reference (vector-modifier-masks.md): the
+   * feather/expand/invert come from the SAME marquee-params store the
+   * "mask from selection" flow reads — reusing its existing tuning UI
+   * rather than building a second one, since the story's v1 scope has no
+   * post-apply mask editor for either kind (deferred: a Vectors-tab-era
+   * pass, per the epic's build order).
+   */
+  function maskFromVectorNode(vectorNodeId: string) {
+    const params = useMarqueeStateStore.getState().params;
+    // Snapshot THIS node's (the consumer's) current transform — same
+    // reason as maskFromSelection's appliedTransform2d: the vector path is
+    // document-space, but this node's own cook buffer is node-local, and
+    // moving the consumer later must not re-rasterise or recook.
+    setModifierVectorMask(node.id, modifier.id, vectorNodeId, {
+      appliedTransform2d: node.transform2d ?? IDENTITY_TRANSFORM_2D,
+      featherPx: params.featherPx,
+      expand: params.expand,
+      invert: params.invert,
+    });
+    setVectorPickerOpen(false);
   }
 
   return (
@@ -161,7 +198,11 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
               <TooltipTrigger asChild>
                 <Blend size={12} className="shrink-0 text-neutral-500" aria-label="Masked" />
               </TooltipTrigger>
-              <TooltipContent>Masked — this modifier affects only its region</TooltipContent>
+              <TooltipContent>
+                {maskKind === 'vector'
+                  ? 'Masked — live vector reference; editing the shape recooks this modifier'
+                  : 'Masked — this modifier affects only its region'}
+              </TooltipContent>
             </Tooltip>
           )}
         </button>
@@ -201,6 +242,29 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
               <Blend size={12} />{' '}
               {modifier.maskId ? 'Replace mask from selection' : 'Mask from selection'}
             </button>
+            <button
+              type="button"
+              disabled={vectorNodes.length === 0}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+              onClick={() => setVectorPickerOpen((open) => !open)}
+            >
+              <Spline size={12} />{' '}
+              {modifier.maskId ? 'Replace mask from vector node' : 'Mask from vector node'}
+            </button>
+            {vectorPickerOpen && (
+              <div className="ml-4 flex flex-col border-l border-neutral-800 pl-2">
+                {vectorNodes.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+                    onClick={() => maskFromVectorNode(v.id)}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {modifier.maskId && (
               <button
                 type="button"

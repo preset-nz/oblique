@@ -155,6 +155,55 @@ describe('serialise/parse round trip', () => {
     expect(parseProject(serialiseProject(scene))).toEqual(scene);
   });
 
+  it('scene with a live vector-referenced modifier mask round-trips verbatim (vector-modifier-masks.md)', () => {
+    const scene = sampleScene();
+    scene.nodes.push({
+      id: 'v1',
+      label: 'Vector',
+      type: 'vector',
+      state: 'active',
+      output: 'image',
+      modifiers: [],
+      visible: true,
+      blendMode: 'normal',
+      opacity: 1,
+      dirty: { draft: false, working: false },
+      paths: [],
+      fillRule: 'nonzero',
+      // biome-ignore lint/suspicious/noExplicitAny: VectorNode via SceneNode[] slot
+    } as any);
+    scene.nodes[0].modifiers[0].maskId = 'ref-1';
+    scene.maskRefs = {
+      'ref-1': {
+        id: 'ref-1',
+        nodeId: 'v1',
+        appliedTransform2d: { x: 12, y: -4, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 6 },
+        featherPx: 6,
+        expand: 1,
+        invert: true,
+      },
+    };
+    expect(parseProject(serialiseProject(scene))).toEqual(scene);
+  });
+
+  it('a pre-Epic-06 (.oblique from Epic 05, baked masks only) scene has no maskRefs key — loads verbatim', () => {
+    const scene = sampleScene();
+    scene.nodes[0].modifiers[0].maskId = 'mask-1';
+    scene.masks = {
+      'mask-1': {
+        id: 'mask-1',
+        shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
+        appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        featherPx: 0,
+        expand: 0,
+        invert: false,
+      },
+    };
+    const text = serialiseProject(scene);
+    expect(text).not.toContain('"maskRefs"');
+    expect(parseProject(text)).toEqual(scene);
+  });
+
   it('rejects non-JSON', () => {
     expect(() => parseProject('nope{')).toThrow(/not valid JSON/);
   });

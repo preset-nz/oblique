@@ -1,9 +1,17 @@
 import { toast } from 'sonner';
 import * as cache from '@/scene/cache';
-import { rasterizeMask } from '@/scene/maskRasterize';
+import { rasterizeMask, rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
-import type { MaskDef, Modifier, PixelNode, SceneNode, VectorNode } from '@/scene/types';
+import {
+  isVectorNode,
+  type MaskDef,
+  type Modifier,
+  type PixelNode,
+  type SceneNode,
+  type VectorMaskRef,
+  type VectorNode,
+} from '@/scene/types';
 import { rasterizeVector } from '@/scene/vectorRasterize';
 import { type OpDescriptor, useOpsCacheStore } from '@/sidecar/opsCache';
 
@@ -157,10 +165,22 @@ export interface CookDeps {
   getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
   getMask: (maskId: string) => MaskDef | undefined;
+  /** `Modifier.maskId`'s second resolution target (vector-modifier-masks.md) — a live vector reference, resolved after `getMask` comes up empty. */
+  getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
   /** Rasterise a mask to a single-channel plane at the cook target size (scene/maskRasterize.ts; needs OffscreenCanvas, so injected). */
   rasterizeMask: (
     mask: MaskDef,
     sourceSize: [number, number],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
+  /** Rasterise a live vector-referenced mask (scene/maskRasterize.ts's `rasterizeVectorMask`; needs OffscreenCanvas, so injected, same pattern as `rasterizeMask`). */
+  rasterizeVectorMask: (
+    paths: VectorNode['paths'],
+    fillRule: VectorNode['fillRule'],
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+    consumerSourceSize: [number, number],
     width: number,
     height: number,
     factor: number,
@@ -241,6 +261,48 @@ async function realRunPython(
   return result;
 }
 
+/**
+ * `Modifier.maskId` resolution rule (vector-modifier-masks.md, the epic's
+ * data-model decision): try `Scene.masks` first (a baked `MaskDef`), then
+ * `Scene.maskRefs` (a live vector reference) — the two id spaces are
+ * disjoint by construction (`store.ts`'s `setModifierMask`/
+ * `setModifierVectorMask` each clear the other table's entry under the same
+ * id), so "try masks, else maskRefs" never has to break a tie. A maskRefs
+ * hit whose target node has since gone missing or isn't a vector any more
+ * (shouldn't happen post-`pruneMaskState`, but this is the last line of
+ * defence) resolves to "no mask" rather than throwing — same posture as an
+ * unresolved id today.
+ */
+function makeRasterizeFor(
+  deps: Pick<
+    CookDeps,
+    'getNode' | 'getMask' | 'getVectorMaskRef' | 'rasterizeMask' | 'rasterizeVectorMask'
+  >,
+  nodeExtent: [number, number],
+  width: number,
+  height: number,
+  factor: number,
+): (maskId: string) => Uint8Array | undefined {
+  return (maskId: string) => {
+    const mask = deps.getMask(maskId);
+    if (mask) return deps.rasterizeMask(mask, nodeExtent, width, height, factor);
+
+    const ref = deps.getVectorMaskRef(maskId);
+    if (!ref) return undefined;
+    const vectorNode = deps.getNode(ref.nodeId);
+    if (!vectorNode || !isVectorNode(vectorNode)) return undefined;
+    return deps.rasterizeVectorMask(
+      vectorNode.paths,
+      vectorNode.fillRule,
+      ref,
+      nodeExtent,
+      width,
+      height,
+      factor,
+    );
+  };
+}
+
 /** Production deps: real store/cache/sources/canvas/sidecar wiring. */
 export const productionCookDeps: CookDeps = {
   getNode: (nodeId) => useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId),
@@ -248,7 +310,9 @@ export const productionCookDeps: CookDeps = {
   getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   getOps: () => useOpsCacheStore.getState().ops,
   getMask: (maskId) => useSceneStore.getState().scene.masks?.[maskId],
+  getVectorMaskRef: (maskId) => useSceneStore.getState().scene.maskRefs?.[maskId],
   rasterizeMask,
+  rasterizeVectorMask,
   downscale: realDownscale,
   rasterizeVector,
   runPython: realRunPython,
@@ -266,9 +330,19 @@ export interface FullResCookDeps {
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
   getMask: (maskId: string) => MaskDef | undefined;
+  getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
   rasterizeMask: (
     mask: MaskDef,
     sourceSize: [number, number],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
+  rasterizeVectorMask: (
+    paths: VectorNode['paths'],
+    fillRule: VectorNode['fillRule'],
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+    consumerSourceSize: [number, number],
     width: number,
     height: number,
     factor: number,
@@ -289,7 +363,9 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getSource: productionCookDeps.getSource,
   getOps: productionCookDeps.getOps,
   getMask: productionCookDeps.getMask,
+  getVectorMaskRef: productionCookDeps.getVectorMaskRef,
   rasterizeMask: productionCookDeps.rasterizeMask,
+  rasterizeVectorMask: productionCookDeps.rasterizeVectorMask,
   downscale: realDownscale,
   runPython: realRunPython,
   encode: realEncode,
@@ -324,10 +400,7 @@ export async function cookNodeFullRes(
   const [width, height] = computeTargetSize(node.sourceSize, factor);
 
   let resultBytes = deps.downscale(source, width, height);
-  const rasterizeFor = (maskId: string) => {
-    const mask = deps.getMask(maskId);
-    return mask ? deps.rasterizeMask(mask, node.sourceSize, width, height, factor) : undefined;
-  };
+  const rasterizeFor = makeRasterizeFor(deps, node.sourceSize, width, height, factor);
   const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
 
   if (cookModifiers.length > 0) {
@@ -401,10 +474,7 @@ export async function cookNode(
         ? deps.downscale(source as ImageBitmap, width, height)
         : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
     const tDownscale = performance.now();
-    const rasterizeFor = (maskId: string) => {
-      const mask = deps.getMask(maskId);
-      return mask ? deps.rasterizeMask(mask, nodeExtent, width, height, factor) : undefined;
-    };
+    const rasterizeFor = makeRasterizeFor(deps, nodeExtent, width, height, factor);
     const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps(), rasterizeFor);
 
     if (cookModifiers.length > 0) {

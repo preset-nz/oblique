@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from './store';
-import type { Modifier, PixelNode, Scene, VectorPath } from './types';
+import type { Modifier, PixelNode, Scene, VectorNode, VectorPath } from './types';
+import { IDENTITY_TRANSFORM_2D } from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -23,6 +24,25 @@ function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
 
 function modifier(id: string, overrides: Partial<Modifier> = {}): Modifier {
   return { id, type: 'gaussian_blur', enabled: true, params: { radius: 4 }, ...overrides };
+}
+
+function vectorNode(id: string, overrides: Partial<VectorNode> = {}): VectorNode {
+  return {
+    id,
+    label: 'Vector',
+    type: 'vector',
+    state: 'active',
+    output: 'image',
+    cameraId: null,
+    modifiers: [],
+    visible: true,
+    blendMode: 'normal',
+    opacity: 1,
+    dirty: { draft: false, working: false },
+    paths: [],
+    fillRule: 'nonzero',
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -428,6 +448,151 @@ describe('setModifierMask / removeModifierMask', () => {
     useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
     useSceneStore.getState().removeNode('n1');
     expect(useSceneStore.getState().scene.masks).toEqual({});
+  });
+});
+
+describe('setModifierVectorMask', () => {
+  const ref = { appliedTransform2d: IDENTITY_TRANSFORM_2D, featherPx: 4, expand: 0, invert: false };
+
+  function nodesWithVectorAndTwoConsumers() {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          vectorNode('v1'),
+          pixelNode('a', { modifiers: [modifier('m1')], dirty: { draft: false, working: false } }),
+          pixelNode('b', { modifiers: [modifier('m2')], dirty: { draft: false, working: false } }),
+        ],
+      },
+    }));
+  }
+
+  it('stores the ref in maskRefs, points the modifier at it, and dirties both levels', () => {
+    nodesWithVectorAndTwoConsumers();
+    const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.maskRefs?.[maskId]).toEqual({ ...ref, id: maskId, nodeId: 'v1' });
+    expect(scene.nodes[1].modifiers[0].maskId).toBe(maskId);
+    expect(scene.nodes[1].dirty).toEqual({ draft: true, working: true });
+    // Baked masks table untouched.
+    expect(scene.masks).toBeUndefined();
+  });
+
+  it('two modifiers can reference the same vector node with independent feather/invert', () => {
+    nodesWithVectorAndTwoConsumers();
+    const softId = useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v1', { ...ref, featherPx: 10, invert: false });
+    const hardInvertedId = useSceneStore
+      .getState()
+      .setModifierVectorMask('b', 'm2', 'v1', { ...ref, featherPx: 0, invert: true });
+
+    expect(softId).not.toBe(hardInvertedId);
+    const scene = useSceneStore.getState().scene;
+    expect(scene.maskRefs?.[softId]).toMatchObject({ nodeId: 'v1', featherPx: 10, invert: false });
+    expect(scene.maskRefs?.[hardInvertedId]).toMatchObject({
+      nodeId: 'v1',
+      featherPx: 0,
+      invert: true,
+    });
+  });
+
+  it('replacing a vector mask reuses the same id', () => {
+    nodesWithVectorAndTwoConsumers();
+    const first = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+    const second = useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v1', { ...ref, featherPx: 20 });
+
+    expect(second).toBe(first);
+    expect(useSceneStore.getState().scene.maskRefs?.[first]?.featherPx).toBe(20);
+  });
+
+  it('switching a modifier from baked to vector clears the stale masks entry under the same id', () => {
+    nodesWithVectorAndTwoConsumers();
+    const maskDef = {
+      shape: { kind: 'rect' as const, rect: { x: 0, y: 0, w: 10, h: 10 } },
+      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    };
+    const id = useSceneStore.getState().setModifierMask('a', 'm1', maskDef);
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.masks?.[id]).toBeUndefined();
+    expect(scene.maskRefs?.[id]).toMatchObject({ nodeId: 'v1' });
+  });
+
+  it('removeModifierMask drops a vector ref and prunes the orphaned entry', () => {
+    nodesWithVectorAndTwoConsumers();
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+    useSceneStore.getState().removeModifierMask('a', 'm1');
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.nodes[1].modifiers[0].maskId).toBeUndefined();
+    expect(scene.maskRefs).toEqual({});
+  });
+
+  it('deleting the referenced vector node prunes the ref AND clears the dependent maskId', () => {
+    nodesWithVectorAndTwoConsumers();
+    const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+    useSceneStore.getState().removeNode('v1');
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.maskRefs).toEqual({});
+    const consumer = scene.nodes.find((n) => n.id === 'a');
+    expect(consumer?.modifiers.find((m) => m.id === 'm1')?.maskId).toBeUndefined();
+    expect(maskId).toBeTruthy(); // sanity: the id existed before deletion
+  });
+});
+
+describe('setVectorPaths — cross-node dirty (vector-modifier-masks.md)', () => {
+  it('dirties every OTHER node whose modifier references the edited vector node', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          vectorNode('v1', { dirty: { draft: false, working: false } }),
+          pixelNode('a', { modifiers: [modifier('m1')], dirty: { draft: false, working: false } }),
+          pixelNode('b', { modifiers: [modifier('m2')], dirty: { draft: false, working: false } }),
+          pixelNode('c', { modifiers: [modifier('m3')], dirty: { draft: false, working: false } }),
+        ],
+      },
+    }));
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', {
+      appliedTransform2d: IDENTITY_TRANSFORM_2D,
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    useSceneStore.getState().setModifierVectorMask('b', 'm2', 'v1', {
+      appliedTransform2d: IDENTITY_TRANSFORM_2D,
+      featherPx: 10,
+      expand: 0,
+      invert: true,
+    });
+    // Node 'c' has no reference to v1 — must stay clean.
+    for (const id of ['v1', 'a', 'b']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+
+    useSceneStore.getState().setVectorPaths('v1', [
+      {
+        closed: true,
+        anchors: [{ point: { x: 1, y: 1 } }, { point: { x: 9, y: 1 } }, { point: { x: 5, y: 9 } }],
+      },
+    ]);
+
+    const scene = useSceneStore.getState().scene;
+    const byId = Object.fromEntries(scene.nodes.map((n) => [n.id, n]));
+    expect(byId.v1.dirty).toEqual({ draft: true, working: true });
+    expect(byId.a.dirty).toEqual({ draft: true, working: true });
+    expect(byId.b.dirty).toEqual({ draft: true, working: true });
+    expect(byId.c.dirty).toEqual({ draft: false, working: false });
   });
 });
 

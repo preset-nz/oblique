@@ -62,8 +62,13 @@ export function pathCommandsFor(paths: VectorPath[]): PathCommand[] {
   return paths.flatMap(pathCommandsForOne);
 }
 
-/** Build a `Path2D` from pre-flattened commands — the only DOM-touching step in the split. */
-function buildPath2D(commands: PathCommand[]): Path2D {
+/**
+ * Build a `Path2D` from pre-flattened commands — the only DOM-touching step
+ * in the split. Exported so `maskRasterize.ts`'s vector-reference rasteriser
+ * (vector-modifier-masks.md) can build the same `Path2D` a vector node's own
+ * output raster uses, rather than re-deriving it.
+ */
+export function buildPath2D(commands: PathCommand[]): Path2D {
   const path = new Path2D();
   for (const cmd of commands) {
     switch (cmd.op) {

@@ -291,6 +291,45 @@ describe('dirty-diff correctness on restore', () => {
     expect(restored.dirty).toEqual({ draft: true, working: true });
   });
 
+  it('marks the CONSUMER dirty when undo changes only a referenced vector node’s paths (vector-modifier-masks)', async () => {
+    const consumer = pixelNode('p', {
+      modifiers: [{ id: 'mod-1', type: 'blur', enabled: true, params: {} }],
+    });
+    useSceneStore.setState({ scene: emptyScene([consumer, vectorNode('v')]) });
+    sources.set('p', fakeBitmap());
+    sources.set('v', fakeBitmap());
+    useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', {
+      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    history.clear();
+
+    useSceneStore.getState().setVectorPaths('v', [
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 0, y: 0 } },
+          { point: { x: 20, y: 0 } },
+          { point: { x: 5, y: 10 } },
+        ],
+      },
+    ]);
+    for (const id of ['p', 'v']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+
+    await history.undo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
+    // The consumer's own modifiers/maskId are identical on both sides of the
+    // undo — only the referenced geometry changed — so this is exactly the
+    // resolution-through-maskRefs case cookAffectingChanged must catch.
+    expect(restored?.dirty).toEqual({ draft: true, working: true });
+  });
+
   it('leaves a node clean when only visibility/blend/order changed', async () => {
     useSceneStore.setState({
       scene: emptyScene([pixelNode('a'), pixelNode('b')]),

@@ -1,4 +1,5 @@
-import type { MaskDef, MaskShape, Transform2D } from './types';
+import type { MaskDef, MaskShape, Transform2D, VectorMaskRef, VectorPath } from './types';
+import { buildPath2D, pathCommandsFor } from './vectorRasterize';
 
 /**
  * Mask rasterisation (selection-to-mask.md §Model): a `MaskDef`'s document-
@@ -18,6 +19,14 @@ import type { MaskDef, MaskShape, Transform2D } from './types';
  * here as a flat 2D matrix because `scene/` must not import `canvas/`
  * (depcruise). `canvas/transform2d.test.ts` cross-checks the two stay
  * inverses of each other.
+ *
+ * `rasterizeVectorMask` (vector-modifier-masks.md) is this module's second
+ * rasteriser: same `docToLocalMatrix` + feather/expand/invert pipeline, fed
+ * a `Path2D` built from a VectorNode's live `paths`
+ * (`vectorRasterize.ts`'s `pathCommandsFor`/`buildPath2D`) instead of a
+ * baked `MaskShape` — the coordinate mapping is identical (document space
+ * -> the CONSUMING node's local buffer via its own `appliedTransform2d`
+ * snapshot), only the shape source differs.
  */
 
 /** Column-major 2D affine matrix, `[a, b, c, d, e, f]` as `ctx.setTransform` takes it. */
@@ -158,15 +167,51 @@ function shapePath(shape: MaskShape): Path2D {
 }
 
 /**
- * Rasterise `mask` for a node with source extent `sourceSize`, at the cook
- * target `width`×`height` (= sourceSize × factor). Production-only (needs
- * OffscreenCanvas/Path2D) — cook tests inject a fake via `CookDeps`.
+ * Fill (and, if non-zero, expand/contract-stroke) `path` into a fresh
+ * OffscreenCanvas already `setTransform`'d by the caller, then read back the
+ * alpha channel as a single-channel plane. The one piece of canvas work
+ * `rasterizeMask` (baked shapes) and `rasterizeVectorMask` (live vector
+ * references) share — everything upstream (which transform, which fill
+ * rule) and downstream (feather, invert) differs per caller or is applied
+ * by them directly via `boxBlurMask`/`invertMask`.
  *
  * Expand/contract is a stroke-based offset: expanding strokes the path
  * boundary in fill colour (width 2×expand ≈ dilate by expand px), contracting
  * knocks the boundary band out with destination-out (≈ erode). Simplest
  * honest offset — exact polygon offsetting is not worth its dependency for a
  * feathered selection edge.
+ */
+function fillAndReadPlane(
+  ctx: OffscreenCanvasRenderingContext2D,
+  path: Path2D,
+  fillRule: CanvasFillRule,
+  expand: number,
+  width: number,
+  height: number,
+): Uint8Array {
+  ctx.fillStyle = '#fff';
+  ctx.fill(path, fillRule);
+
+  if (expand !== 0) {
+    ctx.lineWidth = Math.abs(expand) * 2;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#fff';
+    if (expand < 0) ctx.globalCompositeOperation = 'destination-out';
+    ctx.stroke(path);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  const image = ctx.getImageData(0, 0, width, height);
+  const plane = new Uint8Array(width * height);
+  for (let i = 0; i < plane.length; i++) plane[i] = image.data[i * 4 + 3];
+  return plane;
+}
+
+/**
+ * Rasterise `mask` for a node with source extent `sourceSize`, at the cook
+ * target `width`×`height` (= sourceSize × factor). Production-only (needs
+ * OffscreenCanvas/Path2D) — cook tests inject a fake via `CookDeps`.
  */
 export function rasterizeMask(
   mask: MaskDef,
@@ -186,25 +231,63 @@ export function rasterizeMask(
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
 
   const path = shapePath(mask.shape);
-  ctx.fillStyle = '#fff';
-  ctx.fill(path);
-
-  if (mask.expand !== 0) {
-    ctx.lineWidth = Math.abs(mask.expand) * 2;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#fff';
-    if (mask.expand < 0) ctx.globalCompositeOperation = 'destination-out';
-    ctx.stroke(path);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-
-  const image = ctx.getImageData(0, 0, width, height);
-  const plane = new Uint8Array(width * height);
-  for (let i = 0; i < plane.length; i++) plane[i] = image.data[i * 4 + 3];
+  const plane = fillAndReadPlane(ctx, path, 'nonzero', mask.expand, width, height);
 
   const featherRadius = mask.featherPx * factor;
   if (featherRadius >= 0.5) boxBlurMask(plane, width, height, featherRadius);
   if (mask.invert) invertMask(plane);
+  return plane;
+}
+
+/**
+ * Rasterise a *live* vector-referenced mask (vector-modifier-masks.md): the
+ * shape comes from a VectorNode's current `paths`/`fillRule` (authored in
+ * document space), the feather/expand/invert come from the `ref` (the
+ * per-modifier reference, not the node — the story's explicit split, so the
+ * same node can be soft on one modifier and hard-inverted on another).
+ *
+ * `consumerSourceSize`/`ref.appliedTransform2d` map document space into the
+ * CONSUMING node's own local buffer, exactly like `rasterizeMask`'s
+ * `sourceSize`/`mask.appliedTransform2d` — a vector node's paths are
+ * document-space, but the modifier being masked cooks into its own node-
+ * local buffer (node-transform-2d.md: a node's raster is always produced
+ * untransformed at its own origin), so skipping this step would only be
+ * correct by coincidence (consumer's transform2d identity, sourceSize ==
+ * documentSize). Production-only, same shape as `rasterizeMask` — injected
+ * via `CookDeps.rasterizeVectorMask`.
+ *
+ * The referenced VectorNode's OWN `transform2d` is deliberately NOT applied
+ * here (only the consumer's is) — vector nodes have no transform UI yet
+ * (epic README's "Vector content bounds" note), so there's nothing to wire
+ * up today; when they get one, decide then whether the mask should track
+ * it live (that would need `ref` to carry the vector node's own snapshot
+ * too, mirroring the consumer's).
+ */
+export function rasterizeVectorMask(
+  paths: VectorPath[],
+  fillRule: 'nonzero' | 'evenodd',
+  ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'appliedTransform2d'>,
+  consumerSourceSize: [number, number],
+  width: number,
+  height: number,
+  factor: number,
+): Uint8Array {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
+
+  // Document space -> consuming-node-local (via the apply-time transform
+  // snapshot), then node-local -> target px (cook factor) — same mapping
+  // `rasterizeMask` does for a baked shape.
+  const m = docToLocalMatrix(ref.appliedTransform2d, consumerSourceSize[0], consumerSourceSize[1]);
+  ctx.setTransform(factor, 0, 0, factor, 0, 0);
+  ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+
+  const path = buildPath2D(pathCommandsFor(paths));
+  const plane = fillAndReadPlane(ctx, path, fillRule, ref.expand, width, height);
+
+  const featherRadius = ref.featherPx * factor;
+  if (featherRadius >= 0.5) boxBlurMask(plane, width, height, featherRadius);
+  if (ref.invert) invertMask(plane);
   return plane;
 }
