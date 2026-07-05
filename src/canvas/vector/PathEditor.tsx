@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useSceneStore } from '@/scene/store';
 import type { AnchorPoint, Point2D, VectorNode, VectorPath } from '@/scene/types';
+import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
 import { pathCommandsFor } from '@/scene/vectorRasterize';
-import type { Point } from '../transform2d';
+import { localToWorld, type NodeExtent, type Point, worldToLocal } from '../transform2d';
 import {
   type AnchorMode,
   anchorMode,
@@ -14,6 +15,7 @@ import {
 } from './pathEdit';
 import { usePathEditStateStore } from './pathEditState';
 import { commandsToPathD } from './svgPath';
+import { localDistanceThreshold, mapVectorPaths } from './vectorTransform';
 
 /**
  * Direct-selection path editing overlay (features/06-vector-nodes/
@@ -34,6 +36,18 @@ import { commandsToPathD } from './svgPath';
  * Escape mid-drag discards it for free — no undo step, no recook, matching
  * `TransformBox`'s `dragRef` pattern for "what's dragging right now" but
  * using React state (not a ref) because the preview must re-render.
+ *
+ * `node.paths` are always stored in the node's own untransformed/local space
+ * (same space `pathEdit.ts`'s geometry helpers operate in). Rendering maps
+ * every point through `localToWorld` (`transform2d.ts`) so the overlay sits
+ * on the painted (transformed) shape rather than its raw path coordinates
+ * (bug fix, 2026-07-05) — points are mapped individually rather than
+ * wrapping the SVG in a single `<g transform>` matrix, because a `<g>`
+ * matrix would also scale stroke widths and anchor hit-radii non-uniformly
+ * under a non-uniform or rotated `scaleX`/`scaleY` (turning circular anchors
+ * into ellipses). Pointer input goes the other way: every doc-space point
+ * from `toDoc` is mapped back to local space via `worldToLocal` before it's
+ * compared against/written into `node.paths`.
  */
 
 const ANCHOR_SCREEN_SIZE = 8; // corner square: full side length in screen px
@@ -49,6 +63,8 @@ export interface PathEditorProps {
   viewScale: number;
   /** Converts a pointer event's client coordinates to document space — shares the canvas's own view transform (same prop shape as `TransformBox`). */
   toDoc: (clientX: number, clientY: number) => Point;
+  /** The node's raster extent for `transform2d` mapping — `scene.documentSize`, same convention as `composite.ts::destSizeFor`'s vector-node case (see `Viewport.tsx`). */
+  extent: NodeExtent;
 }
 
 function updatePaths(
@@ -67,7 +83,7 @@ function updateAnchor(
   return { ...path, anchors: path.anchors.map((a, i) => (i === anchorIndex ? fn(a) : a)) };
 }
 
-export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
+export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) {
   const setVectorPaths = useSceneStore((s) => s.setVectorPaths);
   const activeAnchor = usePathEditStateStore((s) => s.activeAnchor);
   const setActiveAnchor = usePathEditStateStore((s) => s.setActiveAnchor);
@@ -75,7 +91,13 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
   // Live preview during a drag — `null` when nothing is being dragged, in
   // which case the committed `node.paths` is what's drawn.
   const [dragPaths, setDragPaths] = useState<VectorPath[] | null>(null);
-  const displayPaths = dragPaths ?? node.paths;
+  const displayPaths = dragPaths ?? node.paths; // local/path space — source of truth for edits
+
+  const transform2d = node.transform2d ?? IDENTITY_TRANSFORM_2D;
+  const toWorld = (p: Point) => localToWorld(p, transform2d, extent);
+  const toLocal = (p: Point) => worldToLocal(p, transform2d, extent);
+  // World/doc-space paths — render-only; every edit still reads/writes `displayPaths`/`node.paths`.
+  const worldPaths = mapVectorPaths(displayPaths, toWorld);
 
   const invScale = 1 / Math.max(viewScale, 0.0001);
   const strokeWidth = invScale;
@@ -91,7 +113,10 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
     setActiveAnchor({ pathIndex, anchorIndex });
 
     const basePaths = node.paths;
+    // The click-vs-drag threshold stays in doc/world space — it's a physical
+    // pointer-movement gate, unrelated to the node's local path space.
     const startDoc = toDoc(e.clientX, e.clientY);
+    const startLocal = toLocal(startDoc);
     let moved = false;
     let latest = basePaths;
 
@@ -101,7 +126,12 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
       const dy = doc.y - startDoc.y;
       if (!moved && dx * dx + dy * dy <= clickDragThresholdDoc * clickDragThresholdDoc) return;
       moved = true;
-      const delta: Point2D = { x: dx, y: dy };
+      // Anchors live in local/path space, so the applied delta must too —
+      // computed by mapping both endpoints back through `worldToLocal`
+      // rather than scaling the doc-space delta, so it's exact under
+      // rotation as well as (non-uniform) scale.
+      const local = toLocal(doc);
+      const delta: Point2D = { x: local.x - startLocal.x, y: local.y - startLocal.y };
       latest = updatePaths(basePaths, pathIndex, (p) =>
         updateAnchor(p, anchorIndex, (a) => moveAnchor(a, delta)),
       );
@@ -151,8 +181,9 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
 
     const onMove = (ev: PointerEvent) => {
       const doc = toDoc(ev.clientX, ev.clientY);
+      const local = toLocal(doc);
       latest = updatePaths(basePaths, pathIndex, (p) =>
-        updateAnchor(p, anchorIndex, (a) => dragHandle(a, side, doc, mode)),
+        updateAnchor(p, anchorIndex, (a) => dragHandle(a, side, local, mode)),
       );
       setDragPaths(latest);
     };
@@ -179,8 +210,10 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
     e.stopPropagation();
     e.preventDefault();
     const doc = toDoc(e.clientX, e.clientY);
-    const hit = closestPointOnPaths(node.paths, doc);
-    if (!hit || hit.distance > segmentClickThresholdDoc) return;
+    const local = toLocal(doc);
+    const hit = closestPointOnPaths(node.paths, local);
+    const localThreshold = localDistanceThreshold(segmentClickThresholdDoc, transform2d);
+    if (!hit || hit.distance > localThreshold) return;
     const next = insertAnchorAt(node.paths, hit);
     setVectorPaths(node.id, next);
   }
@@ -192,7 +225,7 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
           filled interior fall through to the canvas's own move-drag
           hit-test underneath. */}
       <path
-        d={commandsToPathD(pathCommandsFor(displayPaths))}
+        d={commandsToPathD(pathCommandsFor(worldPaths))}
         fill="none"
         stroke="transparent"
         strokeWidth={SEGMENT_CLICK_SCREEN_PX * 2 * invScale}
@@ -200,17 +233,24 @@ export function PathEditor({ node, viewScale, toDoc }: PathEditorProps) {
         onPointerDown={onSegmentPointerDown}
       />
       <path
-        d={commandsToPathD(pathCommandsFor(displayPaths))}
+        d={commandsToPathD(pathCommandsFor(worldPaths))}
         fill="none"
         stroke="#38bdf8"
         strokeWidth={strokeWidth}
         style={{ pointerEvents: 'none' }}
       />
       {displayPaths.map((path, pathIndex) =>
-        path.anchors.map((anchor, anchorIndex) => {
-          const mode = anchorMode(anchor);
+        path.anchors.map((localAnchor, anchorIndex) => {
+          // Mode is derived from the LOCAL anchor (matches how `cycleAnchorMode`
+          // etc. operate) — collinearity/mirror-ratio aren't invariant under a
+          // non-uniform scale, so deriving it post-transform could disagree
+          // with what an edit action actually does.
+          const mode = anchorMode(localAnchor);
           const isSquare = mode === 'corner';
           const key = `${pathIndex}-${anchorIndex}`;
+          // Rendered position comes from the WORLD-mapped anchor — same
+          // index, transform2d-mapped point/handles.
+          const anchor = worldPaths[pathIndex].anchors[anchorIndex];
           return (
             <g key={key}>
               {anchor.handleOut && (

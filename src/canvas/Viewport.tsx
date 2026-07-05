@@ -727,7 +727,12 @@ export function Viewport() {
           {tool === 'move' &&
             selectedNode &&
             (isVectorNode(selectedNode) ? (
-              <PathEditor node={selectedNode} viewScale={view.scale} toDoc={toDoc} />
+              <PathEditor
+                node={selectedNode}
+                viewScale={view.scale}
+                toDoc={toDoc}
+                extent={{ w: documentSize[0], h: documentSize[1] }}
+              />
             ) : (
               selectedNode.output === 'image' && (
                 <TransformBox
