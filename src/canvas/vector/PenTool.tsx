@@ -1,5 +1,6 @@
 import { pathCommandsFor } from '@/scene/vectorRasterize';
 import { usePenStateStore } from './penState';
+import { commandsToPathD } from './svgPath';
 
 /**
  * Live preview overlay for the in-progress pen path
@@ -23,23 +24,6 @@ const FIRST_ANCHOR_SCREEN_RADIUS = 6;
 
 export interface PenToolProps {
   viewScale: number;
-}
-
-function commandToPathD(cmd: ReturnType<typeof pathCommandsFor>[number]): string {
-  switch (cmd.op) {
-    case 'moveTo':
-      return `M${cmd.to.x},${cmd.to.y}`;
-    case 'lineTo':
-      return `L${cmd.to.x},${cmd.to.y}`;
-    case 'bezierCurveTo':
-      return `C${cmd.c1.x},${cmd.c1.y} ${cmd.c2.x},${cmd.c2.y} ${cmd.to.x},${cmd.to.y}`;
-    case 'closePath':
-      return 'Z';
-  }
-}
-
-function commandsToPathD(commands: ReturnType<typeof pathCommandsFor>): string {
-  return commands.map(commandToPathD).join(' ');
 }
 
 export function PenTool({ viewScale }: PenToolProps) {

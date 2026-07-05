@@ -3,7 +3,7 @@ import * as cache from './cache';
 import * as history from './history';
 import * as sources from './sources';
 import { useSceneStore } from './store';
-import type { PixelNode, Scene, SceneNode } from './types';
+import type { PixelNode, Scene, SceneNode, VectorNode, VectorPath } from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -32,6 +32,31 @@ function emptyScene(nodes: SceneNode[] = []): Scene {
     defaultCameraId: null,
     resolution: 'working',
     documentSize: [0, 0],
+  };
+}
+
+function vectorNode(id: string, overrides: Partial<VectorNode> = {}): VectorNode {
+  const paths: VectorPath[] = [
+    {
+      closed: true,
+      anchors: [{ point: { x: 0, y: 0 } }, { point: { x: 10, y: 0 } }, { point: { x: 5, y: 10 } }],
+    },
+  ];
+  return {
+    id,
+    label: 'Vector',
+    type: 'vector',
+    state: 'active',
+    output: 'image',
+    cameraId: null,
+    modifiers: [],
+    visible: true,
+    blendMode: 'normal',
+    opacity: 1,
+    dirty: { draft: false, working: false },
+    paths,
+    fillRule: 'nonzero',
+    ...overrides,
   };
 }
 
@@ -237,6 +262,33 @@ describe('dirty-diff correctness on restore', () => {
 
     expect(useSceneStore.getState().scene.nodes[0].opacity).toBe(1);
     expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: false, working: false });
+  });
+
+  it('marks a vector node dirty when its paths changed between old and restored (undo of a path edit)', async () => {
+    useSceneStore.setState({ scene: emptyScene([vectorNode('v')]) });
+    sources.set('v', fakeBitmap());
+    history.clear();
+
+    useSceneStore.getState().setVectorPaths('v', [
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 0, y: 0 } },
+          { point: { x: 20, y: 0 } },
+          { point: { x: 5, y: 10 } },
+        ],
+      },
+    ]);
+    // setVectorPaths already dirties per the store's own rule; clear it to
+    // isolate what undo computes independently, same as the modifiers test.
+    useSceneStore.getState().clearDirty('v', 'draft');
+    useSceneStore.getState().clearDirty('v', 'working');
+
+    await history.undo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes[0] as VectorNode;
+    expect(restored.paths[0].anchors[1].point).toEqual({ x: 10, y: 0 });
+    expect(restored.dirty).toEqual({ draft: true, working: true });
   });
 
   it('leaves a node clean when only visibility/blend/order changed', async () => {

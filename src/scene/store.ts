@@ -8,6 +8,7 @@ import type {
   SceneNode,
   Transform2D,
   VectorNode,
+  VectorPath,
 } from './types';
 
 function makeEmptyScene(): Scene {
@@ -47,6 +48,18 @@ interface SceneState {
    * `addPixelNode` so the scheduler cooks its first raster.
    */
   addVectorNode: (partial: Pick<VectorNode, 'paths' | 'fillRule'> & Partial<VectorNode>) => string;
+
+  /**
+   * Replaces a vector node's `paths` wholesale (path-editing.md) — one
+   * coarse action for the whole story's editing surface: drag an anchor or
+   * handle, cycle an anchor's mode, insert an anchor on a segment, delete an
+   * anchor. Each completes in a single call on pointerup/click (never
+   * per-pointermove), so the always-on history subscription captures one
+   * undo step per edit with no `beginTransaction` needed. Dirties the node
+   * (raster changes -> recook, dirty rule 1). No-op on a non-vector node id.
+   */
+  setVectorPaths: (nodeId: string, paths: VectorPath[]) => void;
+
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
@@ -157,6 +170,17 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     };
     set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
     return id;
+  },
+
+  setVectorPaths: (nodeId, paths) => {
+    set((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: updateNode(s.scene.nodes, nodeId, (n) =>
+          n.type === 'vector' ? { ...(n as VectorNode), paths, dirty: dirtyBoth() } : n,
+        ),
+      },
+    }));
   },
 
   removeNode: (id) => {

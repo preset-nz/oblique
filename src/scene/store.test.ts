@@ -95,6 +95,41 @@ describe('addVectorNode', () => {
   });
 });
 
+describe('setVectorPaths', () => {
+  it('replaces paths and dirties the node at both levels', () => {
+    const id = useSceneStore
+      .getState()
+      .addVectorNode({ paths: trianglePaths, fillRule: 'nonzero' });
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+
+    const nextPaths: VectorPath[] = [
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 0, y: 0 } },
+          { point: { x: 20, y: 0 } },
+          { point: { x: 5, y: 10 } },
+        ],
+      },
+    ];
+    useSceneStore.getState().setVectorPaths(id, nextPaths);
+
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node).toMatchObject({ paths: nextPaths });
+    expect(node.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('is a no-op on a non-vector node id', () => {
+    const id = useSceneStore
+      .getState()
+      .addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
+    useSceneStore.getState().setVectorPaths(id, trianglePaths);
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node).not.toHaveProperty('paths');
+  });
+});
+
 describe('removeNode', () => {
   it('removes the node by id', () => {
     const id = useSceneStore

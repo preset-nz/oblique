@@ -2,7 +2,13 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import * as cache from '@/scene/cache';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
-import { isPixelNode, type PixelNode, type Scene, type SceneNode } from '@/scene/types';
+import {
+  isPixelNode,
+  isVectorNode,
+  type PixelNode,
+  type Scene,
+  type SceneNode,
+} from '@/scene/types';
 import { sceneChangedIgnoringDirty } from './sceneDiff';
 
 /**
@@ -131,8 +137,12 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
  * Cook-affecting fields only (dirty rule 4): modifiers (maskId changes ride
  * along via the modifiers JSON), the mask DEFINITIONS those modifiers
  * reference (same maskId, edited geometry/feather — invisible to the
- * modifiers array, so compared explicitly), and (pixel nodes)
- * sourcePath/sourceSize.
+ * modifiers array, so compared explicitly), (pixel nodes)
+ * sourcePath/sourceSize, and (vector nodes) paths/fillRule — a vector node's
+ * raster comes entirely from those two fields (vectorRasterize.ts), so an
+ * undo/redo across a path-editing.md edit must register here or
+ * `restoreScene` leaves the node clean while a stale cached bitmap (from
+ * before/after the edit it's undoing) keeps painting.
  */
 function cookAffectingChanged(
   a: SceneNode,
@@ -146,7 +156,10 @@ function cookAffectingChanged(
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
   const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
   const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
-  return JSON.stringify(pa) !== JSON.stringify(pb);
+  if (JSON.stringify(pa) !== JSON.stringify(pb)) return true;
+  const va = isVectorNode(a) ? { paths: a.paths, fillRule: a.fillRule } : undefined;
+  const vb = isVectorNode(b) ? { paths: b.paths, fillRule: b.fillRule } : undefined;
+  return JSON.stringify(va) !== JSON.stringify(vb);
 }
 
 /**

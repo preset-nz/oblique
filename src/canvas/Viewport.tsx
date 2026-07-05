@@ -7,7 +7,7 @@ import { beginTransaction, endTransaction } from '@/scene/history';
 import { useMarqueeStateStore } from '@/scene/marquee';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
-import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
+import { IDENTITY_TRANSFORM_2D, isVectorNode } from '@/scene/types';
 import { topmostNodeAt } from './hitTest';
 import { EllipseMarquee } from './marquees/EllipseMarquee';
 import { LassoMarquee } from './marquees/LassoMarquee';
@@ -32,7 +32,10 @@ import { TransformBox } from './TransformBox';
 import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
 import { usePanZoom } from './usePanZoom';
+import { PathEditor } from './vector/PathEditor';
 import { PenTool } from './vector/PenTool';
+import { deleteAnchor } from './vector/pathEdit';
+import { usePathEditStateStore } from './vector/pathEditState';
 import { MIN_ANCHORS_TO_CLOSE, usePenStateStore } from './vector/penState';
 import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
 
@@ -102,9 +105,25 @@ export function Viewport() {
     if (prevToolRef.current !== tool) {
       clearMarquee();
       cancelPen();
+      // Same "no orphaned overlay state" rule for path-editing.md's active
+      // anchor — a tool switch away from move (or to a different node's
+      // move-select) shouldn't leave a stale anchor selection behind.
+      usePathEditStateStore.getState().clear();
     }
     prevToolRef.current = tool;
   }, [tool, clearMarquee, cancelPen]);
+
+  // Selecting a different node invalidates any active anchor from the
+  // PREVIOUS selection (its path/anchor indices belong to a different
+  // node's `paths` array) — clear on every selection change, not just tool
+  // switches.
+  const prevSelectedNodeIdRef = useRef(selectedNodeId);
+  useEffect(() => {
+    if (prevSelectedNodeIdRef.current !== selectedNodeId) {
+      usePathEditStateStore.getState().clear();
+    }
+    prevSelectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId]);
 
   /** Client coords -> document space, sharing the same view transform as canvas paint. */
   const toDoc = useCallback((clientX: number, clientY: number): Point => {
@@ -142,7 +161,20 @@ export function Viewport() {
       // path (pen-tool.md — "no scene mutation"). All three are UI-only
       // state — none of them ever touches the scene store, so none can
       // create an undo step.
+      //
+      // path-editing.md's active anchor takes precedence: Escape deselects
+      // the anchor FIRST (one step back, same as a marquee's own escape
+      // hierarchy would be if it had one), only falling through to
+      // node-deselect once no anchor is active. An in-flight anchor/handle
+      // drag cancels itself independently — `PathEditor.tsx` registers its
+      // own transient Escape listener for the duration of a drag, which
+      // fires regardless of this handler's own effects (neither touches the
+      // other's state).
       if (e.key === 'Escape' && !isEditableTarget) {
+        if (usePathEditStateStore.getState().activeAnchor) {
+          usePathEditStateStore.getState().clear();
+          return;
+        }
         clearSelection();
         clearMarquee();
         usePenStateStore.getState().cancel();
@@ -160,23 +192,43 @@ export function Viewport() {
         return;
       }
 
-      // Delete/Backspace clears the active marquee (marquees.md — "no
-      // orphaned overlay state"). Node deletion isn't bound to a keyboard
-      // shortcut yet (`scene/deleteNode.ts` is menu/panel-driven only), so
-      // this can't double-fire against it. Reads the store directly
-      // (rather than closing over the `marquee` render value) so this
-      // effect doesn't need `marquee` in its dependency array — that value
-      // changes on every pointermove while drawing/moving a marquee, and
-      // re-running this whole effect mid-drag would discard the local
-      // drag-state closures below.
-      if (
-        (e.key === 'Delete' || e.key === 'Backspace') &&
-        !isEditableTarget &&
-        useMarqueeStateStore.getState().marquee
-      ) {
-        e.preventDefault();
-        clearMarquee();
-        return;
+      // Delete/Backspace removes the active anchor (path-editing.md), or
+      // failing that clears the active marquee (marquees.md — "no orphaned
+      // overlay state"). Node deletion outside these two isn't bound to a
+      // keyboard shortcut yet (`scene/deleteNode.ts` is menu/panel-driven
+      // only). Reads stores directly (rather than closing over render
+      // values) so this effect doesn't need `marquee`/`selection` churn in
+      // its dependency array — re-running this whole effect mid-drag would
+      // discard the local drag-state closures below.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isEditableTarget) {
+        const activeAnchor = usePathEditStateStore.getState().activeAnchor;
+        const currentSelection = useSelectionStore.getState().selection;
+        if (activeAnchor && currentSelection.kind === 'node') {
+          e.preventDefault();
+          const node = useSceneStore
+            .getState()
+            .scene.nodes.find((n) => n.id === currentSelection.nodeId);
+          usePathEditStateStore.getState().clear();
+          if (node && isVectorNode(node)) {
+            const result = deleteAnchor(
+              node.paths,
+              activeAnchor.pathIndex,
+              activeAnchor.anchorIndex,
+            );
+            if (result === null) {
+              useSceneStore.getState().removeNode(node.id);
+              clearSelection();
+            } else {
+              useSceneStore.getState().setVectorPaths(node.id, result);
+            }
+          }
+          return;
+        }
+        if (useMarqueeStateStore.getState().marquee) {
+          e.preventDefault();
+          clearMarquee();
+          return;
+        }
       }
 
       // Arrow-key nudge: 1 px, Shift = 10 px (node-transform-2d.md §Tools).
@@ -649,9 +701,9 @@ export function Viewport() {
         role="presentation"
         aria-hidden="true"
       >
-        {/* Document-space overlay group: TransformBox (move tool only — see
-            below) and the active marquee (Epic 05), siblings here per the
-            story's "Components touched" line. */}
+        {/* Document-space overlay group: TransformBox/PathEditor (move tool
+            only — see below) and the active marquee (Epic 05), siblings
+            here per the story's "Components touched" line. */}
         <g transform={overlayMatrix}>
           {/* Gated to the move tool: under a marquee tool the marquee's own
               handles occupy this same overlay space, and TransformBox's 8
@@ -660,18 +712,35 @@ export function Viewport() {
               own doc comment notes the "always live" interim); Viewport's
               own move-drag gesture above is already tool-gated the same
               way. TransformBox itself is unchanged — only when Viewport
-              chooses to render it changes. */}
-          {tool === 'move' && selectedNode && selectedNode.output === 'image' && (
-            <TransformBox
-              node={selectedNode}
-              extent={{
-                w: destSizeFor(selectedNode, 'baked', documentSize)[0],
-                h: destSizeFor(selectedNode, 'baked', documentSize)[1],
-              }}
-              viewScale={view.scale}
-              toDoc={toDoc}
-            />
-          )}
+              chooses to render it changes.
+
+              A selected VECTOR node gets `PathEditor` INSTEAD of
+              TransformBox (path-editing.md's "honest v1" call, flagged in
+              the story report): the two overlays would fight for the same
+              click targets (8 scale/rotate handles vs. per-anchor editing),
+              so direct-selection path editing replaces the transform box
+              entirely for vector nodes, regardless of `output`
+              ('image' or 'mask' — a mask-output vector is still editable).
+              Plain body drag-to-move keeps working underneath either way —
+              that's Viewport's own pointerdown hit-test above, independent
+              of which overlay is mounted. */}
+          {tool === 'move' &&
+            selectedNode &&
+            (isVectorNode(selectedNode) ? (
+              <PathEditor node={selectedNode} viewScale={view.scale} toDoc={toDoc} />
+            ) : (
+              selectedNode.output === 'image' && (
+                <TransformBox
+                  node={selectedNode}
+                  extent={{
+                    w: destSizeFor(selectedNode, 'baked', documentSize)[0],
+                    h: destSizeFor(selectedNode, 'baked', documentSize)[1],
+                  }}
+                  viewScale={view.scale}
+                  toDoc={toDoc}
+                />
+              )
+            ))}
           {marquee?.kind === 'rect' && (
             <RectMarquee rect={marquee.rect} viewScale={view.scale} toDoc={toDoc} />
           )}
