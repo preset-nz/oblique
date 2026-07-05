@@ -27,8 +27,12 @@ export function StackPanel() {
   const selectNode = useSelectionStore((s) => s.selectNode);
 
   useEffect(() => {
-    const stillValid = selection.kind === 'node' && nodes.some((n) => n.id === selection.nodeId);
-    if (stillValid) return;
+    // Only repair a selection that points at a DELETED node (fall back to
+    // the top of the stack). `kind: 'none'` is a legitimate state — Escape
+    // deselects and must stay deselected (dogfood 2026-07-05); never
+    // auto-select out of it.
+    if (selection.kind !== 'node') return;
+    if (nodes.some((n) => n.id === selection.nodeId)) return;
     if (nodes[0]) selectNode(nodes[0].id);
   }, [nodes, selection, selectNode]);
 
@@ -37,7 +41,18 @@ export function StackPanel() {
   }
 
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
-  const node = nodes.find((n) => n.id === selectedNodeId) ?? nodes[0];
+  const node = nodes.find((n) => n.id === selectedNodeId);
+
+  if (!node) {
+    return (
+      <div className="flex flex-col gap-3 text-sm text-neutral-200">
+        <LayerList selectedNodeId={null} onSelectNode={selectNode} />
+        <div className="border-t border-neutral-800 pt-3 text-xs text-neutral-500">
+          No layer selected.
+        </div>
+      </div>
+    );
+  }
 
   const displayModifiers = toDisplayOrder(node.modifiers);
 
