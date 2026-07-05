@@ -111,11 +111,10 @@ function bottomUpOrder(nodes: SceneNode[]): SceneNode[] {
 
 /**
  * Split the bottom-up node order into mask-scoped spans. A span ends (and
- * the next begins) at every `output: 'mask'` node. Mask clipping itself is
- * Epic 06's job — today there are never any mask nodes, so this always
- * returns one span (the whole stack) — but the walk stays span-shaped so
- * the mask hook drops in without restructuring (architecture.md §Compositor,
- * "Mask scoping").
+ * the next begins) at every `output: 'mask'` node — the mask node is the
+ * *last* element of the span it closes (mask-span-scoping.md). Implicit
+ * boundaries only: the next mask node walking bottom-up, or the stack
+ * bottom (a trailing non-mask-terminated span, or an empty stack).
  */
 export function splitIntoSpans(nodes: SceneNode[]): SceneNode[][] {
   const ordered = bottomUpOrder(nodes);
@@ -182,14 +181,19 @@ function withNodeTransform(
   ctx.restore();
 }
 
-function drawSpan(
+/**
+ * Draws a plain (unmasked) run of nodes straight onto `ctx` — the body of
+ * the old single-pass walk, unchanged; a masked span reuses it against a
+ * scratch context instead of the main one (see `drawMaskedSpan`).
+ */
+function drawSpanContent(
   ctx: Composite2DContext,
-  span: SceneNode[],
+  content: SceneNode[],
   level: Resolution,
   scene: Scene,
   getCache: CacheLookup,
 ): void {
-  for (const node of span) {
+  for (const node of content) {
     if (!node.visible || node.output !== 'image') continue;
 
     const [destW, destH] = destSizeFor(node, level, scene.documentSize);
@@ -213,6 +217,101 @@ function drawSpan(
       ctx.drawImage(best.bitmap, 0, 0, destW, destH);
     });
   }
+}
+
+/**
+ * A scratch surface to composite one masked span into before clipping it —
+ * isolated from the main canvas so `destination-in` only ever erases *this
+ * span's* pixels, never content already painted by an earlier (lower) span.
+ * `canvas` is whatever `ctx` was carved from — passed straight to the main
+ * context's `drawImage` once the span is clipped.
+ */
+export interface ScratchCanvas {
+  ctx: Composite2DContext;
+  canvas: CanvasImageSource;
+}
+
+export type CreateScratch = (width: number, height: number) => ScratchCanvas;
+
+function realCreateScratch(width: number, height: number): ScratchCanvas {
+  const canvas = new OffscreenCanvas(Math.max(1, width), Math.max(1, height));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
+  return { ctx, canvas };
+}
+
+/**
+ * Composites `content` (everything since the previous mask boundary) into a
+ * scratch canvas, clips it to `maskNode`'s own cooked raster via
+ * `destination-in`, then draws the clipped result onto the main `ctx`
+ * (architecture.md §Compositor, "Mask scoping"). `maskNode` itself is never
+ * drawn as content — its `blendMode`/`opacity` are ignored (mask-span-
+ * scoping.md) and its raster only ever supplies the clip's alpha.
+ *
+ * Edge cases named in the story's acceptance:
+ * - `content` empty (mask sits at the stack bottom, nothing below it since
+ *   the previous boundary) — a no-op, not an error.
+ * - `maskNode.visible === false` — a hidden mask stops clipping, same as any
+ *   other hidden node stops contributing; its span draws unclipped.
+ * - `maskNode`'s own raster not yet cached at/below `level` — still cooking;
+ *   the span draws nothing rather than showing unclipped content that's
+ *   about to snap into a clipped shape (draws-nothing-rather-than-guesses,
+ *   same posture as `pickBestAvailable`'s callers elsewhere).
+ */
+function drawMaskedSpan(
+  ctx: Composite2DContext,
+  content: SceneNode[],
+  maskNode: SceneNode,
+  level: Resolution,
+  scene: Scene,
+  getCache: CacheLookup,
+  createScratch: CreateScratch,
+): void {
+  if (content.length === 0) return; // mask at the stack bottom — nothing to clip
+
+  if (!maskNode.visible) {
+    drawSpanContent(ctx, content, level, scene, getCache);
+    return;
+  }
+
+  const maskBest = pickBestAvailable(maskNode.id, level, getCache);
+  if (!maskBest) return; // mask still cooking — draw nothing rather than show it unclipped
+
+  const [docW, docH] = scene.documentSize;
+  const factor = resolutionFactorFor(level);
+  const scratchW = docW * factor;
+  const scratchH = docH * factor;
+  const scratch = createScratch(scratchW, scratchH);
+  scratch.ctx.imageSmoothingEnabled = true;
+
+  drawSpanContent(scratch.ctx, content, level, scene, getCache);
+
+  const [maskDestW, maskDestH] = destSizeFor(maskNode, level, scene.documentSize);
+  withNodeTransform(scratch.ctx, maskNode, maskDestW, maskDestH, level, () => {
+    scratch.ctx.globalAlpha = 1;
+    scratch.ctx.globalCompositeOperation = 'destination-in';
+    scratch.ctx.drawImage(maskBest.bitmap, 0, 0, maskDestW, maskDestH);
+  });
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(scratch.canvas, 0, 0, scratchW, scratchH);
+}
+
+function drawSpan(
+  ctx: Composite2DContext,
+  span: SceneNode[],
+  level: Resolution,
+  scene: Scene,
+  getCache: CacheLookup,
+  createScratch: CreateScratch,
+): void {
+  const last = span[span.length - 1];
+  if (last && last.output === 'mask') {
+    drawMaskedSpan(ctx, span.slice(0, -1), last, level, scene, getCache, createScratch);
+    return;
+  }
+  drawSpanContent(ctx, span, level, scene, getCache);
 }
 
 let compositeCallCount = 0;
@@ -239,13 +338,17 @@ export function resetCompositeCallCount(): void {
  * `getCache` defaults to the real scene/cache module; export passes a
  * one-shot lookup over its own local bitmap map instead (see
  * project/export.ts) so this exact routine can run at full resolution
- * without ever writing the shared `baked` cache slot.
+ * without ever writing the shared `baked` cache slot. `createScratch`
+ * defaults to a real `OffscreenCanvas` factory; only masked spans ever call
+ * it, so the common (no-mask) path never touches a scratch canvas at all —
+ * tests without `output: 'mask'` nodes never need to stub it.
  */
 export function compositeScene(
   ctx: Composite2DContext,
   scene: Scene,
   level: Resolution,
   getCache: CacheLookup = cache.get,
+  createScratch: CreateScratch = realCreateScratch,
 ): void {
   compositeCallCount++;
 
@@ -255,7 +358,7 @@ export function compositeScene(
   ctx.imageSmoothingEnabled = true;
 
   for (const span of splitIntoSpans(scene.nodes)) {
-    drawSpan(ctx, span, level, scene, getCache);
+    drawSpan(ctx, span, level, scene, getCache, createScratch);
   }
 
   ctx.globalAlpha = 1;

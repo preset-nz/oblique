@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Trash2, VenetianMask } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import {
   Select,
@@ -15,6 +15,7 @@ import { deleteNode } from '@/scene/deleteNode';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode } from '@/scene/types';
+import { isVectorNode } from '@/scene/types';
 
 /**
  * Minimal layer list (03-compositor "Minimal layer list in the Stack tab").
@@ -136,12 +137,46 @@ function LayerRow({
         className="flex flex-1 items-center gap-2 text-left min-w-0"
       >
         <Thumbnail node={node} />
+        {/* Mask-span affordance (mask-span-scoping.md): a mask-output node
+            clips everything below it since the previous mask node — this
+            icon is the only thing that makes that span structure readable
+            in the list. */}
+        {node.output === 'mask' && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
+            </TooltipTrigger>
+            <TooltipContent>Mask — clips the span below it</TooltipContent>
+          </Tooltip>
+        )}
         <span className="min-w-0 truncate flex-1 text-xs" title={node.label}>
           {node.label}
         </span>
       </button>
       <div className="flex flex-1 flex-col gap-1 min-w-0">
         <div className="flex items-center gap-2">
+          {isVectorNode(node) && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setNodeProp(node.id, {
+                      output: node.output === 'mask' ? 'image' : 'mask',
+                    });
+                  }}
+                  aria-label={node.output === 'mask' ? 'Use as image' : 'Use as mask'}
+                  className={node.output === 'mask' ? 'text-amber-400' : 'text-neutral-500'}
+                >
+                  <VenetianMask size={14} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {node.output === 'mask' ? 'Use as image' : 'Use as mask'}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <button

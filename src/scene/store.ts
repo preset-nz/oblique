@@ -3,6 +3,7 @@ import type {
   BlendMode,
   MaskDef,
   Modifier,
+  NodeOutput,
   PixelNode,
   Scene,
   SceneNode,
@@ -31,6 +32,12 @@ export interface NodePropPatch {
   blendMode?: BlendMode;
   opacity?: number;
   label?: string;
+  /**
+   * Compositing semantics only — the raster is the same either way
+   * (mask-span-scoping.md); no dirty flag, per dirty rule 4, same posture
+   * as `visible`/`blendMode`/`opacity`.
+   */
+  output?: NodeOutput;
 }
 
 interface SceneState {
@@ -204,7 +211,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   },
 
   setNodeProp: (id, patch) => {
-    // Compositing-only mutation (visible/blendMode/opacity/label) — no
+    // Compositing-only mutation (visible/blendMode/opacity/label/output) — no
     // dirty flag per dirty rule 4.
     set((s) => ({
       scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, ...patch })) },

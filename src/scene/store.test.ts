@@ -189,6 +189,16 @@ describe('setNodeProp', () => {
       working: false,
     });
   });
+
+  it('toggles output image<->mask without dirtying (mask-span-scoping.md)', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { dirty: { draft: false, working: false } })] },
+    }));
+    useSceneStore.getState().setNodeProp('a', { output: 'mask' });
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node.output).toBe('mask');
+    expect(node.dirty).toEqual({ draft: false, working: false });
+  });
 });
 
 describe('setNodeTransform', () => {

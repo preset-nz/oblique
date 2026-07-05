@@ -4,6 +4,7 @@ import * as sources from '@/scene/sources';
 import type { PixelNode, Scene, SceneNode } from '@/scene/types';
 import {
   type Composite2DContext,
+  type CreateScratch,
   compositeScene,
   destSizeFor,
   getCompositeCallCount,
@@ -79,6 +80,27 @@ function fakeCtx(): Composite2DContext & {
     stroke: vi.fn(),
   };
   return ctx as unknown as Composite2DContext & { calls: typeof calls };
+}
+
+/**
+ * A recording scratch factory — the mask-scoping tests' stand-in for
+ * `realCreateScratch` (which needs a real `OffscreenCanvas`, unavailable in
+ * this node test env, same reason `rasterizeVector`/`rasterizeMask` are
+ * never exercised directly here). Every scratch it hands out is just another
+ * `fakeCtx()`, tagged with the (w, h) it was asked for so a test can find
+ * "the scratch used for this span" among however many spans got masked.
+ */
+function createFakeScratch(): {
+  createScratch: CreateScratch;
+  scratches: { width: number; height: number; ctx: ReturnType<typeof fakeCtx> }[];
+} {
+  const scratches: { width: number; height: number; ctx: ReturnType<typeof fakeCtx> }[] = [];
+  const createScratch: CreateScratch = (width, height) => {
+    const ctx = fakeCtx();
+    scratches.push({ width, height, ctx });
+    return { ctx, canvas: ctx as unknown as CanvasImageSource };
+  };
+  return { createScratch, scratches };
 }
 
 beforeEach(() => {
@@ -175,19 +197,31 @@ describe('compositeScene', () => {
     expect(ctx.drawImage).toHaveBeenNthCalledWith(2, tallBitmap, 0, 0, 50, 200);
   });
 
-  it('skips invisible nodes and non-image outputs', () => {
+  it('skips invisible nodes', () => {
+    // No mask node here — a mask-terminated span is covered under "mask
+    // scoping" below, where the scratch/clip machinery needs a stubbed
+    // createScratch (the default reaches for a real OffscreenCanvas).
     const hidden = makeNode('hidden', { visible: false });
-    const mask = makeNode('mask', { output: 'mask' });
     const visible = makeNode('visible');
     cache.set('hidden', 'working', fakeBitmap());
-    cache.set('mask', 'working', fakeBitmap());
     cache.set('visible', 'working', fakeBitmap());
 
-    const scene = makeScene([hidden, mask, visible]);
+    const scene = makeScene([hidden, visible]);
     const ctx = fakeCtx();
     compositeScene(ctx, scene, 'working');
 
     expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mask-output node never draws itself directly, even outside a masked span', () => {
+    // Array order [mask]: a lone mask node with nothing below it — the
+    // "stack bottom" no-op case, exercised again more explicitly below.
+    const mask = makeNode('mask', { output: 'mask' });
+    cache.set('mask', 'working', fakeBitmap());
+    const scene = makeScene([mask]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+    expect(ctx.drawImage).not.toHaveBeenCalled();
   });
 
   it('draws nothing for a node with no cache at or below the requested level', () => {
@@ -240,6 +274,170 @@ describe('compositeScene', () => {
     compositeScene(ctx, scene, 'working');
     compositeScene(ctx, scene, 'working');
     expect(getCompositeCallCount()).toBe(2);
+  });
+});
+
+describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
+  it('clips a span to the mask node above it via a scratch canvas + destination-in', () => {
+    // Array order top-to-bottom [top, mask, bottom]; bottom-up walk visits
+    // bottom, mask, top — bottom is the masked span, top is untouched.
+    const top = makeNode('top');
+    const mask = makeNode('mask', { output: 'mask' });
+    const bottom = makeNode('bottom');
+    cache.set('top', 'baked', fakeBitmap());
+    cache.set('mask', 'baked', fakeBitmap());
+    cache.set('bottom', 'baked', fakeBitmap());
+
+    const scene = makeScene([top, mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    // Exactly one span got masked (one scratch canvas created).
+    expect(scratches).toHaveLength(1);
+    const scratch = scratches[0];
+
+    // `bottom` drew into the scratch, not the main canvas.
+    expect(scratch.ctx.drawImage).toHaveBeenCalledTimes(2); // bottom, then the mask bitmap itself
+    expect(scratch.ctx.calls[1]).toMatchObject({ op: 'destination-in', alpha: 1 });
+
+    // The scratch's result (not `bottom` or `mask` individually) is what
+    // lands on the main canvas, followed by `top` drawn straight through.
+    expect(ctx.drawImage).toHaveBeenCalledTimes(2);
+    // `createFakeScratch` hands out the scratch's own ctx as its `canvas` too.
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, scratch.ctx, 0, 0, 200, 100);
+  });
+
+  it('a mask node with nothing below it (stack bottom) is a no-op, not an error', () => {
+    const image = makeNode('image');
+    const mask = makeNode('mask', { output: 'mask' });
+    cache.set('image', 'baked', fakeBitmap());
+    cache.set('mask', 'baked', fakeBitmap());
+
+    // Array order [image, mask]: mask is the bottom of the stack — its span
+    // is just itself, content = [].
+    const scene = makeScene([image, mask]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(0); // never even reaches for a scratch canvas
+    expect(ctx.drawImage).toHaveBeenCalledTimes(1); // image, unclipped
+  });
+
+  it('a second mask node lower in the stack bounds a second, independent span', () => {
+    // Array order top-to-bottom [top, maskA, middle, maskB, bottom]:
+    // bottom-up walk gives spans [bottom, maskB], [middle, maskA], [top].
+    const top = makeNode('top');
+    const maskA = makeNode('maskA', { output: 'mask' });
+    const middle = makeNode('middle');
+    const maskB = makeNode('maskB', { output: 'mask' });
+    const bottom = makeNode('bottom');
+    for (const n of [top, maskA, middle, maskB, bottom]) cache.set(n.id, 'baked', fakeBitmap());
+
+    const scene = makeScene([top, maskA, middle, maskB, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(2); // two independent masked spans
+    // Scratch content is never shared across spans.
+    expect(scratches[0].ctx.drawImage).toHaveBeenCalledTimes(2); // bottom + maskB
+    expect(scratches[1].ctx.drawImage).toHaveBeenCalledTimes(2); // middle + maskA
+    // Two masked spans onto the main canvas, plus `top` drawn straight through.
+    expect(ctx.drawImage).toHaveBeenCalledTimes(3);
+  });
+
+  it('a hidden mask node stops clipping — its span draws straight through, unclipped', () => {
+    const mask = makeNode('mask', { output: 'mask', visible: false });
+    const bottom = makeNode('bottom');
+    cache.set('mask', 'baked', fakeBitmap());
+    cache.set('bottom', 'baked', fakeBitmap());
+
+    const scene = makeScene([mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(0); // no scratch — drawn straight onto ctx
+    expect(ctx.drawImage).toHaveBeenCalledTimes(1); // bottom, unclipped
+  });
+
+  it('a masked span draws nothing while the mask itself is still cooking (no cache at/below level)', () => {
+    const mask = makeNode('mask', { output: 'mask' }); // no cache.set for 'mask'
+    const bottom = makeNode('bottom');
+    cache.set('bottom', 'baked', fakeBitmap());
+
+    const scene = makeScene([mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(0);
+    expect(ctx.drawImage).not.toHaveBeenCalled();
+  });
+
+  it('toggling output image<->mask changes only which draw path runs, never touches the cache', () => {
+    // Same node, same cache entry, only `output` differs — the acceptance's
+    // "recomposites without recooking" claim, expressed as: the mask's own
+    // raster (its cache bitmap) is reused unchanged by both draw paths.
+    const bitmap = fakeBitmap();
+    cache.set('n1', 'baked', bitmap);
+
+    const asImage = makeNode('n1', { output: 'image' });
+    const sceneImage = makeScene([asImage]);
+    const ctxImage = fakeCtx();
+    compositeScene(ctxImage, sceneImage, 'baked');
+    expect(ctxImage.drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 200, 100);
+
+    const asMask = makeNode('n1', { output: 'mask' });
+    const sceneMask = makeScene([asMask]);
+    const ctxMask = fakeCtx();
+    compositeScene(ctxMask, sceneMask, 'baked');
+    // Bottom-of-stack mask, nothing below it — no-op, same bitmap untouched.
+    expect(ctxMask.drawImage).not.toHaveBeenCalled();
+  });
+
+  it('a blurred mask feathers the clip — the compositor just draws whatever the mask node cooked', () => {
+    // The compositor doesn't know or care that a blur ran; it only ever
+    // reads the mask node's *cooked* cache bitmap (mask-span-scoping.md:
+    // "the mask raster runs the normal cook path first"). This test proves
+    // the compositor treats a feathered mask bitmap identically to a crisp
+    // one — cook.ts/vectorRasterize.ts own the actual blur maths.
+    const featheredMaskBitmap = fakeBitmap();
+    const bottom = makeNode('bottom');
+    const mask = makeNode('mask', { output: 'mask' });
+    cache.set('mask', 'baked', featheredMaskBitmap);
+    cache.set('bottom', 'baked', fakeBitmap());
+
+    const scene = makeScene([mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches[0].ctx.drawImage).toHaveBeenNthCalledWith(
+      2,
+      featheredMaskBitmap,
+      0,
+      0,
+      200,
+      100,
+    );
+    expect(scratches[0].ctx.calls[1].op).toBe('destination-in');
+  });
+
+  it("ignores the mask node's own blendMode/opacity (source spec)", () => {
+    const mask = makeNode('mask', { output: 'mask', opacity: 0.2, blendMode: 'multiply' });
+    const bottom = makeNode('bottom');
+    cache.set('mask', 'baked', fakeBitmap());
+    cache.set('bottom', 'baked', fakeBitmap());
+
+    const scene = makeScene([mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches[0].ctx.calls[1]).toMatchObject({ alpha: 1, op: 'destination-in' });
   });
 });
 
