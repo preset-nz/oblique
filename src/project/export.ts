@@ -1,7 +1,12 @@
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { toast } from 'sonner';
-import { type CacheLookup, type Composite2DContext, compositeScene } from '@/compositor/composite';
+import {
+  type CacheLookup,
+  type Composite2DContext,
+  type CreateScratch,
+  compositeScene,
+} from '@/compositor/composite';
 import { cookNodeFullRes } from '@/cook/cook';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
@@ -59,9 +64,14 @@ export function suggestedExportName(projectPath: string | null): string {
   return `${base || 'untitled'}.png`;
 }
 
-/** Visible, image-output nodes — the only ones export cooks and composites (architecture §Compositor). */
+/**
+ * Visible nodes — export must cook mask-output nodes too, or the compositor
+ * has no clip bitmap and masked spans vanish from the PNG
+ * (mask-span-scoping.md). Mask nodes are never *drawn* as content; the
+ * span walk only reads their raster for `destination-in`.
+ */
 export function exportableNodes(scene: Scene) {
-  return scene.nodes.filter((n) => n.visible && n.output === 'image');
+  return scene.nodes.filter((n) => n.visible);
 }
 
 export interface ExportProgress {
@@ -143,7 +153,17 @@ export async function exportPng(
     const getCache: CacheLookup = (nodeId, level) =>
       level === 'baked' ? bitmaps.get(nodeId) : undefined;
 
-    compositeScene(ctx, scene, 'baked', getCache);
+    // Masked spans composite into scratch canvases; build them from the same
+    // injected canvas factory as the main surface (the real ExportCanvas is
+    // an OffscreenCanvas, which drawImage accepts as a source).
+    const createScratch: CreateScratch = (w, h) => {
+      const scratchCanvas = deps.createCanvas(Math.max(1, w), Math.max(1, h));
+      const scratchCtx = scratchCanvas.getContext('2d');
+      if (!scratchCtx) throw new Error('OffscreenCanvas 2d context unavailable');
+      return { ctx: scratchCtx, canvas: scratchCanvas as unknown as CanvasImageSource };
+    };
+
+    compositeScene(ctx, scene, 'baked', getCache, createScratch);
 
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const bytes = await deps.blobToBytes(blob);

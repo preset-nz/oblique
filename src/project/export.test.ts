@@ -123,13 +123,13 @@ function makeDeps(
 }
 
 describe('exportableNodes', () => {
-  it('keeps only visible, image-output nodes', () => {
+  it('keeps visible nodes of both output types — masks must cook so the span walk can clip', () => {
     const nodes = [
       pixelNode('a', { visible: true, output: 'image' }),
       pixelNode('b', { visible: false, output: 'image' }),
       pixelNode('c', { visible: true, output: 'mask' }),
     ];
-    expect(exportableNodes(makeScene(nodes)).map((n) => n.id)).toEqual(['a']);
+    expect(exportableNodes(makeScene(nodes)).map((n) => n.id)).toEqual(['a', 'c']);
   });
 });
 
@@ -160,6 +160,25 @@ describe('exportPng', () => {
     expect(deps.createCanvas).toHaveBeenCalledWith(200, 100); // documentSize, not upscaled/downscaled
     expect(deps.ctx.drawCalls).toBeGreaterThan(0); // compositeScene actually drew something
     expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('cooks mask-output nodes too, so masked spans survive into the PNG (mask-span-scoping.md)', async () => {
+    const nodes = [
+      pixelNode('clip', { output: 'mask' }), // index 0 = stack top — clips 'content' below it
+      pixelNode('content'),
+    ];
+    const deps = makeDeps(makeScene(nodes));
+
+    await exportPng(deps);
+
+    // Both cook: the mask's raster is the clip bitmap, without it the span vanishes.
+    expect(deps.cookFullRes).toHaveBeenCalledTimes(2);
+    expect(deps.cookFullRes).toHaveBeenCalledWith('clip');
+    // Main canvas + one scratch for the single masked span.
+    expect(deps.createCanvas).toHaveBeenCalledTimes(2);
+    expect(deps.ctx.drawCalls).toBeGreaterThan(0);
+    expect(deps.writeFile).toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalled();
   });
 
