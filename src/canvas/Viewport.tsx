@@ -8,6 +8,18 @@ import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
 import { topmostNodeAt } from './hitTest';
+import { EllipseMarquee } from './marquees/EllipseMarquee';
+import { LassoMarquee } from './marquees/LassoMarquee';
+import { MarqueeToolbar } from './marquees/MarqueeToolbar';
+import {
+  appendLassoPoint,
+  isDrawnLasso,
+  isDrawnRect,
+  isNearStart,
+  rectFromDrag,
+} from './marquees/marqueeGeometry';
+import { useMarqueeStateStore } from './marquees/marqueeState';
+import { RectMarquee } from './marquees/RectMarquee';
 import {
   blitScene,
   computeBufferSize,
@@ -31,6 +43,9 @@ const NUDGE_DELTA: Record<string, [number, number]> = {
   ArrowUp: [0, -1],
   ArrowDown: [0, 1],
 };
+
+/** Screen-space "snap closed" radius for the lasso's return-to-start check — converted to a document-space threshold via the live view scale so it feels constant at any zoom (marqueeGeometry.ts's `isNearStart` itself is pure document-space). */
+const LASSO_CLOSE_SCREEN_PX = 8;
 
 function isImagePath(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
@@ -59,6 +74,22 @@ export function Viewport() {
   const setNodeTransform = useSceneStore((s) => s.setNodeTransform);
   const tool = useToolStateStore((s) => s.tool);
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
+
+  const marquee = useMarqueeStateStore((s) => s.marquee);
+  const setMarquee = useMarqueeStateStore((s) => s.setMarquee);
+  const clearMarquee = useMarqueeStateStore((s) => s.clear);
+
+  // Tool-switch-away clears the marquee (epic acceptance: "no orphaned
+  // overlay state"). Reactive on `tool` rather than living inside
+  // `setTool` itself — covers both the `M`/`V` shortcuts (app/shortcuts.ts)
+  // and ToolbarRail clicks without toolState.ts needing to know marquees
+  // exist. Every tool change clears (including switching between the three
+  // marquee tools themselves — "one active marquee at a time" per tool).
+  const prevToolRef = useRef(tool);
+  useEffect(() => {
+    if (prevToolRef.current !== tool) clearMarquee();
+    prevToolRef.current = tool;
+  }, [tool, clearMarquee]);
 
   /** Client coords -> document space, sharing the same view transform as canvas paint. */
   const toDoc = useCallback((clientX: number, clientY: number): Point => {
@@ -91,11 +122,32 @@ export function Viewport() {
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
-      // Escape clears node selection from any tool (de-select, tool-state.md).
-      // Selection is UI state — clearing it never touches the scene store,
-      // so it can never create an undo step.
+      // Escape clears node selection from any tool (de-select, tool-state.md)
+      // and the active marquee (marquees.md). Both are UI-only state —
+      // neither ever touches the scene store, so neither can create an undo
+      // step.
       if (e.key === 'Escape' && !isEditableTarget) {
         clearSelection();
+        clearMarquee();
+        return;
+      }
+
+      // Delete/Backspace clears the active marquee (marquees.md — "no
+      // orphaned overlay state"). Node deletion isn't bound to a keyboard
+      // shortcut yet (`scene/deleteNode.ts` is menu/panel-driven only), so
+      // this can't double-fire against it. Reads the store directly
+      // (rather than closing over the `marquee` render value) so this
+      // effect doesn't need `marquee` in its dependency array — that value
+      // changes on every pointermove while drawing/moving a marquee, and
+      // re-running this whole effect mid-drag would discard the local
+      // drag-state closures below.
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        !isEditableTarget &&
+        useMarqueeStateStore.getState().marquee
+      ) {
+        e.preventDefault();
+        clearMarquee();
         return;
       }
 
@@ -136,6 +188,17 @@ export function Viewport() {
     // select it under the pan tool too) from a drag (pan) — screen px.
     let panTravel = 0;
 
+    // Marquee draw state (marquees.md). A canvas-level pointerdown here only
+    // ever *starts a new* rect/ellipse/lasso draw: clicking inside an
+    // already-drawn marquee's body or a handle is captured first by that
+    // marquee's own SVG element (`MarqueeBox`/`LassoMarquee`, pointer-events
+    // auto) sitting on top of the canvas, so this handler never sees those
+    // events — no hit-testing needed here to tell "start new" from "grab
+    // existing" apart.
+    let rectDrawAnchor: Point | null = null;
+    let lassoDrawing = false;
+    let lassoStart: Point = { x: 0, y: 0 };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
 
@@ -148,7 +211,29 @@ export function Viewport() {
         return;
       }
 
-      if (tool !== 'move') return; // marquee tools: no drag yet (marquees.md)
+      if (tool === 'select-rect' || tool === 'select-ellipse') {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        const docPt = toDoc(e.clientX, e.clientY);
+        rectDrawAnchor = docPt;
+        setMarquee({
+          kind: tool === 'select-rect' ? 'rect' : 'ellipse',
+          rect: { x: docPt.x, y: docPt.y, w: 0, h: 0 },
+        });
+        return;
+      }
+
+      if (tool === 'select-lasso') {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        const docPt = toDoc(e.clientX, e.clientY);
+        lassoDrawing = true;
+        lassoStart = docPt;
+        setMarquee({ kind: 'lasso', points: [docPt], closed: false });
+        return;
+      }
+
+      if (tool !== 'move') return;
 
       const docPt = toDoc(e.clientX, e.clientY);
       const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
@@ -181,6 +266,32 @@ export function Viewport() {
         setView(panBy(view, dx, dy));
         return;
       }
+
+      if (rectDrawAnchor) {
+        const docPt = toDoc(e.clientX, e.clientY);
+        const kind = tool === 'select-rect' ? 'rect' : 'ellipse';
+        setMarquee({
+          kind,
+          rect: rectFromDrag(rectDrawAnchor, docPt, { square: e.shiftKey, fromCentre: e.altKey }),
+        });
+        return;
+      }
+
+      if (lassoDrawing) {
+        const docPt = toDoc(e.clientX, e.clientY);
+        const current = useMarqueeStateStore.getState().marquee;
+        const points = current?.kind === 'lasso' ? current.points : [lassoStart];
+        const viewScale = useViewTransformStore.getState().view.scale;
+        const closeThresholdDoc = LASSO_CLOSE_SCREEN_PX / Math.max(viewScale, 0.0001);
+        if (isDrawnLasso(points) && isNearStart(docPt, lassoStart, closeThresholdDoc)) {
+          lassoDrawing = false;
+          setMarquee({ kind: 'lasso', points, closed: true });
+          return;
+        }
+        setMarquee({ kind: 'lasso', points: appendLassoPoint(points, docPt), closed: false });
+        return;
+      }
+
       if (!dragNodeId) return;
       const docPt = toDoc(e.clientX, e.clientY);
       const next = applyMove(dragStartTransform, {
@@ -203,6 +314,43 @@ export function Viewport() {
         }
         return;
       }
+
+      if (rectDrawAnchor) {
+        canvas.releasePointerCapture(e.pointerId);
+        rectDrawAnchor = null;
+        // A plain click (no drag) never grew the rect past a stray-click
+        // size — discard it rather than leaving a zero-size box with 8
+        // stacked handles and a floating toolbar behind (epic acceptance:
+        // "no orphaned overlay state").
+        const current = useMarqueeStateStore.getState().marquee;
+        if (
+          (current?.kind === 'rect' || current?.kind === 'ellipse') &&
+          !isDrawnRect(current.rect)
+        ) {
+          clearMarquee();
+        }
+        return;
+      }
+
+      if (lassoDrawing) {
+        canvas.releasePointerCapture(e.pointerId);
+        lassoDrawing = false;
+        const current = useMarqueeStateStore.getState().marquee;
+        if (current?.kind === 'lasso') {
+          // Same "no orphaned overlay state" rule as the rect/ellipse
+          // branch above: a stray click never accumulated enough points to
+          // be a real shape.
+          if (!isDrawnLasso(current.points)) {
+            clearMarquee();
+          } else if (!current.closed) {
+            // Release always closes, even short of the return-to-start
+            // snap (acceptance: "closes on return-to-start or release").
+            setMarquee({ kind: 'lasso', points: current.points, closed: true });
+          }
+        }
+        return;
+      }
+
       if (!dragNodeId) return;
       canvas.releasePointerCapture(e.pointerId);
       dragNodeId = null;
@@ -224,7 +372,16 @@ export function Viewport() {
       canvas.removeEventListener('pointerup', endDrag);
       canvas.removeEventListener('pointercancel', endDrag);
     };
-  }, [selection, selectNode, clearSelection, setNodeTransform, tool, toDoc]);
+  }, [
+    selection,
+    selectNode,
+    clearSelection,
+    setNodeTransform,
+    tool,
+    toDoc,
+    setMarquee,
+    clearMarquee,
+  ]);
 
   const selectedNode = useSceneStore((s) =>
     selectedNodeId ? s.scene.nodes.find((n) => n.id === selectedNodeId) : undefined,
@@ -401,10 +558,19 @@ export function Viewport() {
         role="presentation"
         aria-hidden="true"
       >
-        {/* Document-space overlay group; TransformBox is the only occupant until
-            marquees/vector editing land (Epic 05/06). */}
+        {/* Document-space overlay group: TransformBox (move tool only — see
+            below) and the active marquee (Epic 05), siblings here per the
+            story's "Components touched" line. */}
         <g transform={overlayMatrix}>
-          {selectedNode && selectedNode.output === 'image' && (
+          {/* Gated to the move tool: under a marquee tool the marquee's own
+              handles occupy this same overlay space, and TransformBox's 8
+              handles + a marquee's would otherwise overlap ambiguously.
+              tool-state.md didn't exist when TransformBox was written (its
+              own doc comment notes the "always live" interim); Viewport's
+              own move-drag gesture above is already tool-gated the same
+              way. TransformBox itself is unchanged — only when Viewport
+              chooses to render it changes. */}
+          {tool === 'move' && selectedNode && selectedNode.output === 'image' && (
             <TransformBox
               node={selectedNode}
               extent={{
@@ -415,8 +581,23 @@ export function Viewport() {
               toDoc={toDoc}
             />
           )}
+          {marquee?.kind === 'rect' && (
+            <RectMarquee rect={marquee.rect} viewScale={view.scale} toDoc={toDoc} />
+          )}
+          {marquee?.kind === 'ellipse' && (
+            <EllipseMarquee rect={marquee.rect} viewScale={view.scale} toDoc={toDoc} />
+          )}
+          {marquee?.kind === 'lasso' && (
+            <LassoMarquee
+              points={marquee.points}
+              closed={marquee.closed}
+              viewScale={view.scale}
+              toDoc={toDoc}
+            />
+          )}
         </g>
       </svg>
+      <MarqueeToolbar />
     </div>
   );
 }

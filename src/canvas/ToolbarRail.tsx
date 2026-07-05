@@ -6,27 +6,23 @@ interface ToolButtonSpec {
   tool: Tool;
   label: string;
   icon: typeof Hand;
-  /** Marquee tools land in marquees.md — buttons exist now, disabled. */
   disabled?: boolean;
 }
 
 const TOOLS: ToolButtonSpec[] = [
   { tool: 'pan', label: 'Pan', icon: Hand },
   { tool: 'move', label: 'Move (V)', icon: Move },
-  {
-    tool: 'select-rect',
-    label: 'Rectangle select (M) — coming soon',
-    icon: Square,
-    disabled: true,
-  },
-  { tool: 'select-ellipse', label: 'Ellipse select — coming soon', icon: Circle, disabled: true },
-  { tool: 'select-lasso', label: 'Lasso select — coming soon', icon: Lasso, disabled: true },
+  { tool: 'select-rect', label: 'Rectangle select (M)', icon: Square },
+  { tool: 'select-ellipse', label: 'Ellipse select', icon: Circle },
+  { tool: 'select-lasso', label: 'Lasso select', icon: Lasso },
 ];
 
 /**
  * Toolbar rail: one button per `Tool`. Left rail placeholder in
- * `app/Layout.tsx` this replaces. Marquee buttons are present but disabled —
- * `marquees.md` wires their behaviour up later.
+ * `app/Layout.tsx` this replaces. Marquee buttons were disabled placeholders
+ * until this story — live as of `marquees.md` (`Viewport.tsx` wires the
+ * drag/handle behaviour, `marquees/marqueeState.ts` holds the active
+ * marquee).
  */
 export function ToolbarRail() {
   const tool = useToolStateStore((s) => s.tool);

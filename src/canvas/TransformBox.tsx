@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D, type SceneNode, type Transform2D } from '@/scene/types';
+import { CURSOR_FOR_HANDLE, SCALE_HANDLES } from './boxHandles';
 import {
   applyRotate,
   applyScale,
@@ -20,25 +21,14 @@ import {
  *
  * Move (dragging the node's body) is handled by `Viewport.tsx`'s own canvas
  * pointer handler, not here — this component only owns the handles.
- * Interim tool-gating (tool-state.md not built yet, per this story's carve-
- * out): the move/scale/rotate gestures are always live for the selected
- * node; there is no separate "move tool" toggle until that story lands.
+ * `Viewport.tsx` renders this component only under the move tool
+ * (tool-state.md); this file itself doesn't know about tools at all — it's
+ * always "live" whenever mounted, same as when it was written before
+ * tool-state.md landed (`marquees.md` added the `tool === 'move'` gate at
+ * the call site so a marquee tool's own handles don't overlap these).
  */
 
 const HANDLE_SCREEN_RADIUS = 5;
-
-const SCALE_HANDLES: Exclude<HandleId, 'rotate'>[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-
-const CURSOR_FOR_HANDLE: Record<Exclude<HandleId, 'rotate'>, string> = {
-  nw: 'nwse-resize',
-  n: 'ns-resize',
-  ne: 'nesw-resize',
-  e: 'ew-resize',
-  se: 'nwse-resize',
-  s: 'ns-resize',
-  sw: 'nesw-resize',
-  w: 'ew-resize',
-};
 
 type DragState =
   | { kind: 'rotate'; start: Transform2D; startPointerDoc: Point }

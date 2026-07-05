@@ -1,4 +1,10 @@
 import { IDENTITY_TRANSFORM_2D, type Transform2D } from '@/scene/types';
+import {
+  boxCornersFor,
+  CORNER_SIGN,
+  handlePositionsFor,
+  type HandleId as ScaleHandleId,
+} from './boxHandles';
 
 /**
  * Pure geometry for the node-transform-2d story (features/05-selection/
@@ -13,6 +19,11 @@ import { IDENTITY_TRANSFORM_2D, type Transform2D } from '@/scene/types';
  * `[0, w] x [0, h]` space maps to a document point via
  *   world = centre + R(rotation) . S(scaleX, scaleY) . (L - localCentre)
  * where `centre = (x + w/2, y + h/2)` and `localCentre = (w/2, h/2)`.
+ *
+ * The 8-handle layout itself (corner signs, cursor styles, handle
+ * enumeration) lives in `boxHandles.ts`, shared with the marquee overlays
+ * (`marquees/marqueeGeometry.ts`) — this module supplies only the
+ * rotation+scale `localToWorld` mapping those handles are placed through.
  */
 
 export type { Transform2D };
@@ -65,46 +76,24 @@ export function hitTestNode(world: Point, t: Transform2D, extent: NodeExtent): b
   return local.x >= 0 && local.x <= extent.w && local.y >= 0 && local.y <= extent.h;
 }
 
-export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate';
-
-/** Local-space offset from the node's centre used to anchor an opposite-corner handle drag. */
-const CORNER_SIGN: Record<Exclude<HandleId, 'rotate'>, [number, number]> = {
-  nw: [-1, -1],
-  n: [0, -1],
-  ne: [1, -1],
-  e: [1, 0],
-  se: [1, 1],
-  s: [0, 1],
-  sw: [-1, 1],
-  w: [-1, 0],
-};
+export type HandleId = ScaleHandleId | 'rotate';
 
 /** Document-space distance the rotate handle sits above the node's top-centre, at 1x view scale. */
 export const ROTATE_HANDLE_OFFSET = 32;
 
 /** World-space position of every handle for the current transform, for the overlay to render. */
 export function handlePositions(t: Transform2D, extent: NodeExtent): Record<HandleId, Point> {
-  const positions = {} as Record<HandleId, Point>;
-  for (const [id, [sx, sy]] of Object.entries(CORNER_SIGN) as [
-    Exclude<HandleId, 'rotate'>,
-    [number, number],
-  ][]) {
-    const local = { x: (extent.w / 2) * (1 + sx), y: (extent.h / 2) * (1 + sy) };
-    positions[id] = localToWorld(local, t, extent);
-  }
+  const toWorld = (local: Point) => localToWorld(local, t, extent);
+  const positions = handlePositionsFor(toWorld, extent) as Record<HandleId, Point>;
   const rotateLocal = { x: extent.w / 2, y: -ROTATE_HANDLE_OFFSET };
-  positions.rotate = localToWorld(rotateLocal, t, extent);
+  positions.rotate = toWorld(rotateLocal);
   return positions;
 }
 
 /** The four outer corners of the transformed node, for drawing the box outline. */
 export function boundsCorners(t: Transform2D, extent: NodeExtent): Point[] {
-  return [
-    localToWorld({ x: 0, y: 0 }, t, extent),
-    localToWorld({ x: extent.w, y: 0 }, t, extent),
-    localToWorld({ x: extent.w, y: extent.h }, t, extent),
-    localToWorld({ x: 0, y: extent.h }, t, extent),
-  ];
+  const toWorld = (local: Point) => localToWorld(local, t, extent);
+  return boxCornersFor(toWorld, extent);
 }
 
 /** Move drag: `start` is the transform at pointer-down, `deltaWorld` the doc-space pointer delta since. */
