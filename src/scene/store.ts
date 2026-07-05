@@ -309,14 +309,30 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   setNodeTransform: (id, transform2d) => {
     // Compositing-only mutation — no dirty flag per dirty rule 4 (see
-    // Transform2D's doc comment in scene/types.ts) — EXCEPT when the node
-    // carries a vector-masked modifier: vector masks are document-pinned
-    // (VectorMaskRef's doc comment), so the mask must re-rasterise in the
-    // node's new frame. The narrow, deliberate exception to rule 4.
+    // Transform2D's doc comment in scene/types.ts) — with TWO narrow,
+    // deliberate exceptions for document-pinned vector masks (VectorMaskRef's
+    // doc comment): (a) the moved node carries a vector-masked modifier —
+    // its mask must re-rasterise in its new frame; (b) the moved node IS a
+    // vector node some maskRefs entry points at — every consumer's mask
+    // must re-rasterise at the shape's new composited position (same
+    // cross-node dirty as setVectorPaths).
     set((s) => {
-      const nodes = updateNode(s.scene.nodes, id, (n) => {
-        const hasVectorMask = n.modifiers.some((m) => m.maskId && s.scene.maskRefs?.[m.maskId]);
-        return hasVectorMask ? { ...n, transform2d, dirty: dirtyBoth() } : { ...n, transform2d };
+      const maskRefs = s.scene.maskRefs ?? {};
+      const refsAtMovedNode = new Set(
+        Object.values(maskRefs)
+          .filter((ref) => ref.nodeId === id)
+          .map((ref) => ref.id),
+      );
+
+      const nodes = s.scene.nodes.map((n) => {
+        if (n.id === id) {
+          const hasVectorMask = n.modifiers.some((m) => m.maskId && maskRefs[m.maskId]);
+          return hasVectorMask ? { ...n, transform2d, dirty: dirtyBoth() } : { ...n, transform2d };
+        }
+        const consumesMovedShape = n.modifiers.some(
+          (m) => m.maskId && refsAtMovedNode.has(m.maskId),
+        );
+        return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
       });
       return { scene: { ...s.scene, nodes } };
     });

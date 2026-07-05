@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyMatrix, boxBlurMask, docToLocalMatrix, invertMask } from './maskRasterize';
+import {
+  applyMatrix,
+  boxBlurMask,
+  docToLocalMatrix,
+  invertMask,
+  localToDocMatrix,
+} from './maskRasterize';
 import { IDENTITY_TRANSFORM_2D } from './types';
 
 // The canvas-side inverse check (docToLocalMatrix against transform2d.ts's
@@ -34,6 +40,34 @@ describe('docToLocalMatrix', () => {
     const local = applyMatrix(m, 50, 75);
     expect(local.x).toBeCloseTo(100);
     expect(local.y).toBeCloseTo(25);
+  });
+});
+
+describe('localToDocMatrix', () => {
+  it('is the exact inverse of docToLocalMatrix for an arbitrary transform', () => {
+    const t = { x: 37, y: -12, scaleX: 1.8, scaleY: 0.6, rotation: 0.7 };
+    const fwd = localToDocMatrix(t, 100, 50);
+    const inv = docToLocalMatrix(t, 100, 50);
+
+    for (const p of [
+      { x: 0, y: 0 },
+      { x: 100, y: 50 },
+      { x: 12.5, y: 43 },
+    ]) {
+      const roundTrip = applyMatrix(
+        inv,
+        applyMatrix(fwd, p.x, p.y).x,
+        applyMatrix(fwd, p.x, p.y).y,
+      );
+      expect(roundTrip.x).toBeCloseTo(p.x);
+      expect(roundTrip.y).toBeCloseTo(p.y);
+    }
+  });
+
+  it('places a pure translation where the compositor paints it', () => {
+    const m = localToDocMatrix({ ...IDENTITY_TRANSFORM_2D, x: 30, y: -10 }, 100, 50);
+    expect(applyMatrix(m, 0, 0)).toEqual({ x: 30, y: -10 });
+    expect(applyMatrix(m, 100, 50)).toEqual({ x: 130, y: 40 });
   });
 });
 

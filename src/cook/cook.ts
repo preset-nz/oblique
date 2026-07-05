@@ -182,6 +182,8 @@ export interface CookDeps {
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
     ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    vectorTransform2d: Transform2D,
+    documentSize: [number, number],
     consumerTransform2d: Transform2D,
     consumerSourceSize: [number, number],
     width: number,
@@ -279,7 +281,12 @@ async function realRunPython(
 function makeRasterizeFor(
   deps: Pick<
     CookDeps,
-    'getNode' | 'getMask' | 'getVectorMaskRef' | 'rasterizeMask' | 'rasterizeVectorMask'
+    | 'getNode'
+    | 'getMask'
+    | 'getVectorMaskRef'
+    | 'getDocumentSize'
+    | 'rasterizeMask'
+    | 'rasterizeVectorMask'
   >,
   nodeExtent: [number, number],
   consumerTransform2d: Transform2D,
@@ -299,6 +306,8 @@ function makeRasterizeFor(
       vectorNode.paths,
       vectorNode.fillRule,
       ref,
+      vectorNode.transform2d ?? IDENTITY_TRANSFORM_2D,
+      deps.getDocumentSize(),
       consumerTransform2d,
       nodeExtent,
       width,
@@ -334,6 +343,7 @@ export interface FullResCookDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
+  getDocumentSize: () => [number, number];
   getMask: (maskId: string) => MaskDef | undefined;
   getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
   rasterizeMask: (
@@ -347,6 +357,8 @@ export interface FullResCookDeps {
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
     ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    vectorTransform2d: Transform2D,
+    documentSize: [number, number],
     consumerTransform2d: Transform2D,
     consumerSourceSize: [number, number],
     width: number,
@@ -354,6 +366,14 @@ export interface FullResCookDeps {
     factor: number,
   ) => Uint8Array;
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
+  /** A vector node's "source pixels" at full res — same injection as `CookDeps.rasterizeVector`. */
+  rasterizeVector: (
+    paths: VectorNode['paths'],
+    fillRule: VectorNode['fillRule'],
+    width: number,
+    height: number,
+    factor: number,
+  ) => Uint8Array;
   runPython: (
     width: number,
     height: number,
@@ -368,10 +388,12 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getNode: productionCookDeps.getNode,
   getSource: productionCookDeps.getSource,
   getOps: productionCookDeps.getOps,
+  getDocumentSize: productionCookDeps.getDocumentSize,
   getMask: productionCookDeps.getMask,
   getVectorMaskRef: productionCookDeps.getVectorMaskRef,
   rasterizeMask: productionCookDeps.rasterizeMask,
   rasterizeVectorMask: productionCookDeps.rasterizeVectorMask,
+  rasterizeVector: productionCookDeps.rasterizeVector,
   downscale: realDownscale,
   runPython: realRunPython,
   encode: realEncode,
@@ -382,33 +404,43 @@ export const productionFullResCookDeps: FullResCookDeps = {
  * factor, 1 — the node's own `sourceSize`, no downscale). Never writes any
  * cache slot and never clears/sets dirty — that's the scheduler's job, not
  * export's (locking semantics for a real persisted baked cache are Epic
- * 07's). Throws on any failure (missing/non-pixel node, no decoded source,
- * sidecar error) rather than falling back to a lower-resolution bitmap —
- * export.ts must abort the whole export on this, never substitute a draft
- * upscale (epic acceptance).
+ * 07's). Throws on any failure (missing/unsupported node type, no decoded
+ * source, sidecar error) rather than falling back to a lower-resolution
+ * bitmap — export.ts must abort the whole export on this, never substitute
+ * a draft upscale (epic acceptance).
+ *
+ * Vector nodes cook full-res too (dogfood 2026-07-06 — the old pixel-only
+ * throw aborted export of ANY scene containing a vector node): their
+ * "source pixels" are `rasterizeVector` at documentSize, factor 1, exactly
+ * mirroring `cookNode`'s vector branch.
  */
 export async function cookNodeFullRes(
   nodeId: string,
   deps: FullResCookDeps = productionFullResCookDeps,
 ): Promise<ImageBitmap> {
   const rawNode = deps.getNode(nodeId);
-  if (rawNode?.type !== 'pixel') {
-    throw new Error(`node ${nodeId} is not a pixel node`);
+  if (!rawNode || (rawNode.type !== 'pixel' && rawNode.type !== 'vector')) {
+    throw new Error(`node ${nodeId} is not a cookable node type`);
   }
-  const node = rawNode as PixelNode;
+  // Same narrowing as cookNode: the two source-pixel-producing node types.
+  const node = rawNode as PixelNode | VectorNode;
 
-  const source = deps.getSource(nodeId);
-  if (!source) {
+  const source = node.type === 'pixel' ? deps.getSource(nodeId) : undefined;
+  if (node.type === 'pixel' && !source) {
     throw new Error(`"${node.label}" has no decoded source loaded`);
   }
 
-  const factor = 1; // full resolution — node's own sourceSize, no downscale
-  const [width, height] = computeTargetSize(node.sourceSize, factor);
+  const factor = 1; // full resolution — node's own extent, no downscale
+  const nodeExtent = node.type === 'pixel' ? node.sourceSize : deps.getDocumentSize();
+  const [width, height] = computeTargetSize(nodeExtent, factor);
 
-  let resultBytes = deps.downscale(source, width, height);
+  let resultBytes =
+    node.type === 'pixel'
+      ? deps.downscale(source as ImageBitmap, width, height)
+      : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
   const rasterizeFor = makeRasterizeFor(
     deps,
-    node.sourceSize,
+    nodeExtent,
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
     width,
     height,

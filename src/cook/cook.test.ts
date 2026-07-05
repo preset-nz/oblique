@@ -89,6 +89,8 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
         _paths,
         _fillRule,
         _ref,
+        _vecTransform,
+        _docSize,
         _consumerTransform,
         _consumerSourceSize,
         w: number,
@@ -259,7 +261,8 @@ describe('cookNode — masks', () => {
   });
 
   it('resolves a maskId against a vector-node reference when getMask comes up empty (the resolution rule)', async () => {
-    const vectorNode = makeVectorNode({ id: 'v1' }) as VectorNode;
+    const vectorTransform = { x: -15, y: 8, scaleX: 1, scaleY: 1, rotation: -0.2 };
+    const vectorNode = makeVectorNode({ id: 'v1', transform2d: vectorTransform }) as VectorNode;
     const ref = {
       id: 'ref-1',
       nodeId: 'v1',
@@ -300,6 +303,8 @@ describe('cookNode — masks', () => {
       vectorNode.paths,
       vectorNode.fillRule,
       ref,
+      vectorTransform, // the SHAPE's current transform2d — the mask reads its composited position
+      [800, 400], // documentSize — the vector raster's frame
       consumerTransform, // the consumer's CURRENT transform2d — document-pinned, never a snapshot
       [800, 400], // the CONSUMING node's own sourceSize, not the vector node's
       100,
@@ -581,6 +586,7 @@ describe('cookNodeFullRes', () => {
       getNode: vi.fn((id: string) => (nodeRef.current.id === id ? nodeRef.current : undefined)),
       getSource: vi.fn(() => fakeBitmap()),
       getOps: vi.fn(() => opsFixture),
+      getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
       getMask: vi.fn(() => undefined),
       getVectorMaskRef: vi.fn(() => undefined),
       rasterizeMask: vi.fn(
@@ -591,12 +597,17 @@ describe('cookNodeFullRes', () => {
           _paths,
           _fillRule,
           _ref,
+          _vecTransform,
+          _docSize,
           _consumerTransform,
           _consumerSourceSize,
           w: number,
           h: number,
           _factor: number,
         ) => new Uint8Array(w * h),
+      ),
+      rasterizeVector: vi.fn(
+        (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
       ),
       downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
       runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
@@ -667,10 +678,28 @@ describe('cookNodeFullRes', () => {
     expect(deps.encode).not.toHaveBeenCalled();
   });
 
-  it('throws for a non-pixel node', async () => {
-    const nodeRef = { current: { ...makeNode(), type: 'vector' } as unknown as SceneNode };
+  it('throws for a node type that produces no source pixels', async () => {
+    const nodeRef = { current: { ...makeNode(), type: 'camera' } as unknown as SceneNode };
     const deps = makeFullResDeps(nodeRef);
 
-    await expect(cookNodeFullRes('node-1', deps)).rejects.toThrow(/not a pixel node/);
+    await expect(cookNodeFullRes('node-1', deps)).rejects.toThrow(/not a cookable node type/);
+  });
+
+  it('cooks a vector node full-res via rasterizeVector at documentSize (export with vectors, dogfood 2026-07-06)', async () => {
+    const nodeRef = { current: makeVectorNode() };
+    const deps = makeFullResDeps(nodeRef);
+
+    await cookNodeFullRes('node-1', deps);
+
+    // documentSize (800×400) at factor 1 — a vector node has no sourceSize.
+    expect(deps.rasterizeVector).toHaveBeenCalledWith(
+      (nodeRef.current as VectorNode).paths,
+      'nonzero',
+      800,
+      400,
+      1,
+    );
+    expect(deps.downscale).not.toHaveBeenCalled();
+    expect(deps.encode).toHaveBeenCalledWith(expect.any(Uint8Array), 800, 400);
   });
 });

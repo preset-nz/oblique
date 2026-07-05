@@ -56,6 +56,28 @@ export function docToLocalMatrix(t: Transform2D, w: number, h: number): Matrix2D
   return [a, b, c, d, e, f];
 }
 
+/**
+ * Forward companion of `docToLocalMatrix`: a node's placement matrix —
+ * authored/local space -> composited document space (scale/rotate about the
+ * raster centre `(t.x + w/2, t.y + h/2)`, matching the compositor's
+ * `withNodeTransform` convention). Exact algebraic inverse of
+ * `docToLocalMatrix` for the same `(t, w, h)`.
+ */
+export function localToDocMatrix(t: Transform2D, w: number, h: number): Matrix2D {
+  const cos = Math.cos(t.rotation);
+  const sin = Math.sin(t.rotation);
+  const cx = t.x + w / 2;
+  const cy = t.y + h / 2;
+
+  const a = cos * t.scaleX;
+  const b = sin * t.scaleX;
+  const c = -sin * t.scaleY;
+  const d = cos * t.scaleY;
+  const e = cx - (a * (w / 2) + c * (h / 2));
+  const f = cy - (b * (w / 2) + d * (h / 2));
+  return [a, b, c, d, e, f];
+}
+
 /** Apply a `Matrix2D` to a point — test helper and lasso pre-transform. */
 export function applyMatrix(m: Matrix2D, x: number, y: number): { x: number; y: number } {
   return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
@@ -258,17 +280,22 @@ export function rasterizeMask(
  * untransformed at its own origin). Production-only, same shape as
  * `rasterizeMask` — injected via `CookDeps.rasterizeVectorMask`.
  *
- * The referenced VectorNode's OWN `transform2d` is deliberately NOT applied
- * here (only the consumer's is) — vector nodes have no transform UI yet
- * (epic README's "Vector content bounds" note), so there's nothing to wire
- * up today; when they get one, decide then whether the mask should track
- * it live (that would need `ref` to carry the vector node's own snapshot
- * too, mirroring the consumer's).
+ * The referenced VectorNode's OWN `transform2d` IS applied (`vectorTransform2d`
+ * + `documentSize`, its raster frame): the Move tool transforms vector nodes
+ * like any node (dogfood 2026-07-06 — a moved shape painted in its new place
+ * but masked from its authored one), so the mask must read the shape's
+ * COMPOSITED position: path local space -> document via the vector's
+ * placement (`localToDocMatrix`, centre-of-document-raster convention,
+ * matching the compositor and PathEditor), then document -> consumer-local.
+ * Both transforms are read fresh each cook — document-pinned means pinned
+ * to where the shape *shows*, not to any snapshot.
  */
 export function rasterizeVectorMask(
   paths: VectorPath[],
   fillRule: 'nonzero' | 'evenodd',
   ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+  vectorTransform2d: Transform2D,
+  documentSize: [number, number],
   consumerTransform2d: Transform2D,
   consumerSourceSize: [number, number],
   width: number,
@@ -279,12 +306,17 @@ export function rasterizeVectorMask(
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
 
-  // Document space -> consuming-node-local (via the consumer's CURRENT
+  // Path-local -> composited document (the vector node's own placement;
+  // vector rasters span documentSize, vector-node-model.md's Sizing note),
+  // then document -> consuming-node-local (the consumer's CURRENT
   // transform — document-pinned), then node-local -> target px (cook
-  // factor) — same mapping `rasterizeMask` does for a baked shape.
+  // factor). ctx.transform appends right, so the calls run in reverse
+  // application order.
   const m = docToLocalMatrix(consumerTransform2d, consumerSourceSize[0], consumerSourceSize[1]);
+  const vm = localToDocMatrix(vectorTransform2d, documentSize[0], documentSize[1]);
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+  ctx.transform(vm[0], vm[1], vm[2], vm[3], vm[4], vm[5]);
 
   const path = buildPath2D(pathCommandsFor(paths));
   const plane = fillAndReadPlane(ctx, path, fillRule, ref.expand, width, height);

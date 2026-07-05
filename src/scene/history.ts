@@ -158,8 +158,13 @@ function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
   const ref = scene.maskRefs?.[maskId];
   if (!ref) return null;
   const target = scene.nodes.find((n) => n.id === ref.nodeId);
+  // The referenced shape's transform2d is a cook input too — document-pinned
+  // masks rasterise at the shape's COMPOSITED position, so undoing a move of
+  // the vector node must recook its consumers.
   const geometry =
-    target && isVectorNode(target) ? { paths: target.paths, fillRule: target.fillRule } : null;
+    target && isVectorNode(target)
+      ? { paths: target.paths, fillRule: target.fillRule, transform2d: target.transform2d }
+      : null;
   return { ref, geometry };
 }
 

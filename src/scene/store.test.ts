@@ -552,6 +552,30 @@ describe('setModifierVectorMask', () => {
     expect(scene.nodes.find((n) => n.id === 'b')?.dirty).toEqual({ draft: false, working: false });
   });
 
+  it('setNodeTransform on the REFERENCED vector node dirties its consumers (shape moved → masks re-rasterise)', () => {
+    nodesWithVectorAndTwoConsumers();
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
+    for (const id of ['v1', 'a', 'b']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+
+    useSceneStore
+      .getState()
+      .setNodeTransform('v1', { x: 50, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+
+    const scene = useSceneStore.getState().scene;
+    // Consumer recooks (its mask plane moved); the vector node itself stays
+    // clean (its own raster is placed by the compositor, not recooked); the
+    // unrelated node stays clean.
+    expect(scene.nodes.find((n) => n.id === 'a')?.dirty).toEqual({ draft: true, working: true });
+    expect(scene.nodes.find((n) => n.id === 'v1')?.dirty).toEqual({
+      draft: false,
+      working: false,
+    });
+    expect(scene.nodes.find((n) => n.id === 'b')?.dirty).toEqual({ draft: false, working: false });
+  });
+
   it('deleting the referenced vector node prunes the ref AND clears the dependent maskId', () => {
     nodesWithVectorAndTwoConsumers();
     const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
