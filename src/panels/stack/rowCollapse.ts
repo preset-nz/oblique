@@ -11,11 +11,14 @@ import { create } from 'zustand';
 interface RowCollapseState {
   expanded: Record<string, boolean>;
   toggle: (modId: string) => void;
+  /** Freshly created modifiers (add / duplicate) start expanded. */
+  expand: (modId: string) => void;
   isExpanded: (modId: string) => boolean;
 }
 
 export const useRowCollapseStore = create<RowCollapseState>((set, get) => ({
   expanded: {},
   toggle: (modId) => set((s) => ({ expanded: { ...s.expanded, [modId]: !s.expanded[modId] } })),
+  expand: (modId) => set((s) => ({ expanded: { ...s.expanded, [modId]: true } })),
   isExpanded: (modId) => Boolean(get().expanded[modId]),
 }));

@@ -57,7 +57,8 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   }
 
   function duplicate() {
-    addModifier(node.id, modifier.type, { ...modifier.params });
+    const modId = addModifier(node.id, modifier.type, { ...modifier.params });
+    useRowCollapseStore.getState().expand(modId);
   }
 
   return (

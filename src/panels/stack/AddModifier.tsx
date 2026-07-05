@@ -7,6 +7,7 @@ import { useSceneStore } from '@/scene/store';
 import type { Modifier } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
+import { useRowCollapseStore } from './rowCollapse';
 
 function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
   const params: Modifier['params'] = {};
@@ -38,7 +39,8 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
   }, [ops, query]);
 
   function pick(descriptor: OpDescriptor) {
-    addModifier(nodeId, descriptor.name, defaultParamsFor(descriptor));
+    const modId = addModifier(nodeId, descriptor.name, defaultParamsFor(descriptor));
+    useRowCollapseStore.getState().expand(modId);
     setOpen(false);
     setQuery('');
   }
