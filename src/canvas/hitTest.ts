@@ -1,6 +1,7 @@
 import { destSizeFor } from '@/compositor/composite';
-import { IDENTITY_TRANSFORM_2D, type Scene, type SceneNode } from '@/scene/types';
-import { hitTestNode, type Point } from './transform2d';
+import { IDENTITY_TRANSFORM_2D, isVectorNode, type Scene, type SceneNode } from '@/scene/types';
+import { vectorContentBounds } from '@/scene/vectorBounds';
+import { hitTestNode, type Point, worldToLocal } from './transform2d';
 
 /**
  * Topmost visible image node whose transformed bounds contain `docPoint`
@@ -15,6 +16,26 @@ export function topmostNodeAt(scene: Scene, docPoint: Point): SceneNode | undefi
     if (!node.visible || node.output !== 'image') continue;
     const [w, h] = destSizeFor(node, 'baked', scene.documentSize);
     const t = node.transform2d ?? IDENTITY_TRANSFORM_2D;
+    if (isVectorNode(node)) {
+      // A vector node's raster spans the document, but its SHAPE doesn't —
+      // hit only the tight path bounds (dogfood 2026-07-05: a full-canvas
+      // hit area left no empty spot to click-deselect). worldToLocal with
+      // the raster extent matches how the compositor transforms the
+      // document-sized raster, so the bbox test happens in the same local
+      // space the shape is painted in.
+      const bounds = vectorContentBounds(node.paths);
+      if (!bounds) continue;
+      const local = worldToLocal(docPoint, t, { w, h });
+      if (
+        local.x >= bounds.x &&
+        local.x <= bounds.x + bounds.w &&
+        local.y >= bounds.y &&
+        local.y <= bounds.y + bounds.h
+      ) {
+        return node;
+      }
+      continue;
+    }
     if (hitTestNode(docPoint, t, { w, h })) return node;
   }
   return undefined;
