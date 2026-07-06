@@ -1,5 +1,6 @@
-import { Eye, EyeOff, Trash2, VenetianMask } from 'lucide-react';
+import { Eye, EyeOff, Loader2, Lock, LockOpen, Trash2, VenetianMask } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import {
   Select,
   SelectContent,
@@ -9,6 +10,7 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { cookNodeFullRes } from '@/cook/cook';
 import * as cache from '@/scene/cache';
 import { useCacheVersionStore } from '@/scene/cache';
 import { deleteNode } from '@/scene/deleteNode';
@@ -16,6 +18,7 @@ import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode } from '@/scene/types';
 import { isVectorNode } from '@/scene/types';
+import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './lockUi';
 
 /**
  * Minimal layer list (03-compositor "Minimal layer list in the Stack tab").
@@ -116,9 +119,28 @@ function LayerRow({
 }) {
   const setNodeProp = useSceneStore((s) => s.setNodeProp);
   const reorderNode = useSceneStore((s) => s.reorderNode);
+  const lockNode = useSceneStore((s) => s.lockNode);
+  const unlockNode = useSceneStore((s) => s.unlockNode);
+  const bakingNodeIds = useSceneStore((s) => s.bakingNodeIds);
 
   const up = nudgeIndex(index, 'up', length);
   const down = nudgeIndex(index, 'down', length);
+
+  const padlockState = padlockVisualState(node, node.id, bakingNodeIds);
+
+  function togglePadlock() {
+    if (padlockClickIgnored(node.id, bakingNodeIds)) return; // in-flight bake — ignore further clicks
+    if (padlockState === 'locked') {
+      unlockNode(node.id);
+      return;
+    }
+    lockNode(node.id, cookNodeFullRes).catch((err) => {
+      // Same posture as export's own cook-failure surface (project/export.ts).
+      toast.error('Lock failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
   return (
     // The whole row selects (dogfood 2026-07-05: the label-only target kept
@@ -191,6 +213,35 @@ function LayerRow({
               </button>
             </TooltipTrigger>
             <TooltipContent>{node.visible ? 'Hide layer' : 'Show layer'}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                disabled={padlockState === 'baking'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePadlock();
+                }}
+                aria-label={padlockAriaLabel(padlockState)}
+                className={padlockState === 'locked' ? 'text-amber-400' : 'text-neutral-500'}
+              >
+                {padlockState === 'baking' ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : padlockState === 'locked' ? (
+                  <Lock size={14} />
+                ) : (
+                  <LockOpen size={14} />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {padlockState === 'baking'
+                ? 'Baking full quality…'
+                : padlockState === 'locked'
+                  ? 'Unlock layer'
+                  : 'Lock layer — bakes full quality and freezes edits'}
+            </TooltipContent>
           </Tooltip>
           <button
             type="button"

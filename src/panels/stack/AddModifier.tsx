@@ -22,7 +22,16 @@ function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
  * which is exactly the "last applied" / displayed-top position (see
  * `stackOrder.ts`), so no index math is needed here.
  */
-export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor[] }) {
+export function AddModifier({
+  nodeId,
+  ops,
+  disabled = false,
+}: {
+  nodeId: string;
+  ops: OpDescriptor[];
+  /** Locked target (lock-ui.md) — disables the add action, no popover. */
+  disabled?: boolean;
+}) {
   const addModifier = useSceneStore((s) => s.addModifier);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -47,8 +56,9 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
 
   return (
     <Popover
-      open={open}
+      open={open && !disabled}
       onOpenChange={(next) => {
+        if (disabled) return;
         setOpen(next);
         if (!next) setQuery('');
       }}
@@ -58,15 +68,18 @@ export function AddModifier({ nodeId, ops }: { nodeId: string; ops: OpDescriptor
           <PopoverTrigger asChild>
             <button
               type="button"
+              disabled={disabled}
               aria-label="Add modifier"
-              className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-neutral-700 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+              className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-neutral-700 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-700 disabled:hover:text-neutral-400"
             >
               <Plus size={14} />
               Add modifier
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent>Add a modifier to the top of the stack</TooltipContent>
+        <TooltipContent>
+          {disabled ? 'Locked — unlock to edit' : 'Add a modifier to the top of the stack'}
+        </TooltipContent>
       </Tooltip>
       <PopoverContent align="start" className="w-64 p-2">
         <Input

@@ -21,6 +21,7 @@ import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
+import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
 import { modifierScopeKey } from './modifierScope';
 import { useRowCollapseStore } from './rowCollapse';
 import { nudgeModelIndex } from './stackOrder';
@@ -79,20 +80,27 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const expanded = expandable && rowExpanded;
   const up = nudgeModelIndex(displayIndex, 'up', length);
   const down = nudgeModelIndex(displayIndex, 'down', length);
+  // Locked node selected (lock-ui.md): every cook-dirtying control on this
+  // row goes inert — reorder, enable toggle, mask apply, duplicate/reset/
+  // delete, and the expanded PropertyPanel's own fields (via `readOnly`
+  // below). The row still expands/collapses to inspect params read-only.
+  const locked = stackControlsDisabled(node);
 
   function resetParams() {
-    if (!descriptor) return;
+    if (!descriptor || locked) return;
     for (const spec of descriptor.params) {
       setModifierParam(node.id, modifier.id, spec.name, spec.default as number | string | boolean);
     }
   }
 
   function duplicate() {
+    if (locked) return;
     const modId = addModifier(node.id, modifier.type, { ...modifier.params });
     useRowCollapseStore.getState().expand(modId);
   }
 
   function maskFromSelection() {
+    if (locked) return;
     const state = useMarqueeStateStore.getState();
     const active = state.marquee;
     if (!isMaskableMarquee(active) || !active) return;
@@ -122,6 +130,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
    * the consumer's current transform2d fresh every cook.
    */
   function maskFromVectorNode(vectorNodeId: string) {
+    if (locked) return;
     const params = useMarqueeStateStore.getState().params;
     setModifierVectorMask(node.id, modifier.id, vectorNodeId, {
       featherPx: params.featherPx,
@@ -141,29 +150,31 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
             <TooltipTrigger asChild>
               <button
                 type="button"
-                disabled={up === null}
+                disabled={up === null || locked}
                 aria-label="Move modifier up (applies later)"
                 className="leading-none disabled:opacity-30"
-                onClick={() => up !== null && reorderModifier(node.id, modifier.id, up)}
+                onClick={() => up !== null && !locked && reorderModifier(node.id, modifier.id, up)}
               >
                 ▲
               </button>
             </TooltipTrigger>
-            <TooltipContent>Applies later</TooltipContent>
+            <TooltipContent>{locked ? LOCKED_HINT : 'Applies later'}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                disabled={down === null}
+                disabled={down === null || locked}
                 aria-label="Move modifier down (applies earlier)"
                 className="leading-none disabled:opacity-30"
-                onClick={() => down !== null && reorderModifier(node.id, modifier.id, down)}
+                onClick={() =>
+                  down !== null && !locked && reorderModifier(node.id, modifier.id, down)
+                }
               >
                 ▼
               </button>
             </TooltipTrigger>
-            <TooltipContent>Applies earlier</TooltipContent>
+            <TooltipContent>{locked ? LOCKED_HINT : 'Applies earlier'}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -171,13 +182,17 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
           <TooltipTrigger asChild>
             <button
               type="button"
+              disabled={locked}
+              className="disabled:opacity-30"
               aria-label={modifier.enabled ? 'Disable modifier' : 'Enable modifier'}
               onClick={() => setModifierEnabled(node.id, modifier.id, !modifier.enabled)}
             >
               {modifier.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
             </button>
           </TooltipTrigger>
-          <TooltipContent>{modifier.enabled ? 'Disable' : 'Enable'}</TooltipContent>
+          <TooltipContent>
+            {locked ? LOCKED_HINT : modifier.enabled ? 'Disable' : 'Enable'}
+          </TooltipContent>
         </Tooltip>
 
         <button
@@ -225,21 +240,23 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
           <PopoverContent align="end" className="w-40 p-1">
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+              disabled={locked}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={duplicate}
             >
               <Copy size={12} /> Duplicate
             </button>
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+              disabled={locked}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={resetParams}
             >
               <RotateCcw size={12} /> Reset params
             </button>
             <button
               type="button"
-              disabled={!isMaskableMarquee(marquee)}
+              disabled={locked || !isMaskableMarquee(marquee)}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={maskFromSelection}
             >
@@ -248,14 +265,14 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
             </button>
             <button
               type="button"
-              disabled={vectorNodes.length === 0}
+              disabled={locked || vectorNodes.length === 0}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
-              onClick={() => setVectorPickerOpen((open) => !open)}
+              onClick={() => !locked && setVectorPickerOpen((open) => !open)}
             >
               <Spline size={12} />{' '}
               {modifier.maskId ? 'Replace mask from vector node' : 'Mask from vector node'}
             </button>
-            {vectorPickerOpen && (
+            {vectorPickerOpen && !locked && (
               <div className="ml-4 flex flex-col gap-1 border-l border-neutral-800 pl-2">
                 {/* Same tuning params the marquee flow uses (shared store),
                     surfaced here because MarqueeToolbar only renders with an
@@ -306,16 +323,18 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
             {modifier.maskId && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
-                onClick={() => removeModifierMask(node.id, modifier.id)}
+                disabled={locked}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={() => !locked && removeModifierMask(node.id, modifier.id)}
               >
                 <Blend size={12} className="opacity-40" /> Remove mask
               </button>
             )}
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-neutral-800"
-              onClick={() => removeModifier(node.id, modifier.id)}
+              disabled={locked}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+              onClick={() => !locked && removeModifier(node.id, modifier.id)}
             >
               <Trash2 size={12} /> Delete
             </button>
@@ -329,6 +348,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
             scopeKey={modifierScopeKey(modifier.type)}
             selection={{ nodeId: node.id, modId: modifier.id }}
             ctx={null}
+            readOnly={locked}
             emptyState={
               <div className="px-3 py-2 text-xs text-neutral-500">
                 Unknown op "{modifier.type}" — sidecar hasn't reported its params yet.

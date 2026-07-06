@@ -723,9 +723,18 @@ export function Viewport() {
               ('image' or 'mask' — a mask-output vector is still editable).
               Plain body drag-to-move keeps working underneath either way —
               that's Viewport's own pointerdown hit-test above, independent
-              of which overlay is mounted. */}
+              of which overlay is mounted.
+
+              Locked nodes (lock-ui.md) get neither: transform2d/path edits
+              are store-guarded anyway (lock-state-machine.md), so showing
+              handles that refuse to move would be dishonest UI. Selection/
+              hit-testing above is untouched — a locked node still selects,
+              it just draws no overlay. Checked inline (`state === 'locked'`)
+              rather than via a panels/stack helper — src/canvas/ and
+              src/panels/ never import each other (depcruise). */}
           {tool === 'move' &&
             selectedNode &&
+            selectedNode.state !== 'locked' &&
             (isVectorNode(selectedNode) ? (
               <PathEditor
                 node={selectedNode}
