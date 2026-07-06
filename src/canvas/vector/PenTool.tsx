@@ -1,5 +1,5 @@
 import { pathCommandsFor } from '@/scene/vectorRasterize';
-import { usePenStateStore } from './penState';
+import { usePenAppendTargetId, usePenStateStore } from './penState';
 import { commandsToPathD } from './svgPath';
 
 /**
@@ -29,6 +29,13 @@ export interface PenToolProps {
 export function PenTool({ viewScale }: PenToolProps) {
   const anchors = usePenStateStore((s) => s.anchors);
   const cursor = usePenStateStore((s) => s.cursor);
+  // pen-append-to-node.md: while an existing unlocked vector node is
+  // selected, a finished shape appends to it rather than starting a new
+  // node — tint the live preview with the same accent used elsewhere for
+  // "this is the active/selected thing" (PathEditor.tsx's active-anchor
+  // fill) so that distinction is legible before the shape commits.
+  const appendTargetId = usePenAppendTargetId();
+  const previewColor = appendTargetId ? '#f59e0b' : '#38bdf8';
 
   if (anchors.length === 0) return null;
 
@@ -39,7 +46,7 @@ export function PenTool({ viewScale }: PenToolProps) {
 
   return (
     <g data-testid="pen-tool-preview">
-      <path d={committedD} fill="none" stroke="#38bdf8" strokeWidth={strokeWidth} />
+      <path d={committedD} fill="none" stroke={previewColor} strokeWidth={strokeWidth} />
       {cursor && (
         <line
           data-testid="pen-tool-rubber-band"
@@ -47,7 +54,7 @@ export function PenTool({ viewScale }: PenToolProps) {
           y1={last.point.y}
           x2={cursor.x}
           y2={cursor.y}
-          stroke="#38bdf8"
+          stroke={previewColor}
           strokeWidth={strokeWidth}
           strokeDasharray={`${4 * invScale} ${4 * invScale}`}
         />

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as history from '@/scene/history';
+import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { isVectorNode, type Scene } from '@/scene/types';
@@ -16,11 +17,19 @@ function emptyScene(): Scene {
   };
 }
 
+function drawTriangleAndFinish(offset = 0): void {
+  usePenStateStore.getState().placeCorner({ x: 0 + offset, y: 0 });
+  usePenStateStore.getState().placeCorner({ x: 10 + offset, y: 0 });
+  usePenStateStore.getState().placeCorner({ x: 5 + offset, y: 10 });
+  usePenStateStore.getState().finishClosed();
+}
+
 beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
   history.clear();
   useSelectionStore.setState({ selection: { kind: 'none' } });
   usePenStateStore.setState({ anchors: [], cursor: null });
+  usePathEditStateStore.setState({ activeAnchor: null });
 });
 
 describe('pen state store — placing anchors', () => {
@@ -134,6 +143,99 @@ describe('pen state store — finishOpen', () => {
       expect(node.paths[0].closed).toBe(false);
       expect(node.paths[0].anchors).toHaveLength(2);
     }
+  });
+});
+
+describe('pen state store — commit-target rule (pen-append-to-node.md)', () => {
+  it('with a vector node selected: appends a path to it, keeps it selected, focuses the new path, one history entry', () => {
+    drawTriangleAndFinish();
+    const nodeId = useSceneStore.getState().scene.nodes[0].id;
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+
+    history.clear();
+    drawTriangleAndFinish(20);
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes).toHaveLength(1); // no second node created
+    const node = nodes[0];
+    expect(node.id).toBe(nodeId);
+    expect(isVectorNode(node) && node.paths).toHaveLength(2);
+
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'node', nodeId });
+    expect(usePathEditStateStore.getState().activeAnchor).toEqual({
+      pathIndex: 1,
+      anchorIndex: 0,
+    });
+    expect(history.canUndo()).toBe(true);
+  });
+
+  it('undoing an appended path reverts just the append, not the whole node', async () => {
+    drawTriangleAndFinish();
+    const nodeId = useSceneStore.getState().scene.nodes[0].id;
+    drawTriangleAndFinish(20);
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+
+    const fakeDeps: history.HistoryRehydrateDeps = {
+      readFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
+      decode: vi.fn(async () => ({ width: 100, height: 100, close: vi.fn() }) as never),
+    };
+    await history.undo(fakeDeps);
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].id).toBe(nodeId);
+    expect(isVectorNode(nodes[0]) && nodes[0].paths).toHaveLength(1);
+  });
+
+  it('with a locked vector node selected: creates a new node instead of appending', () => {
+    drawTriangleAndFinish();
+    const lockedId = useSceneStore.getState().scene.nodes[0].id;
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: s.scene.nodes.map((n) => (n.id === lockedId ? { ...n, state: 'locked' } : n)),
+      },
+    }));
+    useSelectionStore.getState().selectNode(lockedId);
+
+    drawTriangleAndFinish(20);
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes).toHaveLength(2);
+    const lockedNode = nodes.find((n) => n.id === lockedId);
+    expect(lockedNode && isVectorNode(lockedNode) && lockedNode.paths).toHaveLength(1); // untouched
+    const newNode = nodes.find((n) => n.id !== lockedId);
+    expect(useSelectionStore.getState().selection).toEqual({
+      kind: 'node',
+      nodeId: newNode?.id,
+    });
+  });
+
+  it('with a pixel node selected: creates a new vector node instead of appending', () => {
+    const pixelId = useSceneStore
+      .getState()
+      .addPixelNode({ sourcePath: '/tmp/a.png', sourceSize: [10, 10] });
+    useSelectionStore.getState().selectNode(pixelId);
+
+    drawTriangleAndFinish();
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes).toHaveLength(2);
+    const vectorNode = nodes.find((n) => n.id !== pixelId);
+    expect(vectorNode && isVectorNode(vectorNode)).toBe(true);
+    expect(useSelectionStore.getState().selection).toEqual({
+      kind: 'node',
+      nodeId: vectorNode?.id,
+    });
+  });
+
+  it('with nothing selected: creates a new vector node instead of appending', () => {
+    drawTriangleAndFinish();
+    useSelectionStore.getState().clear();
+
+    drawTriangleAndFinish(20);
+
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(2);
   });
 });
 

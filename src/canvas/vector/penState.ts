@@ -1,7 +1,10 @@
 import { create } from 'zustand';
+import { usePathEditStateStore } from '@/scene/pathEditState';
+import type { Selection } from '@/scene/selection';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
-import type { AnchorPoint, Point2D } from '@/scene/types';
+import type { AnchorPoint, Point2D, SceneNode, VectorNode, VectorPath } from '@/scene/types';
+import { isVectorNode } from '@/scene/types';
 
 /**
  * The in-progress pen path (features/06-vector-nodes/pen-tool.md). Ephemeral
@@ -31,6 +34,30 @@ function mirrorHandle(point: Point2D, handleOut: Point2D): Point2D {
   return { x: 2 * point.x - handleOut.x, y: 2 * point.y - handleOut.y };
 }
 
+/**
+ * pen-append-to-node.md's "selection decides" rule: the currently selected
+ * node is a valid append target iff it's a vector node and it's unlocked
+ * (Epic 07's `state: 'locked'` guards `setVectorPaths` at the store boundary
+ * anyway, but deciding here — rather than relying on that silent no-op — is
+ * what lets a locked selection fall through to "create a new node" instead of
+ * the shape just vanishing into a no-op). Shared by `commit()` (imperative,
+ * `getState()`) and `usePenAppendTarget()` (reactive, for `PenTool.tsx`'s
+ * on-canvas cue) so the two can never disagree about the target.
+ */
+function resolveAppendTarget(selection: Selection, nodes: SceneNode[]): VectorNode | null {
+  if (selection.kind !== 'node') return null;
+  const node = nodes.find((n) => n.id === selection.nodeId);
+  if (!node || !isVectorNode(node) || node.state === 'locked') return null;
+  return node;
+}
+
+/** Reactive form of `resolveAppendTarget`, for `PenTool.tsx`'s preview cue — the node id a finished shape would append to, or `null` if it will start a new node. */
+export function usePenAppendTargetId(): string | null {
+  const selection = useSelectionStore((s) => s.selection);
+  const nodes = useSceneStore((s) => s.scene.nodes);
+  return resolveAppendTarget(selection, nodes)?.id ?? null;
+}
+
 interface PenStateStore {
   anchors: AnchorPoint[];
   /** Live pointer position, document space — drives the rubber-band segment. `null` when the pointer has left the canvas. */
@@ -51,8 +78,25 @@ interface PenStateStore {
 }
 
 function commit(anchors: AnchorPoint[], closed: boolean): void {
+  const newPath: VectorPath = { anchors, closed };
+  const { selection } = useSelectionStore.getState();
+  const { scene, setVectorPaths } = useSceneStore.getState();
+  const target = resolveAppendTarget(selection, scene.nodes);
+
+  if (target) {
+    const pathIndex = target.paths.length;
+    setVectorPaths(target.id, [...target.paths, newPath]);
+    // `target` came from the CURRENT selection (`resolveAppendTarget`), so
+    // it's already selected — deliberately no `selectNode` call here: a
+    // fresh selection object would risk retriggering any
+    // selection-change-clears-activeAnchor wiring (`pathEditState.ts`) and
+    // wiping the focus set below before the Vectors tab ever paints it.
+    usePathEditStateStore.getState().setActiveAnchor({ pathIndex, anchorIndex: 0 });
+    return;
+  }
+
   const id = useSceneStore.getState().addVectorNode({
-    paths: [{ anchors, closed }],
+    paths: [newPath],
     fillRule: 'nonzero',
     output: 'image',
   });
