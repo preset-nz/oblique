@@ -18,6 +18,10 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   readTextFile: vi.fn(),
   writeTextFile: vi.fn(),
   rename: vi.fn(),
+  mkdir: vi.fn(),
+  readDir: vi.fn(),
+  remove: vi.fn(),
+  writeFile: vi.fn(),
 }));
 
 import { toast } from 'sonner';
@@ -73,8 +77,18 @@ function makeDeps(overrides: Partial<ProjectIoDeps> = {}): ProjectIoDeps {
     rename: vi.fn(async () => {}),
     readFile: vi.fn(async () => new Uint8Array([1])),
     decode: vi.fn(async () => ({ width: 200, height: 100, close: vi.fn() })),
+    mkdir: vi.fn(async () => {}),
+    writeFile: vi.fn(async () => {}),
+    readDir: vi.fn(async () => []),
+    remove: vi.fn(async () => {}),
+    encodePng: vi.fn(async () => new Uint8Array([137, 80, 78, 71])),
     ...overrides,
   };
+}
+
+/** A fake bitmap good enough for `cache.set`/`writeBakedSidecar` — never a real ImageBitmap in tests. */
+function fakeBitmap(): ImageBitmap {
+  return { width: 200, height: 100, close: vi.fn() } as unknown as ImageBitmap;
 }
 
 beforeEach(() => {
@@ -90,6 +104,7 @@ beforeEach(() => {
   });
   useProjectMetaStore.setState({ path: null, dirtySinceSave: false });
   sources.clearAll();
+  cache.clearAll();
   vi.clearAllMocks();
 });
 
@@ -217,6 +232,28 @@ describe('serialise/parse round trip', () => {
     const text = JSON.stringify({ format: 'oblique-project', version: 99, scene: {} });
     expect(() => parseProject(text)).toThrow(/version 99/);
   });
+
+  it('names the accepted version range in the error message', () => {
+    const text = JSON.stringify({ format: 'oblique-project', version: 3, scene: {} });
+    expect(() => parseProject(text)).toThrow(/1-2/);
+  });
+
+  it('accepts a v1 file (baked-persistence.md: pre-v2 files load verbatim)', () => {
+    const scene = sampleScene();
+    const text = JSON.stringify({ format: 'oblique-project', version: 1, scene });
+    expect(parseProject(text)).toEqual(scene);
+  });
+
+  it('accepts a v2 file', () => {
+    const scene = sampleScene();
+    const text = JSON.stringify({ format: 'oblique-project', version: 2, scene });
+    expect(parseProject(text)).toEqual(scene);
+  });
+
+  it('saves always write version 2', () => {
+    const doc = JSON.parse(serialiseProject(sampleScene()));
+    expect(doc.version).toBe(2);
+  });
 });
 
 describe('writeProjectFile', () => {
@@ -227,6 +264,104 @@ describe('writeProjectFile', () => {
     const writtenPath = (deps.writeTextFile as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(writtenPath).toMatch(/^\/proj\/x\.oblique\.tmp-/);
     expect(deps.rename).toHaveBeenCalledWith(writtenPath, '/proj/x.oblique');
+  });
+
+  it('no locked nodes: never touches the baked sidecar dir', async () => {
+    const deps = makeDeps();
+    await writeProjectFile('/proj/x.oblique', sampleScene(), deps);
+
+    expect(deps.mkdir).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('locked node with a baked bitmap: writes exactly one PNG named after the node id', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    cache.set('n1', 'baked', fakeBitmap());
+    const deps = makeDeps();
+
+    await writeProjectFile('/proj/x.oblique', scene, deps);
+
+    expect(deps.mkdir).toHaveBeenCalledWith('/proj/x.oblique.baked', { recursive: true });
+    expect(deps.writeFile).toHaveBeenCalledTimes(1);
+    expect(deps.writeFile).toHaveBeenCalledWith(
+      '/proj/x.oblique.baked/n1.png',
+      expect.any(Uint8Array),
+    );
+  });
+
+  it('two locked nodes: baked dir gets exactly two PNGs (acceptance: "exactly two")', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    scene.nodes.push({ ...scene.nodes[0], id: 'n2', state: 'locked' });
+    cache.set('n1', 'baked', fakeBitmap());
+    cache.set('n2', 'baked', fakeBitmap());
+    const deps = makeDeps();
+
+    await writeProjectFile('/proj/x.oblique', scene, deps);
+
+    expect(deps.writeFile).toHaveBeenCalledTimes(2);
+    const writtenPaths = (deps.writeFile as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(writtenPaths.sort()).toEqual([
+      '/proj/x.oblique.baked/n1.png',
+      '/proj/x.oblique.baked/n2.png',
+    ]);
+  });
+
+  it('locked node whose baked cache is empty (mid-rehydrate): skipped, not an error', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked'; // cache never populated for n1
+    const deps = makeDeps();
+
+    await expect(writeProjectFile('/proj/x.oblique', scene, deps)).resolves.not.toThrow();
+    expect(deps.writeFile).not.toHaveBeenCalled();
+    // Nothing survives (freshly mkdir'd, nothing written, nothing pre-existing) — cleaned up.
+    expect(deps.remove).toHaveBeenCalledWith('/proj/x.oblique.baked', { recursive: true });
+  });
+
+  it('unlock then save: the stale PNG is swept from the dir', async () => {
+    const scene = sampleScene(); // n1 active
+    const deps = makeDeps({ readDir: vi.fn(async () => [{ name: 'n1.png' }]) });
+
+    scene.nodes.push({ ...scene.nodes[0], id: 'n2', state: 'locked' });
+    cache.set('n2', 'baked', fakeBitmap());
+
+    await writeProjectFile('/proj/x.oblique', scene, deps);
+
+    expect(deps.remove).toHaveBeenCalledWith('/proj/x.oblique.baked/n1.png', undefined);
+    expect(deps.writeFile).toHaveBeenCalledWith(
+      '/proj/x.oblique.baked/n2.png',
+      expect.any(Uint8Array),
+    );
+  });
+
+  it('unlock the only locked node then save: the whole dir is removed', async () => {
+    const scene = sampleScene(); // no locked nodes
+    const deps = makeDeps();
+
+    await writeProjectFile('/proj/x.oblique', scene, deps);
+
+    expect(deps.remove).toHaveBeenCalledWith('/proj/x.oblique.baked', { recursive: true });
+    expect(deps.mkdir).not.toHaveBeenCalled();
+  });
+
+  it('save-as: writes a fresh dir beside the new path, leaves the old one untouched', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    cache.set('n1', 'baked', fakeBitmap());
+    const deps = makeDeps();
+
+    await writeProjectFile('/proj/new.oblique', scene, deps);
+
+    expect(deps.mkdir).toHaveBeenCalledWith('/proj/new.oblique.baked', { recursive: true });
+    expect(deps.writeFile).toHaveBeenCalledWith(
+      '/proj/new.oblique.baked/n1.png',
+      expect.any(Uint8Array),
+    );
+    expect(deps.remove).not.toHaveBeenCalledWith(
+      expect.stringContaining('/proj/x.oblique.baked'),
+      expect.anything(),
+    );
   });
 });
 
@@ -266,6 +401,119 @@ describe('loadProject', () => {
     expect(useSceneStore.getState().scene.id).toBe('empty');
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('bad.oblique');
+  });
+
+  describe('baked-bitmap rehydration (baked-persistence.md)', () => {
+    function lockedScene() {
+      const scene = sampleScene();
+      scene.nodes[0].state = 'locked';
+      return scene;
+    }
+
+    it('a locked node with a decodable sidecar PNG: cache populated, no cook needed', async () => {
+      const readFile = vi.fn(async (path: string) => {
+        if (path === '/proj/x.oblique.baked/n1.png') return new Uint8Array([9, 9]);
+        return new Uint8Array([1]);
+      });
+      const decode = vi.fn(async () => ({ width: 200, height: 100, close: vi.fn() }));
+      const deps = makeDeps({
+        readTextFile: vi.fn(async () => serialiseProject(lockedScene())),
+        readFile,
+        decode,
+      });
+
+      await loadProject('/proj/x.oblique', deps);
+
+      expect(readFile).toHaveBeenCalledWith('/proj/x.oblique.baked/n1.png');
+      expect(cache.get('n1', 'baked')).toBeDefined();
+    });
+
+    it('missing sidecar PNG: non-fatal, cache slot left empty for the scheduler to recover', async () => {
+      const deps = makeDeps({
+        readTextFile: vi.fn(async () => serialiseProject(lockedScene())),
+        readFile: vi.fn(async (path: string) => {
+          if (path === '/proj/x.oblique.baked/n1.png') throw new Error('ENOENT');
+          return new Uint8Array([1]);
+        }),
+      });
+
+      await expect(loadProject('/proj/x.oblique', deps)).resolves.not.toThrow();
+      expect(cache.get('n1', 'baked')).toBeUndefined();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(useSceneStore.getState().scene.id).toBe('scene-1');
+    });
+
+    it('corrupt sidecar PNG: non-fatal, cache slot left empty', async () => {
+      const deps = makeDeps({
+        readTextFile: vi.fn(async () => serialiseProject(lockedScene())),
+        decode: vi.fn(async () => {
+          throw new Error('bad PNG');
+        }),
+      });
+
+      await expect(loadProject('/proj/x.oblique', deps)).resolves.not.toThrow();
+      expect(cache.get('n1', 'baked')).toBeUndefined();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('a v1 project (no baked sidecar ever written) still opens; locked nodes just rehydrate', async () => {
+      const scene = lockedScene();
+      const text = JSON.stringify({ format: 'oblique-project', version: 1, scene });
+      const deps = makeDeps({
+        readTextFile: vi.fn(async () => text),
+        readFile: vi.fn(async (path: string) => {
+          if (path.endsWith('.baked/n1.png')) throw new Error('ENOENT');
+          return new Uint8Array([1]);
+        }),
+      });
+
+      await expect(loadProject('/proj/x.oblique', deps)).resolves.not.toThrow();
+      expect(useSceneStore.getState().scene.id).toBe('scene-1');
+      expect(cache.get('n1', 'baked')).toBeUndefined();
+    });
+
+    it('save then load round-trip: the bytes this save wrote are exactly what the next load decodes', async () => {
+      // A fake filesystem — just enough to make save's writeFile output
+      // reachable by load's readFile, the way a real disk would.
+      const fs = new Map<string, Uint8Array>();
+      const scene = lockedScene();
+      cache.set('n1', 'baked', fakeBitmap());
+      const pngBytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+
+      const saveDeps = makeDeps({
+        writeFile: vi.fn(async (path: string, bytes: Uint8Array) => {
+          fs.set(path, bytes);
+        }),
+        encodePng: vi.fn(async () => pngBytes),
+      });
+      await writeProjectFile('/proj/round.oblique', scene, saveDeps);
+      expect(fs.get('/proj/round.oblique.baked/n1.png')).toEqual(pngBytes);
+
+      // Reset the cache the way a real reopen would find it (nothing in
+      // memory) — the round-trip has to come entirely from `fs`.
+      cache.clearAll();
+
+      const decode = vi.fn(async (bytes: Uint8Array) => ({
+        width: 200,
+        height: 100,
+        close: vi.fn(),
+        // biome-ignore lint/suspicious/noExplicitAny: tagging the decoded bytes for the assertion below
+        _bytes: bytes as any,
+      }));
+      const loadDeps = makeDeps({
+        readTextFile: vi.fn(async () => serialiseProject(scene)),
+        readFile: vi.fn(async (path: string) => {
+          const bytes = fs.get(path);
+          if (!bytes) throw new Error(`not found: ${path}`);
+          return bytes;
+        }),
+        decode,
+      });
+      await loadProject('/proj/round.oblique', loadDeps);
+
+      expect(decode).toHaveBeenCalledWith(pngBytes);
+      expect(cache.get('n1', 'baked')).toBeDefined();
+    });
   });
 });
 
