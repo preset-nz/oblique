@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSceneStore } from '@/scene/store';
 import type { AnchorPoint, Point2D, VectorNode, VectorPath } from '@/scene/types';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
@@ -13,7 +14,6 @@ import {
   insertAnchorAt,
   moveAnchor,
 } from './pathEdit';
-import { usePathEditStateStore } from './pathEditState';
 import { commandsToPathD } from './svgPath';
 import { localDistanceThreshold, mapVectorPaths } from './vectorTransform';
 

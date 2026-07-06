@@ -149,6 +149,53 @@ describe('setVectorPaths', () => {
   });
 });
 
+describe('setVectorFillRule', () => {
+  it('replaces fillRule and dirties the node at both levels', () => {
+    const id = useSceneStore
+      .getState()
+      .addVectorNode({ paths: trianglePaths, fillRule: 'nonzero' });
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+
+    useSceneStore.getState().setVectorFillRule(id, 'evenodd');
+
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node).toMatchObject({ fillRule: 'evenodd' });
+    expect(node.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('is a no-op on a non-vector node id', () => {
+    const id = useSceneStore
+      .getState()
+      .addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
+    useSceneStore.getState().setVectorFillRule(id, 'evenodd');
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node).not.toHaveProperty('fillRule');
+  });
+
+  it('dirties other nodes whose maskRefs point at this vector node', () => {
+    const vectorId = useSceneStore
+      .getState()
+      .addVectorNode({ paths: trianglePaths, fillRule: 'nonzero' });
+    const pixelId = useSceneStore
+      .getState()
+      .addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
+    const modId = useSceneStore.getState().addModifier(pixelId, 'gaussian_blur', { radius: 4 });
+    useSceneStore.getState().setModifierVectorMask(pixelId, modId, vectorId, {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    useSceneStore.getState().clearDirty(pixelId, 'draft');
+    useSceneStore.getState().clearDirty(pixelId, 'working');
+
+    useSceneStore.getState().setVectorFillRule(vectorId, 'evenodd');
+
+    const pixelNodeAfter = useSceneStore.getState().scene.nodes.find((n) => n.id === pixelId);
+    expect(pixelNodeAfter?.dirty).toEqual({ draft: true, working: true });
+  });
+});
+
 describe('removeNode', () => {
   it('removes the node by id', () => {
     const id = useSceneStore

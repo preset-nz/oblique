@@ -74,6 +74,17 @@ interface SceneState {
    */
   setVectorPaths: (nodeId: string, paths: VectorPath[]) => void;
 
+  /**
+   * Sets a vector node's `fillRule` (vectors-tab.md's node-level control).
+   * Same dirty posture as `setVectorPaths` — the fill rule changes how
+   * overlapping/self-intersecting paths rasterise, so it's a raster change
+   * (dirty rule 1), not a compositing-only toggle like `output`. Shares the
+   * cross-node maskRef dirty with `setVectorPaths` (`dirtyMaskRefConsumers`)
+   * — any modifier whose live vector mask resolves to this node also
+   * recooks. No-op on a non-vector node id.
+   */
+  setVectorFillRule: (nodeId: string, fillRule: VectorNode['fillRule']) => void;
+
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
@@ -136,6 +147,31 @@ interface SceneState {
 
 function updateNode(nodes: SceneNode[], id: string, fn: (node: SceneNode) => SceneNode) {
   return nodes.map((n) => (n.id === id ? fn(n) : n));
+}
+
+/**
+ * Cross-node dirty (vector-modifier-masks.md, shared by `setVectorPaths` and
+ * `setVectorFillRule`): any OTHER node carrying a modifier whose `maskId`
+ * resolves to a `maskRefs` entry pointing at `vectorNodeId` is dirtied too —
+ * its own paths/params didn't change, but the rasterised mask plane it cooks
+ * with did.
+ */
+function dirtyMaskRefConsumers(
+  nodes: SceneNode[],
+  maskRefs: Scene['maskRefs'],
+  vectorNodeId: string,
+): SceneNode[] {
+  const affectedRefIds = new Set(
+    Object.values(maskRefs ?? {})
+      .filter((ref) => ref.nodeId === vectorNodeId)
+      .map((ref) => ref.id),
+  );
+  if (affectedRefIds.size === 0) return nodes;
+  return nodes.map((n) => {
+    if (n.id === vectorNodeId) return n;
+    const referencesEditedNode = n.modifiers.some((m) => m.maskId && affectedRefIds.has(m.maskId));
+    return referencesEditedNode ? { ...n, dirty: dirtyBoth() } : n;
+  });
 }
 
 /**
@@ -254,23 +290,28 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       const target = s.scene.nodes.find((n) => n.id === nodeId);
       if (target?.type !== 'vector') return s;
 
-      // Cross-node dirty: every maskRefs entry pointing at this node marks
-      // ITS modifier's node dirty too, even though that node's own
-      // paths/params are untouched (see setVectorPaths' doc comment above).
-      const maskRefs = s.scene.maskRefs ?? {};
-      const affectedRefIds = new Set(
-        Object.values(maskRefs)
-          .filter((ref) => ref.nodeId === nodeId)
-          .map((ref) => ref.id),
-      );
+      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+        ...(n as VectorNode),
+        paths,
+        dirty: dirtyBoth(),
+      }));
+      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
 
-      const nodes = s.scene.nodes.map((n) => {
-        if (n.id === nodeId) return { ...(n as VectorNode), paths, dirty: dirtyBoth() };
-        const referencesEditedNode = n.modifiers.some(
-          (m) => m.maskId && affectedRefIds.has(m.maskId),
-        );
-        return referencesEditedNode ? { ...n, dirty: dirtyBoth() } : n;
-      });
+      return { scene: { ...s.scene, nodes } };
+    });
+  },
+
+  setVectorFillRule: (nodeId, fillRule) => {
+    set((s) => {
+      const target = s.scene.nodes.find((n) => n.id === nodeId);
+      if (target?.type !== 'vector') return s;
+
+      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+        ...(n as VectorNode),
+        fillRule,
+        dirty: dirtyBoth(),
+      }));
+      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
 
       return { scene: { ...s.scene, nodes } };
     });

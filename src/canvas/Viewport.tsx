@@ -5,6 +5,7 @@ import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { useMarqueeStateStore } from '@/scene/marquee';
+import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D, isVectorNode } from '@/scene/types';
@@ -35,7 +36,6 @@ import { usePanZoom } from './usePanZoom';
 import { PathEditor } from './vector/PathEditor';
 import { PenTool } from './vector/PenTool';
 import { deleteAnchor } from './vector/pathEdit';
-import { usePathEditStateStore } from './vector/pathEditState';
 import { MIN_ANCHORS_TO_CLOSE, usePenStateStore } from './vector/penState';
 import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
 
