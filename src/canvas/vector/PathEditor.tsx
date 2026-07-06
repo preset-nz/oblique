@@ -3,7 +3,7 @@ import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSceneStore } from '@/scene/store';
 import type { AnchorPoint, Point2D, VectorNode, VectorPath } from '@/scene/types';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
-import { pathCommandsFor } from '@/scene/vectorRasterize';
+import { buildPath2D, pathCommandsFor } from '@/scene/vectorRasterize';
 import { localToWorld, type NodeExtent, type Point, worldToLocal } from '../transform2d';
 import {
   type AnchorMode,
@@ -13,6 +13,7 @@ import {
   dragHandle,
   insertAnchorAt,
   moveAnchor,
+  movePath,
 } from './pathEdit';
 import { commandsToPathD } from './svgPath';
 import { localDistanceThreshold, mapVectorPaths } from './vectorTransform';
@@ -57,6 +58,50 @@ const HANDLE_SCREEN_RADIUS = 3;
 const CLICK_DRAG_SCREEN_PX = 3;
 /** Screen-space distance within which a segment click inserts an anchor. */
 const SEGMENT_CLICK_SCREEN_PX = 6;
+/** Screen-space catch band for an open focused path's stroke-as-body hit region (move-path-within-node.md). */
+const PATH_BODY_STROKE_SCREEN_PX = 8;
+
+/**
+ * A throwaway 2d context used only for `Path2D.isPointInPath`/`isPointInStroke`
+ * hit-testing (move-path-within-node.md) — never drawn to, never sized,
+ * exactly the "production-only, DOM/Canvas-only" split `vectorRasterize.ts`
+ * already uses for `rasterizeVector`/`buildPath2D`. Lazily created and
+ * memoised at module scope: cheap, and pointerdown-rate calls don't warrant a
+ * fresh canvas every drag start.
+ */
+let hitTestCtx: CanvasRenderingContext2D | null = null;
+function getHitTestCtx(): CanvasRenderingContext2D {
+  if (!hitTestCtx) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2d context unavailable for path hit-testing');
+    hitTestCtx = ctx;
+  }
+  return hitTestCtx;
+}
+
+/**
+ * Precise local-space confirm for a focused path's body hit (fill for a
+ * closed path honouring the node's `fillRule`, stroke for an open path
+ * scaled by `localDistanceThreshold` the same way `onSegmentPointerDown`
+ * scales its own insert-click threshold) — the same "broad SVG catcher,
+ * precise JS confirm, bail if outside" shape `onSegmentPointerDown` already
+ * uses, per the story's Path2D prescription.
+ */
+function hitTestPathBody(
+  path: VectorPath,
+  localPoint: Point,
+  fillRule: 'nonzero' | 'evenodd',
+  localStrokeThreshold: number,
+): boolean {
+  const ctx = getHitTestCtx();
+  const path2d = buildPath2D(pathCommandsFor([path]));
+  if (path.closed) {
+    return ctx.isPointInPath(path2d, localPoint.x, localPoint.y, fillRule);
+  }
+  ctx.lineWidth = localStrokeThreshold * 2;
+  return ctx.isPointInStroke(path2d, localPoint.x, localPoint.y);
+}
 
 export interface PathEditorProps {
   node: VectorNode;
@@ -106,6 +151,12 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
   const handleRadius = HANDLE_SCREEN_RADIUS * invScale;
   const clickDragThresholdDoc = CLICK_DRAG_SCREEN_PX * invScale;
   const segmentClickThresholdDoc = SEGMENT_CLICK_SCREEN_PX * invScale;
+  const pathBodyStrokeThresholdDoc = PATH_BODY_STROKE_SCREEN_PX * invScale;
+
+  // The focused path (`pathEditState.ts`'s `activeAnchor.pathIndex`) is the
+  // only one whose body claims a drag — see module doc / story design call.
+  const focusedPathIndex = activeAnchor?.pathIndex ?? null;
+  const focusedPath = focusedPathIndex !== null ? (node.paths[focusedPathIndex] ?? null) : null;
 
   function onAnchorPointerDown(e: React.PointerEvent, pathIndex: number, anchorIndex: number) {
     e.stopPropagation();
@@ -206,6 +257,63 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
     window.addEventListener('keydown', onEscape);
   }
 
+  /**
+   * Moves the focused path as a rigid unit — translation only, one
+   * `setVectorPaths` commit on pointerup, mirroring `onAnchorPointerDown`'s
+   * preview/commit/Escape-cancel shape exactly (move-path-within-node.md).
+   * Only ever wired to the focused path's own body-hit element, so anchor
+   * focus never changes here — the path was already focused by whatever
+   * click/row-selection got us here.
+   */
+  function onPathBodyPointerDown(e: React.PointerEvent, pathIndex: number) {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const basePaths = node.paths;
+    const startDoc = toDoc(e.clientX, e.clientY);
+    const startLocal = toLocal(startDoc);
+
+    // Precise confirm (module doc): the SVG catcher element is a generous
+    // approximation of the body region, this is the authoritative test.
+    const localThreshold = localDistanceThreshold(pathBodyStrokeThresholdDoc, transform2d);
+    if (!hitTestPathBody(basePaths[pathIndex], startLocal, node.fillRule, localThreshold)) return;
+
+    let moved = false;
+    let latest = basePaths;
+
+    const onMove = (ev: PointerEvent) => {
+      const doc = toDoc(ev.clientX, ev.clientY);
+      const dx = doc.x - startDoc.x;
+      const dy = doc.y - startDoc.y;
+      if (!moved && dx * dx + dy * dy <= clickDragThresholdDoc * clickDragThresholdDoc) return;
+      moved = true;
+      const local = toLocal(doc);
+      const delta: Point2D = { x: local.x - startLocal.x, y: local.y - startLocal.y };
+      latest = updatePaths(basePaths, pathIndex, (p) => movePath(p, delta));
+      setDragPaths(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('keydown', onEscape);
+      setDragPaths(null);
+      // Unlike an anchor click (which cycles corner/smooth/symmetric), a
+      // plain click on the path body has no action of its own — a
+      // no-op-delta commit would add a dead history entry for nothing.
+      if (moved) setVectorPaths(node.id, latest);
+    };
+    const onEscape = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('keydown', onEscape);
+      setDragPaths(null); // discard the in-flight move, no commit
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('keydown', onEscape);
+  }
+
   function onSegmentPointerDown(e: React.PointerEvent) {
     e.stopPropagation();
     e.preventDefault();
@@ -220,6 +328,26 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
 
   return (
     <g data-testid="path-editor">
+      {/* Focused path's body-hit region (move-path-within-node.md) — painted
+          FIRST (bottom) so anchors/handles and the segment-insert catcher
+          below still win on top of it: near-outline clicks still insert an
+          anchor, anchor/handle clicks still edit, only the plain interior
+          (or, for an open path, the stroke band outside the insert catcher)
+          starts a path-move. Only rendered for the one path that's focused —
+          every other path's body still falls through to node body-drag,
+          untouched. */}
+      {focusedPath && (
+        <path
+          data-testid="path-body-hit"
+          d={commandsToPathD(pathCommandsFor([worldPaths[focusedPathIndex as number]]))}
+          fill={focusedPath.closed ? 'transparent' : 'none'}
+          fillRule={node.fillRule}
+          stroke={focusedPath.closed ? 'none' : 'transparent'}
+          strokeWidth={focusedPath.closed ? 0 : PATH_BODY_STROKE_SCREEN_PX * 2 * invScale}
+          style={{ pointerEvents: 'auto', cursor: 'grab' }}
+          onPointerDown={(e) => onPathBodyPointerDown(e, focusedPathIndex as number)}
+        />
+      )}
       {/* Wide, near-invisible hit stroke for segment-click-to-insert — sits
           only along the outline (fill="none"), so clicks inside the shape's
           filled interior fall through to the canvas's own move-drag

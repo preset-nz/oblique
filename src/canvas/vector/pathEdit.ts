@@ -163,6 +163,18 @@ export function moveAnchor(anchor: AnchorPoint, delta: Point2D): AnchorPoint {
 }
 
 /**
+ * Moves an entire path rigidly by `delta` (move-path-within-node.md) —
+ * `moveAnchor` applied to every anchor, so the shape's own geometry
+ * (handle lengths/angles, `closed`) is unchanged, only translated. `delta` is
+ * in the same local/path space every other `pathEdit.ts` helper operates in;
+ * `PathEditor.tsx` computes it via `worldToLocal` on both drag endpoints,
+ * exactly like `onAnchorPointerDown` already does for a single anchor.
+ */
+export function movePath(path: VectorPath, delta: Point2D): VectorPath {
+  return { ...path, anchors: path.anchors.map((a) => moveAnchor(a, delta)) };
+}
+
+/**
  * Drags one handle to `newPos`, applying `mode`'s constraint (captured once
  * at drag start by the caller, from the anchor's pre-drag geometry — a
  * derived mode must not be re-evaluated mid-drag, or geometry passing

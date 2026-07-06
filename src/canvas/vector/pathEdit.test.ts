@@ -9,6 +9,7 @@ import {
   dragHandle,
   insertAnchorAt,
   moveAnchor,
+  movePath,
   type PathHit,
 } from './pathEdit';
 
@@ -115,6 +116,41 @@ describe('moveAnchor', () => {
     const moved = moveAnchor(cornerAnchor, { x: 1, y: 1 });
     expect(moved.handleIn).toBeUndefined();
     expect(moved.handleOut).toBeUndefined();
+  });
+});
+
+describe('movePath', () => {
+  it('translates every anchor point and handle by the same delta, closed flag untouched', () => {
+    const path: VectorPath = {
+      closed: true,
+      anchors: [symmetricAnchor, cornerAnchor],
+    };
+    const moved = movePath(path, { x: 5, y: -5 });
+    expect(moved.closed).toBe(true);
+    expect(moved.anchors[0].point).toEqual({ x: 15, y: 5 });
+    expect(moved.anchors[0].handleOut).toEqual({ x: 25, y: 5 });
+    expect(moved.anchors[0].handleIn).toEqual({ x: 5, y: 5 });
+    expect(moved.anchors[1].point).toEqual({ x: 15, y: 5 });
+    expect(moved.anchors[1].handleIn).toBeUndefined();
+    expect(moved.anchors[1].handleOut).toBeUndefined();
+  });
+
+  it('leaves relative handle geometry (shape) unchanged — only translated', () => {
+    const path: VectorPath = { closed: false, anchors: [symmetricAnchor] };
+    const moved = movePath(path, { x: 100, y: 100 });
+    const anchor = moved.anchors[0];
+    const handleOut = requirePoint(anchor.handleOut);
+    const handleIn = requirePoint(anchor.handleIn);
+    const outVec = { x: handleOut.x - anchor.point.x, y: handleOut.y - anchor.point.y };
+    const inVec = { x: handleIn.x - anchor.point.x, y: handleIn.y - anchor.point.y };
+    expect(outVec).toEqual({ x: 10, y: 0 }); // same as symmetricAnchor's own handleOut - point
+    expect(inVec).toEqual({ x: -10, y: 0 });
+  });
+
+  it('zero delta is a no-op', () => {
+    const path: VectorPath = { closed: true, anchors: [cornerAnchor] };
+    const moved = movePath(path, { x: 0, y: 0 });
+    expect(moved.anchors[0].point).toEqual(cornerAnchor.point);
   });
 });
 
