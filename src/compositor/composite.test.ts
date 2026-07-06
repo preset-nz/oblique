@@ -79,6 +79,11 @@ function fakeCtx(): Composite2DContext & {
     lineTo: vi.fn(),
     stroke: vi.fn(),
   };
+  // Self-referential sentinel: `ctx.canvas` stands in for "this context's own
+  // backing surface", the same pattern `createFakeScratch` already uses for
+  // a scratch's `canvas` field — good enough for the drawImage-call-recording
+  // this harness does (it never inspects `src`, only dest rect/alpha/op).
+  (ctx as unknown as { canvas: unknown }).canvas = ctx;
   return ctx as unknown as Composite2DContext & { calls: typeof calls };
 }
 
@@ -340,8 +345,9 @@ describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
     const top = makeNode('top');
     const mask = makeNode('mask', { output: 'mask' });
     const bottom = makeNode('bottom');
+    const maskBitmap = fakeBitmap();
     cache.set('top', 'baked', fakeBitmap());
-    cache.set('mask', 'baked', fakeBitmap());
+    cache.set('mask', 'baked', maskBitmap);
     cache.set('bottom', 'baked', fakeBitmap());
 
     const scene = makeScene([top, mask, bottom]);
@@ -353,15 +359,23 @@ describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
     expect(scratches).toHaveLength(1);
     const scratch = scratches[0];
 
-    // `bottom` drew into the scratch, not the main canvas.
-    expect(scratch.ctx.drawImage).toHaveBeenCalledTimes(2); // bottom, then the mask bitmap itself
-    expect(scratch.ctx.calls[1]).toMatchObject({ op: 'destination-in', alpha: 1 });
+    // The scratch is seeded with the live backdrop first, `bottom` draws on
+    // top of that (not onto the main canvas), then the mask clips it.
+    expect(scratch.ctx.drawImage).toHaveBeenCalledTimes(3); // seed, bottom, mask bitmap
+    expect(scratch.ctx.calls[0]).toMatchObject({ op: 'source-over', alpha: 1 }); // backdrop seed
+    expect(scratch.ctx.calls[2]).toMatchObject({ op: 'destination-in', alpha: 1 });
 
-    // The scratch's result (not `bottom` or `mask` individually) is what
-    // lands on the main canvas, followed by `top` drawn straight through.
-    expect(ctx.drawImage).toHaveBeenCalledTimes(2);
+    // Stamp-back is "cut the hole, insert the blended plug": destination-out
+    // with the mask erases its coverage from the live backdrop, then the
+    // clipped scratch lands with `lighter` (additive on premultiplied
+    // values) — never `source-over`, which would double-discount the
+    // already-cut hole at feathered edges (span-backdrop-blending.md).
+    expect(ctx.drawImage).toHaveBeenCalledTimes(3); // cut, plug, then `top` straight through
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, maskBitmap, 0, 0, 200, 100);
+    expect(ctx.calls[0]).toMatchObject({ op: 'destination-out', alpha: 1 });
     // `createFakeScratch` hands out the scratch's own ctx as its `canvas` too.
-    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, scratch.ctx, 0, 0, 200, 100);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(2, scratch.ctx, 0, 0, 200, 100);
+    expect(ctx.calls[1]).toMatchObject({ op: 'lighter', alpha: 1 });
   });
 
   it('a mask node with nothing below it (stack bottom) is a no-op, not an error', () => {
@@ -398,10 +412,11 @@ describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
 
     expect(scratches).toHaveLength(2); // two independent masked spans
     // Scratch content is never shared across spans.
-    expect(scratches[0].ctx.drawImage).toHaveBeenCalledTimes(2); // bottom + maskB
-    expect(scratches[1].ctx.drawImage).toHaveBeenCalledTimes(2); // middle + maskA
-    // Two masked spans onto the main canvas, plus `top` drawn straight through.
-    expect(ctx.drawImage).toHaveBeenCalledTimes(3);
+    expect(scratches[0].ctx.drawImage).toHaveBeenCalledTimes(3); // seed + bottom + maskB
+    expect(scratches[1].ctx.drawImage).toHaveBeenCalledTimes(3); // seed + middle + maskA
+    // Two masked spans (cut + plug each) onto the main canvas, plus `top`
+    // drawn straight through.
+    expect(ctx.drawImage).toHaveBeenCalledTimes(5);
   });
 
   it('a hidden mask node stops clipping — its span draws straight through, unclipped', () => {
@@ -472,14 +487,14 @@ describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
     compositeScene(ctx, scene, 'baked', cache.get, createScratch);
 
     expect(scratches[0].ctx.drawImage).toHaveBeenNthCalledWith(
-      2,
+      3,
       featheredMaskBitmap,
       0,
       0,
       200,
       100,
     );
-    expect(scratches[0].ctx.calls[1].op).toBe('destination-in');
+    expect(scratches[0].ctx.calls[2].op).toBe('destination-in');
   });
 
   it("ignores the mask node's own blendMode/opacity (source spec)", () => {
@@ -493,7 +508,92 @@ describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {
     const { createScratch, scratches } = createFakeScratch();
     compositeScene(ctx, scene, 'baked', cache.get, createScratch);
 
-    expect(scratches[0].ctx.calls[1]).toMatchObject({ alpha: 1, op: 'destination-in' });
+    expect(scratches[0].ctx.calls[2]).toMatchObject({ alpha: 1, op: 'destination-in' });
+  });
+});
+
+describe('span-backdrop-blending.md — masked spans blend against the backdrop', () => {
+  it("seeds the scratch with the live backdrop before drawing the span's own content, so a member node's blendMode/opacity is applied identically with or without a mask above it", () => {
+    // Same content node, same blend/opacity, once with nothing above it
+    // (draws straight onto the main canvas) and once under a mask (draws
+    // into the backdrop-seeded scratch) — the node's own drawImage call
+    // (op/alpha) must be identical either way. That's the "pixel-identical
+    // modulo the clip itself" acceptance, expressed as an operator-sequence
+    // assertion (the fake-canvas harness computes no pixels).
+    const content = makeNode('content', { blendMode: 'multiply', opacity: 0.6 });
+    cache.set('content', 'baked', fakeBitmap());
+
+    const unmaskedScene = makeScene([content]);
+    const unmaskedCtx = fakeCtx();
+    compositeScene(unmaskedCtx, unmaskedScene, 'baked');
+    expect(unmaskedCtx.calls).toHaveLength(1);
+    const unmaskedCall = unmaskedCtx.calls[0];
+
+    const mask = makeNode('mask', { output: 'mask' });
+    cache.set('mask', 'baked', fakeBitmap());
+    const maskedScene = makeScene([mask, content]); // mask on top, content below it
+    const maskedCtx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(maskedCtx, maskedScene, 'baked', cache.get, createScratch);
+
+    // scratches[0].calls[0] is the backdrop seed; calls[1] is `content` itself.
+    const maskedCall = scratches[0].ctx.calls[1];
+    expect(maskedCall).toEqual(unmaskedCall);
+  });
+
+  it('a one-image span multiplies/screens against the backdrop, not against an empty scratch', () => {
+    // The defect this story fixes: before the backdrop seed, a masked span's
+    // member nodes blended against transparency, which renders identically
+    // to `normal` — this is the regression test for that.
+    const backdropNode = makeNode('backdrop');
+    const mask = makeNode('mask', { output: 'mask' });
+    const topSpanMember = makeNode('top-member', { blendMode: 'multiply' });
+    cache.set('backdrop', 'baked', fakeBitmap());
+    cache.set('mask', 'baked', fakeBitmap());
+    cache.set('top-member', 'baked', fakeBitmap());
+
+    // Array order top-to-bottom [top-member, mask, backdrop]: bottom-up walk
+    // gives spans [backdrop, mask] (masked, drawn first), then [top-member]
+    // (unmasked, drawn straight onto `ctx` afterwards). The masked span's
+    // scratch must be seeded with the live backdrop *before* `backdrop`
+    // itself draws, so `backdrop`'s own multiply/screen (if any) — and any
+    // later member's — sees real pixels, not transparency: the scratch's
+    // very first drawImage call is always the backdrop-seed copy
+    // (`source-over`/alpha 1), never skipped.
+    const scene = makeScene([topSpanMember, mask, backdropNode]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(1);
+    expect(scratches[0].ctx.calls[0]).toMatchObject({ op: 'source-over', alpha: 1 });
+  });
+
+  it('feathered mask over a transparent background: stamp-back uses destination-out + lighter, never source-over, so soft edges are not double-composited', () => {
+    // Proof sketch (full algebra in drawMaskedSpan's doc comment): in
+    // premultiplied space, `destination-out` with mask alpha M leaves
+    // `backdrop*(1-M)` on the main canvas; the scratch (already
+    // `destination-in`-clipped) holds `blended*M`. Stamping the clipped
+    // scratch with `lighter` (pure premultiplied addition) yields
+    // `backdrop*(1-M) + blended*M` — the exact coverage-weighted lerp, with
+    // no cross term. `source-over` would instead multiply the backdrop
+    // remainder by `(1 - blended.alpha*M)`, under-counting alpha at any
+    // pixel where 0 < M < 1 (a feathered edge) over a transparent
+    // background and producing a visible halo — this test locks the
+    // operator choice in.
+    const bottom = makeNode('bottom');
+    const mask = makeNode('mask', { output: 'mask' }); // stands in for a feathered (blurred) mask raster
+    cache.set('bottom', 'baked', fakeBitmap());
+    cache.set('mask', 'baked', fakeBitmap());
+
+    const scene = makeScene([mask, bottom]);
+    const ctx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(ctx, scene, 'baked', cache.get, createScratch);
+
+    expect(scratches).toHaveLength(1);
+    expect(ctx.calls.map((c) => c.op)).toEqual(['destination-out', 'lighter']);
+    expect(ctx.calls.every((c) => c.alpha === 1)).toBe(true);
   });
 });
 

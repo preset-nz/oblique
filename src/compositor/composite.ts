@@ -5,7 +5,13 @@ import { isPixelNode } from '@/scene/types';
 import { mapBlendMode } from './blend';
 
 /** The subset of the Canvas 2D API the compositor needs — satisfied by both
- * `CanvasRenderingContext2D` and `OffscreenCanvasRenderingContext2D`. */
+ * `CanvasRenderingContext2D` and `OffscreenCanvasRenderingContext2D`.
+ * `canvas` is typed separately (not picked straight off
+ * `CanvasRenderingContext2D`) because the two real contexts disagree on its
+ * type (`HTMLCanvasElement` vs `OffscreenCanvas`) — `CanvasImageSource` is
+ * the common supertype both actually satisfy, and it's exactly what
+ * `drawImage` needs to read a context's own backing surface back as a
+ * source (span-backdrop-blending.md's backdrop-seed step). */
 export type Composite2DContext = Pick<
   CanvasRenderingContext2D,
   | 'drawImage'
@@ -27,7 +33,7 @@ export type Composite2DContext = Pick<
   | 'moveTo'
   | 'lineTo'
   | 'stroke'
->;
+> & { readonly canvas: CanvasImageSource };
 
 const STRIPE_BG = '#3a2a1a';
 const STRIPE_FG = '#f59e0b';
@@ -249,11 +255,40 @@ function realCreateScratch(width: number, height: number): ScratchCanvas {
 
 /**
  * Composites `content` (everything since the previous mask boundary) into a
- * scratch canvas, clips it to `maskNode`'s own cooked raster via
- * `destination-in`, then draws the clipped result onto the main `ctx`
- * (architecture.md §Compositor, "Mask scoping"). `maskNode` itself is never
- * drawn as content — its `blendMode`/`opacity` are ignored (mask-span-
- * scoping.md) and its raster only ever supplies the clip's alpha.
+ * scratch canvas *seeded with the live backdrop* (everything already
+ * composited onto `ctx` by earlier spans), clips the result to `maskNode`'s
+ * own cooked raster via `destination-in`, then stamps it back onto the main
+ * `ctx` (architecture.md §Compositor, "Mask scoping"; span-backdrop-
+ * blending.md). `maskNode` itself is never drawn as content — its
+ * `blendMode`/`opacity` are ignored (mask-span-scoping.md) and its raster
+ * only ever supplies the clip's alpha.
+ *
+ * Seeding the scratch with the backdrop (rather than leaving it empty, as
+ * before this fix) is what makes a span member's `blendMode`/`opacity` see
+ * real pixels below the span, instead of transparency — a one-image span
+ * with `multiply`/`screen` no longer silently renders as `normal`
+ * (span-backdrop-blending.md's defect).
+ *
+ * Stamp-back operator sequence — the story's "one real problem": cut the
+ * hole, then insert the blended plug.
+ *
+ *   1. `ctx` `destination-out` with the mask alpha (M): erases exactly the
+ *      mask's coverage from the live backdrop. `main' = backdrop*(1-M)`.
+ *   2. scratch `destination-in` with M (already applied for the clip):
+ *      `scratch' = blended*M`, where `blended` = backdrop-seeded,
+ *      content-composited scratch from step 1 above.
+ *   3. `ctx` `lighter` (not `source-over`!) with the clipped scratch: pure
+ *      premultiplied addition, `main'' = backdrop*(1-M) + blended*M`.
+ *
+ * That's the coverage-weighted lerp mask alpha is meant to express, done in
+ * premultiplied space (where it's linear). `source-over` would be wrong
+ * here: its own `(1 - srcAlpha)` factor would discount the just-cut hole a
+ * *second* time by the clipped scratch's own alpha (`blended.alpha * M`),
+ * under-counting backdrop alpha at partially-covered (feathered) pixels —
+ * e.g. an opaque backdrop and opaque content at M=0.5 would land at
+ * `main.alpha = 0.75` instead of `1`, a visible halo over a transparent
+ * document background. `lighter` has no such discount, so it composes
+ * exactly.
  *
  * Edge cases named in the story's acceptance:
  * - `content` empty (mask sits at the stack bottom, nothing below it since
@@ -294,6 +329,12 @@ function drawMaskedSpan(
   const scratch = createScratch(scratchW, scratchH);
   scratch.ctx.imageSmoothingEnabled = true;
 
+  // Seed the scratch with the live backdrop — everything painted onto `ctx`
+  // by earlier spans — *before* drawing this span's own content.
+  scratch.ctx.globalAlpha = 1;
+  scratch.ctx.globalCompositeOperation = 'source-over';
+  scratch.ctx.drawImage(ctx.canvas, 0, 0, scratchW, scratchH);
+
   drawSpanContent(scratch.ctx, content, level, scene, getCache);
 
   const [maskDestW, maskDestH] = destSizeFor(maskNode, level, scene.documentSize);
@@ -303,9 +344,18 @@ function drawMaskedSpan(
     scratch.ctx.drawImage(maskBest.bitmap, 0, 0, maskDestW, maskDestH);
   });
 
+  // Cut the hole: erase the mask's coverage from the live backdrop.
+  withNodeTransform(ctx, maskNode, maskDestW, maskDestH, level, () => {
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.drawImage(maskBest.bitmap, 0, 0, maskDestW, maskDestH);
+  });
+
+  // Insert the blended plug — additive, not `source-over` (see doc comment).
   ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalCompositeOperation = 'lighter';
   ctx.drawImage(scratch.canvas, 0, 0, scratchW, scratchH);
+  ctx.globalCompositeOperation = 'source-over'; // restore the ambient default
 }
 
 function drawSpan(
