@@ -113,6 +113,7 @@ function makeDeps(
   return {
     getScene: () => scene,
     cookFullRes: vi.fn(async () => fakeBitmap()),
+    getBaked: vi.fn(() => undefined),
     createCanvas: vi.fn(() => canvas),
     blobToBytes: vi.fn(async () => new Uint8Array([1, 2, 3])),
     pickSavePath: vi.fn(async () => '/out/export.png'),
@@ -231,6 +232,35 @@ describe('exportPng', () => {
 
     expect(deps.cookFullRes).not.toHaveBeenCalled();
     expect(deps.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('uses the baked cache for a locked node instead of recooking it (lock-state-machine.md)', async () => {
+    const baked = fakeBitmap();
+    const nodes = [pixelNode('locked', { state: 'locked' }), pixelNode('active')];
+    const deps = makeDeps(makeScene(nodes), {
+      getBaked: vi.fn((id: string) => (id === 'locked' ? baked : undefined)),
+    });
+
+    await exportPng(deps);
+
+    expect(deps.getBaked).toHaveBeenCalledWith('locked');
+    expect(deps.cookFullRes).toHaveBeenCalledTimes(1);
+    expect(deps.cookFullRes).toHaveBeenCalledWith('active');
+    expect(deps.cookFullRes).not.toHaveBeenCalledWith('locked');
+    // The shared baked bitmap must survive the export — it's the live cache
+    // entry, not a one-shot cook.
+    expect(baked.close).not.toHaveBeenCalled();
+  });
+
+  it('falls back to cookFullRes for a locked node whose baked cache is empty (not yet rehydrated)', async () => {
+    const nodes = [pixelNode('locked', { state: 'locked' })];
+    const deps = makeDeps(makeScene(nodes), {
+      getBaked: vi.fn(() => undefined),
+    });
+
+    await exportPng(deps);
+
+    expect(deps.cookFullRes).toHaveBeenCalledWith('locked');
   });
 
   it('closes every cooked bitmap after use, even on failure', async () => {

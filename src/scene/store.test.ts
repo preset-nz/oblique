@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSceneStore } from './store';
-import type { Modifier, PixelNode, Scene, VectorNode, VectorPath } from './types';
+import type { Modifier, PixelNode, Scene, SceneNode, VectorNode, VectorPath } from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -54,6 +54,7 @@ beforeEach(() => {
       resolution: 'working',
       documentSize: [0, 0],
     },
+    bakingNodeIds: new Set(),
   });
 });
 
@@ -195,6 +196,270 @@ describe('setVectorFillRule', () => {
     expect(pixelNodeAfter?.dirty).toEqual({ draft: true, working: true });
   });
 });
+
+describe('lockNode', () => {
+  function fakeBitmap(): ImageBitmap {
+    return { close: () => {} } as unknown as ImageBitmap;
+  }
+
+  it('cooks full-res once, then commits state: locked', async () => {
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [pixelNode('a')] } }));
+    const cookFullRes = vi.fn(async () => fakeBitmap());
+
+    await useSceneStore.getState().lockNode('a', cookFullRes);
+
+    expect(cookFullRes).toHaveBeenCalledTimes(1);
+    expect(cookFullRes).toHaveBeenCalledWith('a');
+    expect(useSceneStore.getState().scene.nodes[0].state).toBe('locked');
+    expect(useSceneStore.getState().bakingNodeIds.has('a')).toBe(false);
+  });
+
+  it('leaves the node active and rejects when the cook fails', async () => {
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [pixelNode('a')] } }));
+    const cookFullRes = vi.fn(async () => {
+      throw new Error('sidecar down');
+    });
+
+    await expect(useSceneStore.getState().lockNode('a', cookFullRes)).rejects.toThrow(
+      'sidecar down',
+    );
+
+    expect(useSceneStore.getState().scene.nodes[0].state).toBe('active');
+    expect(useSceneStore.getState().bakingNodeIds.has('a')).toBe(false);
+  });
+
+  it('is a no-op on an already-locked node (zero cook calls)', async () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { state: 'locked' })] },
+    }));
+    const cookFullRes = vi.fn(async () => fakeBitmap());
+
+    await useSceneStore.getState().lockNode('a', cookFullRes);
+
+    expect(cookFullRes).not.toHaveBeenCalled();
+  });
+
+  it('a second concurrent call while baking no-ops (bakingNodeIds gate)', async () => {
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [pixelNode('a')] } }));
+    let resolveCook: (bitmap: ImageBitmap) => void = () => {};
+    const cookFullRes = vi.fn(
+      () =>
+        new Promise<ImageBitmap>((resolve) => {
+          resolveCook = resolve;
+        }),
+    );
+
+    const first = useSceneStore.getState().lockNode('a', cookFullRes);
+    expect(useSceneStore.getState().bakingNodeIds.has('a')).toBe(true);
+    const second = useSceneStore.getState().lockNode('a', cookFullRes);
+
+    resolveCook(fakeBitmap());
+    await Promise.all([first, second]);
+
+    expect(cookFullRes).toHaveBeenCalledTimes(1);
+    expect(useSceneStore.getState().scene.nodes[0].state).toBe('locked');
+  });
+});
+
+describe('unlockNode', () => {
+  it('sets state: active and dirties both levels', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', dirty: { draft: false, working: false } })],
+      },
+    }));
+
+    useSceneStore.getState().unlockNode('a');
+
+    const node = useSceneStore.getState().scene.nodes[0];
+    expect(node.state).toBe('active');
+    expect(node.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('is a no-op on an already-active node', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { dirty: { draft: false, working: false } })] },
+    }));
+
+    useSceneStore.getState().unlockNode('a');
+
+    expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({
+      draft: false,
+      working: false,
+    });
+  });
+});
+
+describe('mutation guards on a locked node (lock-state-machine.md)', () => {
+  it('setVectorPaths no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [vectorNode('v', { state: 'locked' })] },
+    }));
+    useSceneStore.getState().setVectorPaths('v', trianglePaths);
+    expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({
+      draft: false,
+      working: false,
+    });
+  });
+
+  it('setVectorFillRule no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [vectorNode('v', { state: 'locked', fillRule: 'nonzero' })] },
+    }));
+    useSceneStore.getState().setVectorFillRule('v', 'evenodd');
+    const node = useSceneStore.getState().scene.nodes[0] as VectorNode;
+    expect(node.fillRule).toBe('nonzero');
+  });
+
+  it('setNodeTransform no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { state: 'locked' })] },
+    }));
+    useSceneStore
+      .getState()
+      .setNodeTransform('a', { x: 10, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+    expect(useSceneStore.getState().scene.nodes[0].transform2d).toBeUndefined();
+  });
+
+  it('addModifier no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { state: 'locked' })] },
+    }));
+    useSceneStore.getState().addModifier('a', 'gaussian_blur', { radius: 2 });
+    expect(useSceneStore.getState().scene.nodes[0].modifiers).toHaveLength(0);
+  });
+
+  it('removeModifier no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
+      },
+    }));
+    useSceneStore.getState().removeModifier('a', 'm1');
+    expect(useSceneStore.getState().scene.nodes[0].modifiers).toHaveLength(1);
+  });
+
+  it('reorderModifier no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1'), modifier('m2')] })],
+      },
+    }));
+    useSceneStore.getState().reorderModifier('a', 'm2', 0);
+    expect(useSceneStore.getState().scene.nodes[0].modifiers.map((m) => m.id)).toEqual([
+      'm1',
+      'm2',
+    ]);
+  });
+
+  it('setModifierParam no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          pixelNode('a', {
+            state: 'locked',
+            modifiers: [modifier('m1', { params: { radius: 4 } })],
+          }),
+        ],
+      },
+    }));
+    useSceneStore.getState().setModifierParam('a', 'm1', 'radius', 9);
+    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].params).toEqual({ radius: 4 });
+  });
+
+  it('setModifierEnabled no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
+      },
+    }));
+    useSceneStore.getState().setModifierEnabled('a', 'm1', false);
+    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].enabled).toBe(true);
+  });
+
+  it('setModifierMask no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
+      },
+    }));
+    useSceneStore.getState().setModifierMask('a', 'm1', {
+      shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
+      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    expect(useSceneStore.getState().scene.masks).toBeUndefined();
+    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].maskId).toBeUndefined();
+  });
+
+  it('setModifierVectorMask no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [vectorNode('v'), pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
+      },
+    }));
+    useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v', { featherPx: 0, expand: 0, invert: false });
+    expect(useSceneStore.getState().scene.maskRefs).toBeUndefined();
+  });
+
+  it('removeModifierMask no-ops', () => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { modifiers: [modifier('m1')] })] },
+    }));
+    const maskId = useSceneStore.getState().setModifierMask('a', 'm1', {
+      shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
+      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: updateNodeState(s.scene.nodes, 'a', 'locked'),
+      },
+    }));
+    useSceneStore.getState().removeModifierMask('a', 'm1');
+    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].maskId).toBe(maskId);
+  });
+
+  it('compositing-only props (opacity/blendMode/visibility/label) and reorder stay writable', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked' }), pixelNode('b', { state: 'locked' })],
+      },
+    }));
+    useSceneStore
+      .getState()
+      .setNodeProp('a', { opacity: 0.5, blendMode: 'multiply', visible: false, label: 'Sky' });
+    useSceneStore.getState().reorderNode('b', 0);
+
+    const nodes = useSceneStore.getState().scene.nodes;
+    expect(nodes.find((n) => n.id === 'a')).toMatchObject({
+      opacity: 0.5,
+      blendMode: 'multiply',
+      visible: false,
+      label: 'Sky',
+    });
+    expect(nodes.map((n) => n.id)).toEqual(['b', 'a']);
+  });
+});
+
+function updateNodeState(nodes: SceneNode[], id: string, state: SceneNode['state']): SceneNode[] {
+  return nodes.map((n) => (n.id === id ? { ...n, state } : n));
+}
 
 describe('removeNode', () => {
   it('removes the node by id', () => {

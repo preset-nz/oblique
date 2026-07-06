@@ -208,7 +208,14 @@ function drawSpanContent(
       continue;
     }
 
-    const best = pickBestAvailable(node.id, level, getCache);
+    // Locked nodes (lock-state-machine.md): request `baked` regardless of
+    // the composite's own level — the existing best-available cascade
+    // (baked -> working -> draft) covers the not-yet-rehydrated window
+    // (fresh load / undo-into-locked, before the scheduler's rehydrate cook
+    // lands). destW/destH stay sized to the composite's `level` so a locked
+    // node's drawn size never mismatches its siblings.
+    const requestLevel: Resolution = node.state === 'locked' ? 'baked' : level;
+    const best = pickBestAvailable(node.id, requestLevel, getCache);
     if (!best) continue; // still cooking (or not yet imported) — draws nothing, per spec
 
     withNodeTransform(ctx, node, destW, destH, level, () => {
@@ -274,7 +281,10 @@ function drawMaskedSpan(
     return;
   }
 
-  const maskBest = pickBestAvailable(maskNode.id, level, getCache);
+  // Same locked-prefers-baked posture as `drawSpanContent` — a locked mask
+  // node's clip should read its frozen full-res raster too.
+  const maskRequestLevel: Resolution = maskNode.state === 'locked' ? 'baked' : level;
+  const maskBest = pickBestAvailable(maskNode.id, maskRequestLevel, getCache);
   if (!maskBest) return; // mask still cooking — draw nothing rather than show it unclipped
 
   const [docW, docH] = scene.documentSize;

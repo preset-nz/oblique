@@ -8,6 +8,7 @@ import {
   compositeScene,
 } from '@/compositor/composite';
 import { cookNodeFullRes } from '@/cook/cook';
+import * as cache from '@/scene/cache';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { filenameOf } from './import';
@@ -27,6 +28,13 @@ export interface ExportDeps {
   getScene: () => Scene;
   /** One-shot full-res cook of a single node — never a cache read, never a fallback. */
   cookFullRes: (nodeId: string) => Promise<ImageBitmap>;
+  /**
+   * The shared `baked` cache slot (lock-state-machine.md) — locking makes
+   * export cheaper: a locked node's frozen bitmap is reused as-is instead of
+   * cooking it again. `undefined` (not yet rehydrated) falls back to
+   * `cookFullRes`, same as an active node.
+   */
+  getBaked: (nodeId: string) => ImageBitmap | undefined;
   createCanvas: (width: number, height: number) => ExportCanvas;
   blobToBytes: (blob: Blob) => Promise<Uint8Array>;
   pickSavePath: (suggestedName: string) => Promise<string | null>;
@@ -51,6 +59,7 @@ async function realPickSavePath(suggestedName: string): Promise<string | null> {
 export const tauriExportDeps: ExportDeps = {
   getScene: () => useSceneStore.getState().scene,
   cookFullRes: (nodeId) => cookNodeFullRes(nodeId),
+  getBaked: (nodeId) => cache.get(nodeId, 'baked'),
   createCanvas: realCreateCanvas,
   blobToBytes: realBlobToBytes,
   pickSavePath: realPickSavePath,
@@ -120,6 +129,10 @@ export async function exportPng(
   });
 
   const bitmaps = new Map<string, ImageBitmap>();
+  // One-shot cooks only — never the shared `baked` cache bitmap reused below
+  // for locked nodes, which must survive this export (still the live cache
+  // entry future paints/exports read).
+  const ownedBitmaps = new Set<string>();
   try {
     for (let i = 0; i < nodes.length; i++) {
       if (cancelled.current) {
@@ -131,8 +144,16 @@ export async function exportPng(
       toast.loading(`Exporting ${i + 1} / ${nodes.length} — ${node.label}`, { id: toastId });
       onProgress?.({ done: i, total: nodes.length });
 
-      const bitmap = await deps.cookFullRes(node.id);
-      bitmaps.set(node.id, bitmap);
+      // Locking makes export cheaper (lock-state-machine.md): a locked
+      // node's frozen bake is reused as-is instead of recooking it.
+      const baked = node.state === 'locked' ? deps.getBaked(node.id) : undefined;
+      if (baked) {
+        bitmaps.set(node.id, baked);
+      } else {
+        const bitmap = await deps.cookFullRes(node.id);
+        bitmaps.set(node.id, bitmap);
+        ownedBitmaps.add(node.id);
+      }
     }
 
     if (cancelled.current) {
@@ -177,7 +198,8 @@ export async function exportPng(
       description: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    for (const bitmap of bitmaps.values()) {
+    for (const [nodeId, bitmap] of bitmaps) {
+      if (!ownedBitmaps.has(nodeId)) continue; // shared baked cache bitmap — never close
       (bitmap as ImageBitmap & { close?: () => void }).close?.();
     }
   }

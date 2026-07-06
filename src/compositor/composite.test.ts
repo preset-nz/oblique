@@ -275,6 +275,62 @@ describe('compositeScene', () => {
     compositeScene(ctx, scene, 'working');
     expect(getCompositeCallCount()).toBe(2);
   });
+
+  describe('locked nodes prefer baked (lock-state-machine.md)', () => {
+    it('requests baked instead of the composite level for a locked node', () => {
+      const bakedBitmap = fakeBitmap();
+      const workingBitmap = fakeBitmap();
+      const node = makeNode('a', { state: 'locked' });
+      cache.set('a', 'baked', bakedBitmap);
+      cache.set('a', 'working', workingBitmap);
+
+      const scene = makeScene([node]);
+      const ctx = fakeCtx();
+      compositeScene(ctx, scene, 'working');
+
+      expect(ctx.drawImage).toHaveBeenCalledWith(bakedBitmap, 0, 0, 100, 50);
+    });
+
+    it('draws at the composite-level dest size, not full res, even for a locked node', () => {
+      const node = makeNode('a', { state: 'locked', sourceSize: [400, 200] });
+      cache.set('a', 'baked', fakeBitmap());
+
+      const scene = makeScene([node], [400, 200]);
+      const ctx = fakeCtx();
+      compositeScene(ctx, scene, 'working');
+
+      // destSizeFor stays keyed on the composite's OWN level (working = 1/2),
+      // not on the per-node baked request level — a locked node's draw size
+      // must never mismatch its siblings.
+      expect(ctx.calls[0]).toMatchObject({ destW: 200, destH: 100 });
+    });
+
+    it('falls back through the existing cascade when baked is not yet rehydrated', () => {
+      const workingBitmap = fakeBitmap();
+      const node = makeNode('a', { state: 'locked' });
+      cache.set('a', 'working', workingBitmap);
+
+      const scene = makeScene([node]);
+      const ctx = fakeCtx();
+      compositeScene(ctx, scene, 'working');
+
+      expect(ctx.drawImage).toHaveBeenCalledWith(workingBitmap, 0, 0, 100, 50);
+    });
+
+    it('an unlocked node still requests the composite level, ignoring any baked cache', () => {
+      const bakedBitmap = fakeBitmap();
+      const workingBitmap = fakeBitmap();
+      const node = makeNode('a', { state: 'active' });
+      cache.set('a', 'baked', bakedBitmap);
+      cache.set('a', 'working', workingBitmap);
+
+      const scene = makeScene([node]);
+      const ctx = fakeCtx();
+      compositeScene(ctx, scene, 'working');
+
+      expect(ctx.drawImage).toHaveBeenCalledWith(workingBitmap, 0, 0, 100, 50);
+    });
+  });
 });
 
 describe('mask scoping — compositor span walk (mask-span-scoping.md)', () => {

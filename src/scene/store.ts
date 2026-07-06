@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import * as cache from './cache';
 import type {
   BlendMode,
   MaskDef,
@@ -44,6 +45,14 @@ export interface NodePropPatch {
 interface SceneState {
   scene: Scene;
 
+  /**
+   * Transient (lock-state-machine.md) — node ids whose full-res bake cook is
+   * currently in flight. NOT scene state: never persisted, never touched by
+   * undo/redo. Lets a second `lockNode` call on the same node no-op and
+   * feeds the future lock-ui.md progress affordance.
+   */
+  bakingNodeIds: Set<string>;
+
   /** Insert a new pixel node at the top of the stack (index 0). */
   addPixelNode: (
     partial: Pick<PixelNode, 'sourcePath' | 'sourceSize'> & Partial<PixelNode>,
@@ -84,6 +93,33 @@ interface SceneState {
    * recooks. No-op on a non-vector node id.
    */
   setVectorFillRule: (nodeId: string, fillRule: VectorNode['fillRule']) => void;
+
+  /**
+   * Bakes the node full-res once and freezes it (lock-state-machine.md): one
+   * undoable scene change (`state: 'locked'`), committed only after
+   * `cookFullRes` resolves. `cookFullRes` is caller-injected rather than
+   * imported here — `cookNodeFullRes` lives in `src/cook/`, and `scene/` must
+   * never import `cook/` (architecture's "scene is the bottom" rule; `cook/`
+   * already imports this store, so the reverse import would be circular).
+   * A production caller (a future UI trigger) wires the real
+   * `cookNodeFullRes` in. While the cook is in flight the node id sits in
+   * `bakingNodeIds`; a second call on the same (or already-locked) node
+   * no-ops. On failure the promise rejects, the node stays `active`, and
+   * `bakingNodeIds` is cleared regardless — the caller surfaces the error
+   * (same posture as export's own cook-failure handling).
+   */
+  lockNode: (
+    nodeId: string,
+    cookFullRes: (nodeId: string) => Promise<ImageBitmap>,
+  ) => Promise<void>;
+
+  /**
+   * Unlocks a node (lock-state-machine.md): `state: 'active'`, the baked
+   * cache slot dropped, both dirty flags set so the normal draft/working
+   * cook resumes. Synchronous, undoable like any other mutation. No-op on an
+   * already-active (or missing) node id.
+   */
+  unlockNode: (nodeId: string) => void;
 
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
@@ -147,6 +183,18 @@ interface SceneState {
 
 function updateNode(nodes: SceneNode[], id: string, fn: (node: SceneNode) => SceneNode) {
   return nodes.map((n) => (n.id === id ? fn(n) : n));
+}
+
+/**
+ * The lock-state-machine.md mutation guard, shared by every store action that
+ * dirties the cook (modifier add/remove/reorder/param-set/enable-toggle,
+ * transform2d changes, path edits, mask apply) — "guard once at the store
+ * boundary", not scattered per-callsite in the UI. Compositing-only actions
+ * (`setNodeProp`, `reorderNode`) never call this; they stay writable on a
+ * locked node per the epic's decision.
+ */
+function isLocked(nodes: SceneNode[], id: string): boolean {
+  return nodes.find((n) => n.id === id)?.state === 'locked';
 }
 
 /**
@@ -240,6 +288,49 @@ function pruneMaskState(
 
 export const useSceneStore = create<SceneState>((set, get) => ({
   scene: makeEmptyScene(),
+  bakingNodeIds: new Set<string>(),
+
+  lockNode: async (nodeId, cookFullRes) => {
+    if (get().bakingNodeIds.has(nodeId)) return; // already baking — no-op
+    const node = get().scene.nodes.find((n) => n.id === nodeId);
+    if (!node || node.state === 'locked') return;
+
+    set((s) => ({ bakingNodeIds: new Set(s.bakingNodeIds).add(nodeId) }));
+    try {
+      const bitmap = await cookFullRes(nodeId);
+      cache.set(nodeId, 'baked', bitmap);
+      set((s) => ({
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, state: 'locked' })),
+        },
+      }));
+    } finally {
+      set((s) => {
+        const next = new Set(s.bakingNodeIds);
+        next.delete(nodeId);
+        return { bakingNodeIds: next };
+      });
+    }
+  },
+
+  unlockNode: (nodeId) => {
+    set((s) => {
+      const target = s.scene.nodes.find((n) => n.id === nodeId);
+      if (target?.state !== 'locked') return s;
+      cache.clearLevel(nodeId, 'baked');
+      return {
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            state: 'active',
+            dirty: dirtyBoth(),
+          })),
+        },
+      };
+    });
+  },
 
   addPixelNode: (partial) => {
     const id = crypto.randomUUID();
@@ -289,6 +380,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     set((s) => {
       const target = s.scene.nodes.find((n) => n.id === nodeId);
       if (target?.type !== 'vector') return s;
+      if (target.state === 'locked') return s; // path edits guarded (lock-state-machine.md)
 
       const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
         ...(n as VectorNode),
@@ -305,6 +397,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     set((s) => {
       const target = s.scene.nodes.find((n) => n.id === nodeId);
       if (target?.type !== 'vector') return s;
+      if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
 
       const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
         ...(n as VectorNode),
@@ -358,6 +451,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // must re-rasterise at the shape's new composited position (same
     // cross-node dirty as setVectorPaths).
     set((s) => {
+      if (isLocked(s.scene.nodes, id)) return s; // guarded (lock-state-machine.md)
+
       const maskRefs = s.scene.maskRefs ?? {};
       const refsAtMovedNode = new Set(
         Object.values(maskRefs)
@@ -386,21 +481,25 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   addModifier: (nodeId, type, defaults) => {
     const modId = crypto.randomUUID();
     const modifier: Modifier = { id: modId, type, enabled: true, params: defaults };
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          modifiers: [...n.modifiers, modifier],
-          dirty: dirtyBoth(),
-        })),
-      },
-    }));
+    set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+      return {
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            modifiers: [...n.modifiers, modifier],
+            dirty: dirtyBoth(),
+          })),
+        },
+      };
+    });
     return modId;
   },
 
   removeModifier: (nodeId, modId) => {
     set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
       const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
         ...n,
         modifiers: n.modifiers.filter((m) => m.id !== modId),
@@ -416,48 +515,57 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   reorderModifier: (nodeId, modId, toIndex) => {
     // Unlike node reorder, modifier order changes the pixel result —
     // dirty per dirty rule 4.
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => {
-          const modifiers = [...n.modifiers];
-          const fromIndex = modifiers.findIndex((m) => m.id === modId);
-          if (fromIndex === -1) return n;
-          const [modifier] = modifiers.splice(fromIndex, 1);
-          modifiers.splice(toIndex, 0, modifier);
-          return { ...n, modifiers, dirty: dirtyBoth() };
-        }),
-      },
-    }));
+    set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+      return {
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => {
+            const modifiers = [...n.modifiers];
+            const fromIndex = modifiers.findIndex((m) => m.id === modId);
+            if (fromIndex === -1) return n;
+            const [modifier] = modifiers.splice(fromIndex, 1);
+            modifiers.splice(toIndex, 0, modifier);
+            return { ...n, modifiers, dirty: dirtyBoth() };
+          }),
+        },
+      };
+    });
   },
 
   setModifierParam: (nodeId, modId, key, value) => {
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          modifiers: n.modifiers.map((m) =>
-            m.id === modId ? { ...m, params: { ...m.params, [key]: value } } : m,
-          ),
-          dirty: dirtyBoth(),
-        })),
-      },
-    }));
+    set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+      return {
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            modifiers: n.modifiers.map((m) =>
+              m.id === modId ? { ...m, params: { ...m.params, [key]: value } } : m,
+            ),
+            dirty: dirtyBoth(),
+          })),
+        },
+      };
+    });
   },
 
   setModifierEnabled: (nodeId, modId, enabled) => {
     // Toggling a modifier changes the pixel result — dirty per dirty rule 4.
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, enabled } : m)),
-          dirty: dirtyBoth(),
-        })),
-      },
-    }));
+    set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+      return {
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, enabled } : m)),
+            dirty: dirtyBoth(),
+          })),
+        },
+      };
+    });
   },
 
   setModifierMask: (nodeId, modId, def) => {
@@ -470,6 +578,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       ?.modifiers.find((m) => m.id === modId)?.maskId;
     const maskId = existing ?? crypto.randomUUID();
     set((s) => {
+      // Guarded (lock-state-machine.md) — mask apply is a cook input. The id
+      // is still returned below (same no-op-on-bad-target posture as an
+      // unresolved nodeId/modId already has).
+      if (isLocked(s.scene.nodes, nodeId)) return s;
       // Clear a stale maskRefs entry under this id — switching a modifier
       // from vector-referenced to baked must not leave the old vector
       // reference shadowed-but-alive under the same id. No-op (preserves
@@ -499,6 +611,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       ?.modifiers.find((m) => m.id === modId)?.maskId;
     const maskId = existing ?? crypto.randomUUID();
     set((s) => {
+      // Guarded on the CONSUMER's lock state (lock-state-machine.md) — the
+      // referenced vector node's own lock state is irrelevant here, mirrors
+      // every other guard being keyed on the mutated node's target id.
+      if (isLocked(s.scene.nodes, nodeId)) return s;
       // Clear a stale baked-mask entry under this id — switching a modifier
       // from baked to vector-referenced must not leave the old MaskDef
       // shadowed-but-alive under the same id. No-op (preserves `undefined`
@@ -526,6 +642,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   removeModifierMask: (nodeId, modId) => {
     set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
       const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
         ...n,
         modifiers: n.modifiers.map((m) => {

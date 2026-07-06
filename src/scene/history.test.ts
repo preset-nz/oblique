@@ -376,6 +376,74 @@ describe('dirty-diff correctness on restore', () => {
   });
 });
 
+describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
+  it('undo across a lock drops the baked cache and dirties both levels', async () => {
+    useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
+    sources.set('a', fakeBitmap());
+    history.clear();
+
+    // Simulate a completed lockNode: commit state: 'locked' as the store
+    // action would, with a baked bitmap already in the cache.
+    cache.set('a', 'baked', fakeBitmap());
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: s.scene.nodes.map((n) => (n.id === 'a' ? { ...n, state: 'locked' as const } : n)),
+      },
+    }));
+
+    await history.undo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes[0];
+    expect(restored.state).toBe('active');
+    expect(restored.dirty).toEqual({ draft: true, working: true });
+    expect(cache.get('a', 'baked')).toBeUndefined();
+  });
+
+  it('redo re-locks without setting any dirty flag (rehydrate is the scheduler’s job, not history’s)', async () => {
+    useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
+    sources.set('a', fakeBitmap());
+    history.clear();
+
+    cache.set('a', 'baked', fakeBitmap());
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: s.scene.nodes.map((n) => (n.id === 'a' ? { ...n, state: 'locked' as const } : n)),
+      },
+    }));
+
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.nodes[0].state).toBe('active');
+
+    await history.redo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes[0];
+    expect(restored.state).toBe('locked');
+    expect(restored.dirty).toEqual({ draft: false, working: false });
+  });
+
+  it('unlockNode itself is captured as an undoable step, reconciled the same way', async () => {
+    useSceneStore.setState({
+      scene: emptyScene([
+        pixelNode('a', { state: 'locked', dirty: { draft: false, working: false } }),
+      ]),
+    });
+    sources.set('a', fakeBitmap());
+    cache.set('a', 'baked', fakeBitmap());
+    history.clear();
+
+    useSceneStore.getState().unlockNode('a');
+    expect(history.canUndo()).toBe(true);
+
+    await history.undo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes[0];
+    expect(restored.state).toBe('locked');
+    expect(restored.dirty).toEqual({ draft: false, working: false });
+  });
+});
+
 describe('undo-of-delete rehydration', () => {
   it('re-decodes the evicted source bitmap and marks the restored node dirty', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });

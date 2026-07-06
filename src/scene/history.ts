@@ -248,6 +248,27 @@ async function restoreScene(
 
   const nodes = target.nodes.map((node) => {
     const previous = currentById.get(node.id);
+
+    // Lock/unlock reconciliation (lock-state-machine.md) — an ordinary
+    // undoable scene change like any other, but the cache-map side effect
+    // (module-level, outside the snapshot) has to be driven explicitly here:
+    if (previous?.state === 'locked' && node.state !== 'locked') {
+      // locked -> active (undo of a lock, or redo of an unlock): drop the
+      // baked bitmap and resume the normal draft/working cook.
+      cache.clearLevel(node.id, 'baked');
+      return { ...node, dirty: { draft: true, working: true } };
+    }
+    if (node.state === 'locked') {
+      // A locked node NEVER carries a dirty flag (dirty rule: baked is only
+      // cleared by explicit unlock) — even if `previous` disagrees on
+      // modifiers/paths/etc (e.g. redo of a lock after further edits while
+      // active). If its baked cache is missing (unlock cleared it, or this
+      // is the first time this session sees it locked), the scheduler's
+      // rehydrate path — the single recovery mechanism — cooks it, not this
+      // function.
+      return { ...node, dirty: { draft: false, working: false } };
+    }
+
     const dirty =
       !previous || cookAffectingChanged(previous, node, current, target)
         ? { draft: true, working: true }

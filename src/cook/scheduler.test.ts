@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as cache from '@/scene/cache';
 import { useSceneStore } from '@/scene/store';
 import type { SceneNode } from '@/scene/types';
 import { useSidecarStatusStore } from '@/sidecar/client';
-import { CookScheduler, type Executor } from './scheduler';
+import { CookScheduler, type Executor, type RehydrateExecutor } from './scheduler';
 
 function makeNode(id: string, overrides: Partial<SceneNode> = {}): SceneNode {
   return {
@@ -60,6 +61,7 @@ describe('CookScheduler', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setNodes([]);
+    cache.clearAll();
     useSidecarStatusStore.setState({ status: 'down', lastError: undefined });
   });
 
@@ -268,5 +270,125 @@ describe('CookScheduler', () => {
     expect(executor).toHaveBeenCalledWith('a', 'draft');
 
     scheduler.stop();
+  });
+
+  describe('locked-node rehydrate (lock-state-machine.md)', () => {
+    function fakeBitmap(): ImageBitmap {
+      return { close: vi.fn() } as unknown as ImageBitmap;
+    }
+
+    it('cooks a locked node with an empty baked slot on start()', async () => {
+      setNodes([makeNode('a', { state: 'locked' })]);
+      const rehydrate: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      const scheduler = new CookScheduler(
+        vi.fn(async () => {}),
+        rehydrate,
+      );
+
+      scheduler.start();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(rehydrate).toHaveBeenCalledWith('a');
+      expect(cache.get('a', 'baked')).toBeDefined();
+
+      scheduler.stop();
+    });
+
+    it('never rehydrates a locked node that already has a baked bitmap', async () => {
+      cache.set('a', 'baked', fakeBitmap());
+      setNodes([makeNode('a', { state: 'locked' })]);
+      const rehydrate: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      const scheduler = new CookScheduler(
+        vi.fn(async () => {}),
+        rehydrate,
+      );
+
+      scheduler.start();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(rehydrate).not.toHaveBeenCalled();
+
+      scheduler.stop();
+    });
+
+    it('never enqueues a draft/working cook for a locked node even if it is (incorrectly) dirty', async () => {
+      const executor = vi.fn(async () => {});
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+
+      setNodes([makeNode('a', { state: 'locked', dirty: { draft: true, working: true } })]);
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(executor).not.toHaveBeenCalled();
+
+      scheduler.stop();
+    });
+
+    it('retries a locked node’s rehydrate when the sidecar comes back up (auto-recook-after-restart)', async () => {
+      setNodes([makeNode('a', { state: 'locked' })]);
+      const rehydrate: RehydrateExecutor = vi.fn(async () => {
+        throw new Error('sidecar down');
+      });
+      const scheduler = new CookScheduler(
+        vi.fn(async () => {}),
+        rehydrate,
+      );
+
+      scheduler.start();
+      // Flush the reject -> catch -> finally microtask chain fully (three
+      // ticks) so `rehydrating` no longer holds 'a' by the time the status
+      // flip below tries a second attempt.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rehydrate).toHaveBeenCalledTimes(1);
+      expect(cache.get('a', 'baked')).toBeUndefined();
+
+      const rehydrateOk: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      (scheduler as unknown as { rehydrateExecutor: RehydrateExecutor }).rehydrateExecutor =
+        rehydrateOk;
+      useSidecarStatusStore.setState({ status: 'up' });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(rehydrateOk).toHaveBeenCalledWith('a');
+      expect(cache.get('a', 'baked')).toBeDefined();
+
+      scheduler.stop();
+    });
+
+    it('does not start a second rehydrate for a node already rehydrating', async () => {
+      setNodes([makeNode('a', { state: 'locked' })]);
+      let resolveRehydrate: (bitmap: ImageBitmap) => void = () => {};
+      const rehydrate: RehydrateExecutor = vi.fn(
+        () =>
+          new Promise<ImageBitmap>((resolve) => {
+            resolveRehydrate = resolve;
+          }),
+      );
+      const scheduler = new CookScheduler(
+        vi.fn(async () => {}),
+        rehydrate,
+      );
+
+      scheduler.start();
+      await Promise.resolve();
+      // A second scene tick (e.g. an unrelated compositing-only edit) must
+      // not fire a second rehydrate while the first is still in flight.
+      setNodes([makeNode('a', { state: 'locked', opacity: 0.5 })]);
+      await Promise.resolve();
+
+      expect(rehydrate).toHaveBeenCalledTimes(1);
+
+      resolveRehydrate(fakeBitmap());
+      await Promise.resolve();
+      await Promise.resolve();
+      scheduler.stop();
+    });
   });
 });
