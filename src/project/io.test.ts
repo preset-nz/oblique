@@ -218,6 +218,20 @@ describe('serialise/parse round trip', () => {
     expect(parseProject(text)).toEqual(scene);
   });
 
+  it('scene with a background colour round-trips verbatim (background-colour.md)', () => {
+    const scene = sampleScene();
+    scene.background = { type: 'color', color: '#112233' };
+    expect(parseProject(serialiseProject(scene))).toEqual(scene);
+  });
+
+  it('a pre-background .oblique file (no background key) loads verbatim, no default injected', () => {
+    const scene = sampleScene();
+    expect(serialiseProject(scene)).not.toContain('"background"');
+    const loaded = parseProject(serialiseProject(scene));
+    expect(loaded.background).toBeUndefined();
+    expect(loaded).toEqual(scene);
+  });
+
   it('rejects non-JSON', () => {
     expect(() => parseProject('nope{')).toThrow(/not valid JSON/);
   });

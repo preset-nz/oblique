@@ -563,6 +563,36 @@ describe('setNodeTransform', () => {
   });
 });
 
+describe('setBackgroundColor (background-colour.md)', () => {
+  it('sets scene.background to a color entry', () => {
+    useSceneStore.getState().setBackgroundColor('#112233');
+    expect(useSceneStore.getState().scene.background).toEqual({
+      type: 'color',
+      color: '#112233',
+    });
+  });
+
+  it('clears back to undefined when passed null', () => {
+    useSceneStore.getState().setBackgroundColor('#112233');
+    useSceneStore.getState().setBackgroundColor(null);
+    expect(useSceneStore.getState().scene.background).toBeUndefined();
+  });
+
+  it('is compositing-only — no dirty flag on any node (dirty rule 4)', () => {
+    const clean = { draft: false, working: false } as const;
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: ['a', 'b'].map((id) => pixelNode(id, { dirty: { ...clean } })),
+      },
+    }));
+    useSceneStore.getState().setBackgroundColor('#ffffff');
+    for (const node of useSceneStore.getState().scene.nodes) {
+      expect(node.dirty).toEqual(clean);
+    }
+  });
+});
+
 describe('addModifier', () => {
   it('appends a modifier with the given type and defaults', () => {
     useSceneStore.setState((s) => ({
@@ -1027,6 +1057,34 @@ describe('JSON round-trip', () => {
       documentSize: [512, 512],
     };
     expect(() => structuredClone(JSON.parse(JSON.stringify(scene)))).not.toThrow();
+  });
+
+  it('a scene with a background colour round-trips through JSON (background-colour.md)', () => {
+    const scene: Scene = {
+      id: 'scene-bg',
+      nodes: [],
+      cameras: [],
+      defaultCameraId: null,
+      resolution: 'working',
+      documentSize: [512, 512],
+      background: { type: 'color', color: '#112233' },
+    };
+    const roundTripped = JSON.parse(JSON.stringify(scene));
+    expect(roundTripped).toEqual(scene);
+  });
+
+  it('a pre-existing scene with no background field loads unaffected (no default injected)', () => {
+    const scene: Scene = {
+      id: 'scene-legacy',
+      nodes: [],
+      cameras: [],
+      defaultCameraId: null,
+      resolution: 'working',
+      documentSize: [512, 512],
+    };
+    const roundTripped: Scene = JSON.parse(JSON.stringify(scene));
+    expect(roundTripped.background).toBeUndefined();
+    expect('background' in roundTripped).toBe(false);
   });
 
   it('the live store never leaks a non-serialisable value after normal actions', () => {

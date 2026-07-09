@@ -417,6 +417,21 @@ export function compositeScene(
 
   ctx.imageSmoothingEnabled = true;
 
+  // Background paints first, onto the empty level-scaled buffer, before any
+  // span/mask logic runs (background-colour.md) — plain source-over, full
+  // alpha, no compositing subtlety. This is what makes the background
+  // immune to masking: a masked span's scratch is seeded from this same
+  // backdrop (span-backdrop-blending.md), so its destination-out/lighter
+  // stamp-back restores these pixels rather than structurally being unable
+  // to reach them.
+  if (scene.background?.type === 'color') {
+    const factor = resolutionFactorFor(level);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = scene.background.color;
+    ctx.fillRect(0, 0, docW * factor, docH * factor);
+  }
+
   for (const span of splitIntoSpans(scene.nodes)) {
     drawSpan(ctx, span, level, scene, getCache, createScratch);
   }

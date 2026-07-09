@@ -17,11 +17,25 @@ import {
  * compositing-only, no dirty flag — dirty rule 4 in scene/store.ts), so
  * picking a preset recomposites without recooking any node.
  */
+const DEFAULT_BACKGROUND_COLOR = '#ffffff';
+
 export function DocumentSetup() {
   const documentSize = useSceneStore((s) => s.scene.documentSize);
   const setDocumentSize = useSceneStore((s) => s.setDocumentSize);
+  const background = useSceneStore((s) => s.scene.background);
+  const setBackgroundColor = useSceneStore((s) => s.setBackgroundColor);
   const { presetId, orientation } = describeDocumentSize(documentSize);
   const baseId = describeLongEdge(documentSize);
+
+  // none/colour/(image, later) choice — background-colour.md's extension
+  // point for background-image.md, which adds an 'image' option here
+  // without reworking this control.
+  const backgroundKind = background?.type ?? 'none';
+
+  const applyBackgroundKind = (kind: string) => {
+    if (kind === 'none') setBackgroundColor(null);
+    else if (kind === 'color') setBackgroundColor(background?.color ?? DEFAULT_BACKGROUND_COLOR);
+  };
 
   const applyPreset = (nextPresetId: string) => {
     const preset = ASPECT_PRESETS.find((p) => p.id === nextPresetId);
@@ -103,6 +117,33 @@ export function DocumentSetup() {
                 Portrait
               </ToggleGroupItem>
             </ToggleGroup>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-neutral-500">Background</span>
+            <div className="flex items-center gap-2">
+              <ToggleGroup
+                type="single"
+                value={backgroundKind}
+                onValueChange={(value) => value && applyBackgroundKind(value)}
+              >
+                <ToggleGroupItem value="none" aria-label="No background">
+                  None
+                </ToggleGroupItem>
+                <ToggleGroupItem value="color" aria-label="Colour background">
+                  Colour
+                </ToggleGroupItem>
+              </ToggleGroup>
+              {backgroundKind === 'color' && (
+                <input
+                  type="color"
+                  value={background?.color ?? DEFAULT_BACKGROUND_COLOR}
+                  onChange={(e) => setBackgroundColor(e.target.value)}
+                  className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                  aria-label="Background colour"
+                />
+              )}
+            </div>
           </div>
         </div>
       </PopoverContent>

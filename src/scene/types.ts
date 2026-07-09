@@ -200,6 +200,16 @@ export function isVectorNode(node: SceneNode): node is VectorNode {
 // `never` keeps `cameras` strictly empty (and tsc-clean) until then.
 export type Camera = never;
 
+/**
+ * Document-level background ("paper" — background-colour.md), always the
+ * lowest thing in the composite: painted before the node walk starts, so it
+ * can't be masked, reordered, blend-moded, or deleted like a node could.
+ * Discriminated union so a follow-on story (background-image.md) can add an
+ * `{ type: 'image'; ... }` member without touching this one. `color` is a
+ * CSS hex string, solid colour only for this story — no gradient/pattern.
+ */
+export type SceneBackground = { type: 'color'; color: string };
+
 export interface Scene {
   id: string;
   nodes: SceneNode[]; // index 0 = TOP of stack (layer-panel order)
@@ -222,4 +232,11 @@ export interface Scene {
    * vector node goes (see `store.ts`'s `pruneMaskState`).
    */
   maskRefs?: Record<string, VectorMaskRef>;
+  /**
+   * Document background (background-colour.md). Optional so pre-existing
+   * `.oblique` files load verbatim — absence means today's behaviour
+   * (transparent, whatever the bottom node paints). Not a node: no z-order,
+   * no blend mode, no lock state, no visibility toggle beyond set/none.
+   */
+  background?: SceneBackground;
 }

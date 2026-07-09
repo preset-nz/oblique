@@ -597,6 +597,72 @@ describe('span-backdrop-blending.md — masked spans blend against the backdrop'
   });
 });
 
+describe('document background colour (background-colour.md)', () => {
+  it('an absent background paints nothing extra — no fillRect call', () => {
+    const scene = makeScene([]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+  });
+
+  it('fills the full level-scaled buffer, source-over/full alpha, before the span walk runs', () => {
+    const node = makeNode('n1');
+    cache.set('n1', 'working', fakeBitmap());
+    const scene = makeScene([node]);
+    scene.background = { type: 'color', color: '#112233' };
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+
+    // documentSize is [200, 100]; working = half factor -> [100, 50].
+    expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 100, 50);
+    expect(ctx.fillStyle).toBe('#112233');
+
+    // The fill happens before any node's drawImage call.
+    const fillOrder = (ctx.fillRect as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const drawOrder = (ctx.drawImage as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(fillOrder).toBeLessThan(drawOrder);
+  });
+
+  it('scales the fill to baked (full) resolution', () => {
+    const scene = makeScene([], [200, 100]);
+    scene.background = { type: 'color', color: '#ffffff' };
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+    expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 200, 100);
+  });
+
+  it(
+    'a masked span whose content reaches the stack bottom does not change the background fill ' +
+      'call itself — same fillRect params/order with or without the mask above the content ' +
+      '(structural half of the story acceptance; the arithmetic half — that the backdrop-seeded ' +
+      'scratch restores these pixels within epsilon at feathered edges — needs real pixel math this ' +
+      'fake-canvas harness cannot produce; see the story report)',
+    () => {
+      const content = makeNode('content');
+      cache.set('content', 'baked', fakeBitmap());
+
+      const unmaskedScene = makeScene([content]);
+      unmaskedScene.background = { type: 'color', color: '#abcdef' };
+      const unmaskedCtx = fakeCtx();
+      compositeScene(unmaskedCtx, unmaskedScene, 'baked');
+
+      const mask = makeNode('mask', { output: 'mask' });
+      cache.set('mask', 'baked', fakeBitmap());
+      // Array order [mask, content]: content is the bottom-most node, mask
+      // sits directly above it — this masked span reaches the stack bottom.
+      const maskedScene = makeScene([mask, content]);
+      maskedScene.background = { type: 'color', color: '#abcdef' };
+      const maskedCtx = fakeCtx();
+      const { createScratch } = createFakeScratch();
+      compositeScene(maskedCtx, maskedScene, 'baked', cache.get, createScratch);
+
+      expect(maskedCtx.fillRect).toHaveBeenCalledWith(0, 0, 200, 100);
+      expect(unmaskedCtx.fillRect).toHaveBeenCalledWith(0, 0, 200, 100);
+      expect(maskedCtx.fillStyle).toBe(unmaskedCtx.fillStyle);
+    },
+  );
+});
+
 describe('transform2d — compositing-only node transform (node-transform-2d.md)', () => {
   it('an absent transform2d draws identically to before (no save/translate/rotate/scale side effects)', () => {
     const node = makeNode('n1');
