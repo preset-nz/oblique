@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "oblique"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "serde_json",

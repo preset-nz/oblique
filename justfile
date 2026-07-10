@@ -59,3 +59,20 @@ build:
     rm -rf sidecar/dist sidecar/build
     (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --noconfirm main.py)
     pnpm tauri build
+
+# Friends build (Epic 14): zipped .app + README + THIRD-PARTY-LICENSES. Unsigned — see epic doc.
+[group('build')]
+package: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node scripts/generate-third-party-licenses.mjs
+    product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
+    version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+    outdir="dist-friends-build"
+    rm -rf "$outdir"
+    mkdir -p "$outdir"
+    cp -R "src-tauri/target/release/bundle/macos/${product}.app" "$outdir/"
+    sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
+    cp THIRD-PARTY-LICENSES "$outdir/"
+    (cd "$outdir" && zip -rq "${product}-v${version}.zip" "${product}.app" README.txt THIRD-PARTY-LICENSES)
+    echo "Packaged: $outdir/${product}-v${version}.zip"

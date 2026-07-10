@@ -33,8 +33,13 @@
 //! could not be exercised headlessly in this environment — verify with a
 //! real click/keypress test (see report).
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
+
+/// Bug-report contact shown in the native About panel (macOS supports
+/// `credits`, not `website`/`comments`) and the friends-build README.
+/// Epic 14 (friends build) — free, pre-release, no support SLA implied.
+const CONTACT_EMAIL: &str = "georg@preset.nz";
 
 const EVT_FILE_NEW: &str = "menu://file/new";
 const EVT_FILE_OPEN: &str = "menu://file/open";
@@ -49,13 +54,22 @@ const EVT_EDIT_REDO: &str = "menu://edit/redo";
 /// webview events. Called once from `run`'s `.setup()`.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let pkg_name = app.package_info().name.clone();
+    let pkg_version = app.package_info().version.to_string();
+
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_name.clone()),
+        version: Some(pkg_version),
+        copyright: Some("Free, pre-release build — no warranty.".into()),
+        credits: Some(format!("Bugs & feedback: {CONTACT_EMAIL}")),
+        ..Default::default()
+    };
 
     let app_submenu = Submenu::with_items(
         app,
         &pkg_name,
         true,
         &[
-            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::about(app, None, Some(about_metadata))?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
