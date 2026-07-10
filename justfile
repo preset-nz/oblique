@@ -37,11 +37,13 @@ check:
     ./node_modules/.bin/vitest run
     ./node_modules/.bin/depcruise src
     node scripts/check-licenses.mjs
+    python3 scripts/check_python_licenses.py
 
 # Licence gate only (also part of `check`) — permissive allowlist, see script header.
 [group('quality')]
 licenses:
     node scripts/check-licenses.mjs
+    python3 scripts/check_python_licenses.py
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
@@ -52,4 +54,8 @@ fmt:
 
 [group('build')]
 build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf sidecar/dist sidecar/build
+    (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --noconfirm main.py)
     pnpm tauri build

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request as IpcRequest};
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 
 const CRASH_WINDOW: Duration = Duration::from_secs(30);
@@ -45,34 +46,45 @@ struct SidecarStatus {
     error: Option<String>,
 }
 
-/// Resolve the sidecar project directory.
+/// Resolve the sidecar directory.
 ///
-/// Dev mode: `OBLIQUE_SIDECAR_DIR` env override, else `<repo>/sidecar`
-/// derived from this crate's manifest dir (src-tauri sits next to
-/// sidecar/ in the repo root).
-///
-/// TODO(release bundling): once the sidecar ships as a bundled Tauri
-/// sidecar binary (PyInstaller or uv-managed install), this needs a
-/// release-mode branch that resolves the bundled resource path instead.
-/// Deferred to end of Milestone A per the story's open questions.
-fn sidecar_dir() -> PathBuf {
+/// `OBLIQUE_SIDECAR_DIR` env override always wins (dev convenience). Otherwise:
+/// dev builds use `<repo>/sidecar` derived from this crate's manifest dir
+/// (src-tauri sits next to sidecar/ in the repo root) and run it via `uv`;
+/// release builds resolve the PyInstaller-frozen `sidecar-dist/` bundled as
+/// a Tauri resource (see `bundle.resources` in `tauri.conf.json`) and run
+/// its frozen executable directly — friends' Macs have no Python/uv.
+fn sidecar_dir(app: &AppHandle) -> PathBuf {
     if let Ok(dir) = std::env::var("OBLIQUE_SIDECAR_DIR") {
         return PathBuf::from(dir);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("src-tauri has a parent directory")
-        .join("sidecar")
+    if cfg!(debug_assertions) {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri has a parent directory")
+            .join("sidecar");
+    }
+    app.path()
+        .resolve("sidecar-dist", BaseDirectory::Resource)
+        .expect("bundled sidecar-dist resource is present")
 }
 
 fn spawn_child(dir: &PathBuf) -> std::io::Result<Child> {
-    Command::new("uv")
-        .args(["run", "python", "main.py"])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    if cfg!(debug_assertions) {
+        Command::new("uv")
+            .args(["run", "python", "main.py"])
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new(dir.join("oblique-sidecar"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
 }
 
 fn emit_status(app: &AppHandle, up: bool, error: Option<String>) {
@@ -86,7 +98,7 @@ pub fn start(app: AppHandle) {
 }
 
 fn supervise(app: AppHandle) {
-    let dir = sidecar_dir();
+    let dir = sidecar_dir(&app);
     let mut crash_times: Vec<Instant> = Vec::new();
 
     loop {
