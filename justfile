@@ -59,6 +59,16 @@ build:
     rm -rf sidecar/dist sidecar/build
     (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --noconfirm main.py)
     pnpm tauri build
+    # tauri-bundler's ad-hoc signing doesn't reseal correctly once
+    # bundle.resources adds a nested executable + dylib tree (sidecar-dist/)
+    # — codesign --verify fails ("code has no resources but signature
+    # indicates they must be present") even on the untouched build output.
+    # That's what macOS shows to end users as "app is damaged" once
+    # quarantined, not a Gatekeeper policy prompt. Re-sign deep + force to
+    # reseal all resources under one valid (still ad-hoc, still
+    # unnotarized) signature. Found 2026-07-10, Epic 14.
+    product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
+    codesign --deep --force --sign - "src-tauri/target/release/bundle/macos/${product}.app"
 
 # Friends build (Epic 14): zipped .app + README + THIRD-PARTY-LICENSES. Unsigned — see epic doc.
 [group('build')]
@@ -74,5 +84,12 @@ package: build
     cp -R "src-tauri/target/release/bundle/macos/${product}.app" "$outdir/"
     sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
     cp THIRD-PARTY-LICENSES "$outdir/"
-    (cd "$outdir" && zip -rq "${product}-v${version}.zip" "${product}.app" README.txt THIRD-PARTY-LICENSES)
+    # ditto, not zip, for the .app itself — plain `zip` doesn't reliably
+    # preserve the resource-fork/xattr metadata a code signature depends
+    # on and is the classic cause of "app is damaged" after unzip. The two
+    # plain text files have no such concerns, so a regular `zip -q` append
+    # after is fine for those.
+    (cd "$outdir" && \
+        ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
+        zip -q "${product}-v${version}.zip" README.txt THIRD-PARTY-LICENSES)
     echo "Packaged: $outdir/${product}-v${version}.zip"
