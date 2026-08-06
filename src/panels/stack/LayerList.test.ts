@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitContain, nudgeIndex } from './LayerList';
+import { commitLabel, fitContain, nudgeIndex } from './LayerList';
 
 describe('fitContain', () => {
   it('centres a square bitmap exactly filling the box', () => {
@@ -48,5 +48,30 @@ describe('nudgeIndex', () => {
   it('returns null for a single-row list in either direction', () => {
     expect(nudgeIndex(0, 'up', 1)).toBeNull();
     expect(nudgeIndex(0, 'down', 1)).toBeNull();
+  });
+});
+
+describe('commitLabel', () => {
+  it('returns the new label when it differs', () => {
+    expect(commitLabel('Sky', 'IMG_4821.png')).toBe('Sky');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(commitLabel('  Sky  ', 'IMG_4821.png')).toBe('Sky');
+  });
+
+  it('is a no-op when the trimmed draft equals the current label', () => {
+    expect(commitLabel('Sky', 'Sky')).toBeNull();
+    expect(commitLabel('  Sky  ', 'Sky')).toBeNull();
+  });
+
+  it('is a no-op for an empty or whitespace-only draft', () => {
+    expect(commitLabel('', 'Sky')).toBeNull();
+    expect(commitLabel('   ', 'Sky')).toBeNull();
+    expect(commitLabel('\t\n', 'Sky')).toBeNull();
+  });
+
+  it('keeps interior whitespace and punctuation (Draw Things prompts stay renameable to anything)', () => {
+    expect(commitLabel('  grim-dark cave, mushrooms  ', 'x')).toBe('grim-dark cave, mushrooms');
   });
 });

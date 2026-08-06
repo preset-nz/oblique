@@ -1,5 +1,5 @@
 import { Eye, EyeOff, Loader2, Lock, LockOpen, Trash2, VenetianMask } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   Select,
@@ -75,6 +75,18 @@ export function nudgeIndex(
   return target;
 }
 
+/**
+ * Label a rename commit should write, or `null` when the commit is a no-op
+ * (rename-nodes.md). Empty/whitespace-only is a cancel, not a nameless layer;
+ * an unchanged name skips the store write entirely so a stray double-click
+ * leaves nothing on the undo stack. Pure — no DOM, no store.
+ */
+export function commitLabel(draft: string, current: string): string | null {
+  const trimmed = draft.trim();
+  if (trimmed === '' || trimmed === current) return null;
+  return trimmed;
+}
+
 function Thumbnail({ node }: { node: SceneNode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cacheVersion = useCacheVersionStore((s) => s.cacheVersion);
@@ -126,6 +138,43 @@ function LayerRow({
   const up = nudgeIndex(index, 'up', length);
   const down = nudgeIndex(index, 'down', length);
 
+  // Inline rename (rename-nodes.md). The in-progress string is transient —
+  // local state, never scene state — so one setNodeProp call on commit is one
+  // undo step per rename, not one per keystroke.
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState('');
+  const labelInputRef = useRef<HTMLInputElement>(null);
+  // Escape unmounts the input, and some browsers fire blur on removal — this
+  // flag stops that stray blur from committing what Escape just cancelled.
+  const renameCancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!editingLabel) return;
+    labelInputRef.current?.focus();
+    labelInputRef.current?.select(); // typing replaces the old name
+  }, [editingLabel]);
+
+  function startRename() {
+    renameCancelledRef.current = false;
+    setLabelDraft(node.label);
+    setEditingLabel(true);
+  }
+
+  function commitRename() {
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false;
+      return;
+    }
+    const next = commitLabel(labelDraft, node.label);
+    if (next !== null) setNodeProp(node.id, { label: next });
+    setEditingLabel(false);
+  }
+
+  function cancelRename() {
+    renameCancelledRef.current = true;
+    setEditingLabel(false);
+  }
+
   const padlockState = padlockVisualState(node, node.id, bakingNodeIds);
 
   function togglePadlock() {
@@ -142,6 +191,26 @@ function LayerRow({
     });
   }
 
+  // Shared between the select-button and the rename-input variants of the row
+  // lead, so entering edit mode doesn't make the thumbnail flicker out.
+  const rowLead = (
+    <>
+      <Thumbnail node={node} />
+      {/* Mask-span affordance (mask-span-scoping.md): a mask-output node
+          clips everything below it since the previous mask node — this
+          icon is the only thing that makes that span structure readable
+          in the list. */}
+      {node.output === 'mask' && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
+          </TooltipTrigger>
+          <TooltipContent>Mask — clips the span below it</TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  );
+
   return (
     // The whole row selects (dogfood 2026-07-05: the label-only target kept
     // getting missed) — every inner control already stopPropagation()s its
@@ -153,28 +222,58 @@ function LayerRow({
       onClick={onSelect}
       className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''}`}
     >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex flex-1 items-center gap-2 text-left min-w-0"
-      >
-        <Thumbnail node={node} />
-        {/* Mask-span affordance (mask-span-scoping.md): a mask-output node
-            clips everything below it since the previous mask node — this
-            icon is the only thing that makes that span structure readable
-            in the list. */}
-        {node.output === 'mask' && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
-            </TooltipTrigger>
-            <TooltipContent>Mask — clips the span below it</TooltipContent>
-          </Tooltip>
-        )}
-        <span className="min-w-0 truncate flex-1 text-xs" title={node.label}>
-          {node.label}
-        </span>
-      </button>
+      {editingLabel ? (
+        <div className="flex flex-1 items-center gap-2 min-w-0">
+          {rowLead}
+          <input
+            ref={labelInputRef}
+            value={labelDraft}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            onBlur={commitRename}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // Escape/Enter belong to the input while it's open — the canvas
+              // Escape handler must not also clear the node selection.
+              e.stopPropagation();
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelRename();
+              }
+            }}
+            aria-label="Layer name"
+            className="min-w-0 flex-1 rounded bg-neutral-900 px-1 text-xs outline-none ring-1 ring-neutral-600"
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onSelect}
+          // Double-click is the discoverable rename gesture, F2 the keyboard
+          // one (rename-nodes.md). Both live on the button rather than the
+          // label <span> — a static element with a handler trips
+          // a11y/noStaticElementInteractions, and the wider target matches the
+          // whole-row-selects call from the 2026-07-05 dogfood.
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            startRename();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'F2') {
+              e.preventDefault();
+              startRename();
+            }
+          }}
+          className="flex flex-1 items-center gap-2 text-left min-w-0"
+        >
+          {rowLead}
+          <span className="min-w-0 truncate flex-1 text-xs" title={node.label}>
+            {node.label}
+          </span>
+        </button>
+      )}
       <div className="flex flex-1 flex-col gap-1 min-w-0">
         <div className="flex items-center gap-2">
           {isVectorNode(node) && (
