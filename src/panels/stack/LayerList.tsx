@@ -144,9 +144,12 @@ function LayerRow({
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
   const labelInputRef = useRef<HTMLInputElement>(null);
-  // Escape unmounts the input, and some browsers fire blur on removal — this
-  // flag stops that stray blur from committing what Escape just cancelled.
-  const renameCancelledRef = useRef(false);
+  // Both exits (Enter and Escape) unmount the input, and some browsers fire
+  // blur on removal — this flag makes the resulting stray commit a no-op.
+  // A duplicate identical write would be filtered by sceneDiff before it
+  // reached history anyway; the flag keeps the one-undo-step-per-rename
+  // guarantee from depending on that.
+  const renameSettledRef = useRef(false);
 
   useEffect(() => {
     if (!editingLabel) return;
@@ -155,23 +158,21 @@ function LayerRow({
   }, [editingLabel]);
 
   function startRename() {
-    renameCancelledRef.current = false;
+    renameSettledRef.current = false;
     setLabelDraft(node.label);
     setEditingLabel(true);
   }
 
   function commitRename() {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false;
-      return;
-    }
+    if (renameSettledRef.current) return;
+    renameSettledRef.current = true;
     const next = commitLabel(labelDraft, node.label);
     if (next !== null) setNodeProp(node.id, { label: next });
     setEditingLabel(false);
   }
 
   function cancelRename() {
-    renameCancelledRef.current = true;
+    renameSettledRef.current = true;
     setEditingLabel(false);
   }
 
