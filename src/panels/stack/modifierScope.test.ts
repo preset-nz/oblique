@@ -74,6 +74,7 @@ const NOVEL_OP: OpDescriptor = {
       scale: 'none',
       choices: ['grim', 'dark', 'both'],
     },
+    { name: 'ink', type: 'color', default: '#00ffff', scale: 'none' },
   ],
 };
 
@@ -95,6 +96,7 @@ describe('opParamsToSchema', () => {
       'passes',
       'invert',
       'mode',
+      'ink',
     ]);
   });
 
@@ -144,6 +146,11 @@ describe('opParamsToSchema', () => {
         { value: 'both', label: 'both' },
       ],
     });
+  });
+
+  it('maps a color param to the color kind, no per-op TypeScript needed', () => {
+    const field = schema.groups[0].rows[6];
+    expect(field).toMatchObject({ kind: 'color', id: 'ink' });
   });
 });
 

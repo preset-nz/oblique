@@ -1,4 +1,5 @@
 import {
+  type ColorFieldDef,
   type FieldDef,
   type FieldRenderer,
   registerFieldRenderer,
@@ -147,7 +148,50 @@ const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
 };
 
 /**
- * Registers Oblique's `number`/`slider`/`select` renderers, overriding the
+ * Colour op params render as a native `<input type="color">` swatch plus a
+ * read-only hex readout, matching the in-app precedent for the document
+ * background colour control (`DocumentSetup.tsx`) rather than the shared
+ * package's plain text-input `ColorRenderer` builtin. Registered for the
+ * `color` kind, overriding that builtin the same way the number/slider/select
+ * renderers override theirs.
+ */
+const ModifierColorRenderer: FieldRenderer<ColorFieldDef> = ({
+  field,
+  value,
+  disabled,
+  onChange,
+}) => {
+  const hex = typeof value === 'string' && value.length > 0 ? value : '#000000';
+  const readOnly = disabled || !onChange;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground tracking-wide">
+        {field.label ?? field.id}
+      </span>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          aria-label={field.label ?? field.id}
+          value={hex}
+          disabled={readOnly}
+          onChange={(e) => onChange?.(e.target.value)}
+          // Undo/history transaction boundary (Epic 13): a native colour
+          // input fires onChange continuously while the OS picker is open,
+          // so focus/blur are this control's version of the slider
+          // renderer's pointerdown/pointerup pair — one picker session
+          // coalesces into one undo step.
+          onFocus={() => beginTransaction()}
+          onBlur={() => endTransaction()}
+          className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent"
+        />
+        <span className="font-mono text-xs text-muted-foreground">{hex}</span>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Registers Oblique's `number`/`slider`/`select`/`color` renderers, overriding the
  * shared package's plain-`<input>`/`<select>` builtins with the scrub-drag
  * `InputNumber` and the `ToggleGroup` segmented control. Call once at app
  * start, after `registerBuiltinRenderers()`.
@@ -156,4 +200,5 @@ export function registerModifierFieldRenderers(): void {
   registerFieldRenderer('number', ModifierNumberRenderer as FieldRenderer<FieldDef>);
   registerFieldRenderer('slider', ModifierSliderRenderer as FieldRenderer<FieldDef>);
   registerFieldRenderer('select', ModifierSelectRenderer as FieldRenderer<FieldDef>);
+  registerFieldRenderer('color', ModifierColorRenderer as FieldRenderer<FieldDef>);
 }

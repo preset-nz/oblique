@@ -7,7 +7,7 @@ import { create } from 'zustand';
  */
 export interface OpParamSpec {
   name: string;
-  type: 'float' | 'int' | 'bool' | 'enum';
+  type: 'float' | 'int' | 'bool' | 'enum' | 'color';
   default: unknown;
   min?: number;
   max?: number;

@@ -1,5 +1,6 @@
 import {
   type CheckboxFieldDef,
+  type ColorFieldDef,
   type FieldDef,
   type NumberFieldDef,
   type PropertySchema,
@@ -40,6 +41,9 @@ function paramToField(spec: OpParamSpec): FieldDef {
   switch (spec.type) {
     case 'bool':
       return { ...base, kind: 'checkbox' } satisfies CheckboxFieldDef;
+
+    case 'color':
+      return { ...base, kind: 'color' } satisfies ColorFieldDef;
 
     case 'enum':
       return {

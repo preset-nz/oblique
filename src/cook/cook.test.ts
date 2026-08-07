@@ -134,6 +134,11 @@ const opsFixture: OpDescriptor[] = [
     backend: 'python',
     params: [{ name: 'black', type: 'int', default: 0, min: 0, max: 255, scale: 'none' }],
   },
+  {
+    name: 'colourise',
+    backend: 'python',
+    params: [{ name: 'ink', type: 'color', default: '#00ffff', scale: 'none' }],
+  },
 ];
 
 describe('buildCookModifiers', () => {
@@ -161,6 +166,21 @@ describe('buildCookModifiers', () => {
       opsFixture,
     );
     expect(built).toEqual([{ type: 'unknown_op', backend: 'python', params: { amount: 5 } }]);
+  });
+
+  it('leaves a colour param string untouched at any resolution factor, while a numeric spatial param in the same call is still scaled (Epic 15 — proves the guard is live, not just untriggered)', () => {
+    const mixed: Modifier[] = [
+      { id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } },
+      { id: 'm5', type: 'colourise', enabled: true, params: { ink: '#ff00ff' } },
+    ];
+    const draft = buildCookModifiers(mixed, 1 / 8, opsFixture);
+    const working = buildCookModifiers(mixed, 1 / 2, opsFixture);
+
+    expect(draft[0]).toMatchObject({ type: 'gaussian_blur', params: { radius: 1 } });
+    expect(draft[1]).toMatchObject({ type: 'colourise', params: { ink: '#ff00ff' } });
+
+    expect(working[0]).toMatchObject({ type: 'gaussian_blur', params: { radius: 4 } });
+    expect(working[1]).toMatchObject({ type: 'colourise', params: { ink: '#ff00ff' } });
   });
 });
 

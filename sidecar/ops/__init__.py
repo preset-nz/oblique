@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
 ParamScale = Literal["spatial", "none"]
-ParamType = Literal["float", "int", "bool", "enum"]
+ParamType = Literal["float", "int", "bool", "enum", "color"]
 ParamWidget = Literal["slider"]
 
 # Pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray, same shape, uint8 in/out,
@@ -67,6 +67,46 @@ class ParamSpec:
 
 P = ParamSpec
 """Short alias used at op-registration call sites (`P("radius", "float", ...)`)."""
+
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def hex_to_rgb01(
+    value: Any, fallback: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """Parse a `color`-typed param value into `(r, g, b)` floats in `[0, 1]`.
+
+    Accepts `#rrggbb`, `#rgb`, and the same without the leading `#`,
+    case-insensitive, with surrounding whitespace tolerated. Alpha
+    (`#rrggbbaa`) is not accepted — colour params are opaque in this epic.
+
+    Total: never raises. Any other input — `None`, a number, a wrong-length
+    string, non-hex digits — returns `fallback` unchanged. Ops are pure and
+    must survive a hand-edited `.oblique` with a garbage colour string
+    without failing the cook.
+    """
+    if not isinstance(value, str):
+        return fallback
+
+    s = value.strip().removeprefix("#")
+
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+
+    # Restricted to plain ASCII hex digits before parsing — `int(x, 16)`
+    # alone would also accept a leading sign, underscores, or unicode
+    # digits (e.g. "-1-2-3" is 6 chars and parses to negative floats),
+    # which would silently break the documented [0, 1] range.
+    if len(s) != 6 or not all(ch in _HEX_DIGITS for ch in s):
+        return fallback
+
+    r = int(s[0:2], 16)
+    g = int(s[2:4], 16)
+    b = int(s[4:6], 16)
+
+    return (r / 255.0, g / 255.0, b / 255.0)
+
 
 # Internal-name tokens that should render fully upper-cased in a derived
 # label, rather than Title-Cased (e.g. "cmyk" -> "CMYK", not "Cmyk").

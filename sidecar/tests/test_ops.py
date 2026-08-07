@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from main import dispatch
-from ops import OPS, default_label, op
+from ops import OPS, ParamSpec, default_label, hex_to_rgb01, op
 from ops.cmyk_halftone import cmyk_halftone
 from ops.gaussian_blur import gaussian_blur
 from ops.grain import grain
@@ -332,3 +332,49 @@ def test_op_to_dict_derives_label_when_not_supplied():
         assert "description" not in entry
     finally:
         del OPS["temp_test_op_for_label_fallback"]
+
+
+# --- color param kind (Epic 15 story 1) --------------------------------
+
+
+def test_color_param_spec_to_dict_is_exactly_name_type_default_scale():
+    spec = ParamSpec("ink", "color", default="#00ffff")
+    assert spec.to_dict() == {
+        "name": "ink",
+        "type": "color",
+        "default": "#00ffff",
+        "scale": "none",
+    }
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("#00ffff", (0.0, 1.0, 1.0)),
+        ("#0FF", (0.0, 1.0, 1.0)),
+        ("00ffff", (0.0, 1.0, 1.0)),
+        ("  #00FFFF  ", (0.0, 1.0, 1.0)),
+    ],
+)
+def test_hex_to_rgb01_parses_valid_hex(value, expected):
+    assert hex_to_rgb01(value, fallback=(0.0, 0.0, 0.0)) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        42,
+        "puce",
+        "#12345",
+        "#gggggg",
+        "#00ffffff",
+        # int(x, 16) alone accepts a leading sign/underscore — these are
+        # each 6 chars, so the length check alone wouldn't catch them.
+        "-1-2-3",
+        "+1+2+3",
+    ],
+)
+def test_hex_to_rgb01_falls_back_and_never_raises(value):
+    fallback = (0.5, 0.25, 0.75)
+    assert hex_to_rgb01(value, fallback=fallback) == fallback
