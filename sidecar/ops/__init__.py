@@ -69,6 +69,12 @@ P = ParamSpec
 """Short alias used at op-registration call sites (`P("radius", "float", ...)`)."""
 
 
+# Rec. 709 luma weights — the one definition of "what grey means" shared by
+# every op that needs it (`xerox`'s mono conversion, `desaturate`'s amount=1
+# greyscale). Lifted here rather than duplicated per-op so they can't drift.
+LUMA_R709, LUMA_G709, LUMA_B709 = 0.2126, 0.7152, 0.0722
+
+
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
@@ -187,10 +193,12 @@ def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
 # at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
 from ops import cmyk_halftone as _cmyk_halftone  # noqa: E402, F401
 from ops import colour_crush as _colour_crush  # noqa: E402, F401
+from ops import desaturate as _desaturate  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
 from ops import ink_starved as _ink_starved  # noqa: E402, F401
 from ops import invert as _invert  # noqa: E402, F401
 from ops import levels as _levels  # noqa: E402, F401
+from ops import pixelate as _pixelate  # noqa: E402, F401
 from ops import threshold as _threshold  # noqa: E402, F401
 from ops import xerox as _xerox  # noqa: E402, F401

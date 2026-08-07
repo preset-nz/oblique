@@ -10,13 +10,17 @@ import pytest
 
 from ops import OPS
 from ops.colour_crush import colour_crush
+from ops.desaturate import desaturate
 from ops.ink_starved import ink_starved
+from ops.pixelate import pixelate
 from ops.xerox import xerox
 
 ALL_OPS = [
     (colour_crush, {"bits": 3, "dither": False}),
     (xerox, {"generations": 3, "skew": 0.3, "seed": 7}),
     (ink_starved, {"direction": "h", "starvation": 0.4, "banding": 0.2, "seed": 7}),
+    (desaturate, {"amount": 0.6}),
+    (pixelate, {"cell_size": 4}),
 ]
 
 
@@ -58,7 +62,7 @@ def test_alpha_untouched(fn, params):
 
 @pytest.mark.parametrize(
     "name",
-    ["colour_crush", "xerox", "ink_starved"],
+    ["colour_crush", "xerox", "ink_starved", "desaturate", "pixelate"],
 )
 def test_registered_in_ops_registry(name):
     assert name in OPS
@@ -305,3 +309,93 @@ def test_ink_starved_edge_params_do_not_throw():
 
     assert out.shape == img.shape
     assert out.dtype == np.uint8
+
+
+# --- desaturate -----------------------------------------------------------
+
+
+def test_desaturate_amount_zero_is_identity():
+    rng = np.random.default_rng(15)
+    img = _random_rgba(rng)
+
+    out = desaturate(img, {"amount": 0.0})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_desaturate_amount_one_equalises_channels():
+    rng = np.random.default_rng(16)
+    img = _random_rgba(rng)
+
+    out = desaturate(img, {"amount": 1.0})
+
+    np.testing.assert_array_equal(out[..., 0], out[..., 1])
+    np.testing.assert_array_equal(out[..., 1], out[..., 2])
+
+
+# --- pixelate ---------------------------------------------------------------
+
+
+def test_pixelate_cell_size_one_is_identity():
+    rng = np.random.default_rng(17)
+    img = _random_rgba(rng)
+
+    out = pixelate(img, {"cell_size": 1})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_pixelate_non_multiple_dimensions_preserve_shape():
+    rng = np.random.default_rng(18)
+    img = _random_rgba(rng, h=25, w=37)
+
+    out = pixelate(img, {"cell_size": 6})
+
+    assert out.shape == img.shape
+
+
+def test_pixelate_interior_cell_is_flat():
+    # Two-tone image: colour A on the left, colour B on the right, with the
+    # boundary landing *mid-cell* (at column 20, cell_size 8) so the cell
+    # spanning columns 16-23 straddles it and genuinely exercises the mean,
+    # not just a cell that happened to already be uniform in the input.
+    img = np.zeros((32, 32, 4), dtype=np.uint8)
+    img[:, :20] = [200, 20, 20, 255]
+    img[:, 20:] = [20, 20, 200, 255]
+
+    out = pixelate(img, {"cell_size": 8})
+
+    straddling = out[0:8, 16:24, :3]
+    assert np.all(straddling == straddling[0, 0])
+    # 4 px of A + 4 px of B, both fully opaque -> plain average.
+    np.testing.assert_array_equal(straddling[0, 0], [110, 20, 110])
+
+
+def test_pixelate_clean_blocks_no_seam_at_edges():
+    rng = np.random.default_rng(19)
+    img = _random_rgba(rng, h=48, w=64)
+    img[..., 3] = 255  # opaque, so alpha's per-pixel randomness can't mask
+    # the RGB block-flatness check below.
+
+    out = pixelate(img, {"cell_size": 16})
+
+    # Every 16x16 block's colour is flat: no seam or half-cell artefact
+    # anywhere, including the right/bottom edges (dims are exact multiples).
+    for y in range(0, 48, 16):
+        for x in range(0, 64, 16):
+            block = out[y : y + 16, x : x + 16, :3]
+            assert np.all(block == block[0, 0])
+
+
+def test_pixelate_edge_padding_replicates_not_zero_fills():
+    # Solid opaque white, dims not a multiple of cell_size: edge-replicated
+    # padding keeps every cell (including the partial right/bottom ones) at
+    # a mean of exactly 255 -> the whole output is unchanged. Zero/black
+    # padding would drag the partial edge cells below 255 and fail this
+    # immediately -- this is the discriminating check for the "average only
+    # the real pixels, pad with mode='edge'" requirement.
+    img = np.full((20, 20, 4), 255, dtype=np.uint8)
+
+    out = pixelate(img, {"cell_size": 8})
+
+    np.testing.assert_array_equal(out, img)

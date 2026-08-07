@@ -17,13 +17,11 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageFilter
 
-from ops import P, op
-
-_LUMA_R, _LUMA_G, _LUMA_B = 0.2126, 0.7152, 0.0722
+from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, op
 
 
 def _to_mono(rgb: np.ndarray) -> np.ndarray:
-    luma = rgb[..., 0] * _LUMA_R + rgb[..., 1] * _LUMA_G + rgb[..., 2] * _LUMA_B
+    luma = rgb[..., 0] * LUMA_R709 + rgb[..., 1] * LUMA_G709 + rgb[..., 2] * LUMA_B709
     return np.stack([luma, luma, luma], axis=-1)
 
 
