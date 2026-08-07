@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS
+from ops.cmyk_halftone import _screen_channel, _separate, cmyk_halftone
 from ops.colour_crush import colour_crush
 from ops.colourise import colourise
 from ops.desaturate import desaturate
@@ -511,5 +512,127 @@ def test_recolour_garbage_stop_colour_falls_back_to_default():
 
     default_out = recolour(img, {"stop_2": "#4a3f6b"})
     garbage_out = recolour(img, {"stop_2": "puce"})
+
+    np.testing.assert_array_equal(garbage_out, default_out)
+
+
+# --- cmyk_halftone (ink remap, 2026-08-07) ---------------------------------
+#
+# `cmyk_halftone` shipped long before the `color` param kind existed and is
+# in daily use, so this batch is the regression: at default ink colours the
+# op must still produce exactly what the pre-remap `_ABSORB`-table
+# implementation produced. See `sidecar/ops/cmyk_halftone.py` and
+# `guidance/projects/oblique/features/15-colour/cmyk-ink-remap.md`.
+
+# The literal table this story replaced. Frozen here, independent of the
+# module's `_DEFAULT_INKS`, so this regression can't accidentally pass just
+# because both sides drifted together.
+_OLD_ABSORB = {
+    "c": np.array([1.0, 0.0, 0.0]),  # cyan absorbs red
+    "m": np.array([0.0, 1.0, 0.0]),  # magenta absorbs green
+    "y": np.array([0.0, 0.0, 1.0]),  # yellow absorbs blue
+    "k": np.array([1.0, 1.0, 1.0]),  # black absorbs everything
+}
+_OLD_ANGLES = {"angle_c": 15.0, "angle_m": 75.0, "angle_y": 0.0, "angle_k": 45.0}
+
+
+def _pre_remap_cmyk_halftone(img: np.ndarray, params: dict) -> np.ndarray:
+    """The op exactly as it stood before this story, reimplemented against
+    the frozen `_OLD_ABSORB` table. Reuses the module's own (unchanged)
+    `_separate`/`_screen_channel` helpers -- only the ink-absorption lookup
+    is inlined here -- so this isolates the one thing the story changed and
+    serves as the regression oracle for default-ink output."""
+    pitch = max(1.0, float(params.get("dot_size", 6.0)))
+    misreg = float(params.get("misregistration", 0.0))
+    seed = int(params.get("seed", 0))
+    mode = str(params.get("mode", "paper"))
+
+    rgb = img[..., :3].astype(np.float64) / 255.0
+    plates = _separate(rgb)
+
+    rng = np.random.default_rng(seed)
+    base = rgb if mode == "over" else np.ones_like(rgb)
+
+    out_rgb = base.copy()
+    for channel in ("c", "m", "y", "k"):
+        angle = float(params.get(f"angle_{channel}", _OLD_ANGLES[f"angle_{channel}"]))
+        jitter = rng.uniform(-1.0, 1.0, size=2) * misreg
+        ink = _screen_channel(plates[channel], pitch, angle, (jitter[0], jitter[1]))
+        out_rgb *= 1.0 - ink[..., None] * _OLD_ABSORB[channel]
+
+    out = img.copy()
+    out[..., :3] = np.clip(out_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+    return out
+
+
+@pytest.mark.parametrize("seed", [0, 42])
+def test_cmyk_halftone_default_inks_are_byte_identical_to_pre_remap_op(seed):
+    rng = np.random.default_rng(seed + 500)
+    img = _random_rgba(rng, h=28, w=28)
+    # Non-trivial misregistration, per the acceptance criterion, so the
+    # per-channel jitter path is exercised too, not just the zero-jitter case.
+    params = {"dot_size": 5.0, "misregistration": 3.0, "seed": seed}
+
+    actual = cmyk_halftone(img, params)
+    expected = _pre_remap_cmyk_halftone(img, params)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_cmyk_halftone_missing_ink_params_fall_back_to_process_defaults():
+    """A `.oblique` saved before this story has no `ink_*` keys at all --
+    the fallback path must reconstruct the process-ink look exactly."""
+    rng = np.random.default_rng(34)
+    img = _random_rgba(rng, h=24, w=24)
+    params = {"dot_size": 5.0, "misregistration": 2.0, "seed": 3}
+
+    without_ink_params = cmyk_halftone(img, params)
+    with_explicit_process_inks = cmyk_halftone(
+        img,
+        {
+            **params,
+            "ink_c": "#00ffff",
+            "ink_m": "#ff00ff",
+            "ink_y": "#ffff00",
+            "ink_k": "#000000",
+        },
+    )
+
+    np.testing.assert_array_equal(without_ink_params, with_explicit_process_inks)
+
+
+def test_cmyk_halftone_ink_remap_changes_colour_not_dot_footprint():
+    rng = np.random.default_rng(35)
+    img = _random_rgba(rng, h=40, w=40)
+    img[..., 3] = 255
+    params = {"dot_size": 5.0, "misregistration": 1.5, "seed": 4}
+
+    default_out = cmyk_halftone(img, params)
+    remapped = cmyk_halftone(img, {**params, "ink_c": "#b03030", "ink_m": "#2f6b2f"})
+
+    # Dot footprint: exactly-untouched-paper pixels (all three channels
+    # still 255) come only from a zero coverage mask, which never depends
+    # on ink colour -- so the *set* of such pixels must match exactly, not
+    # just approximately. (Verified empirically across 20 seed/param
+    # combinations before pinning this to equality rather than a tolerance:
+    # zero mismatches every time, because a nonzero coverage always moves
+    # at least one channel measurably off 255 regardless of which RGB
+    # component the chosen ink's absorption vector lands on.)
+    default_is_paper = np.all(default_out[..., :3] == 255, axis=-1)
+    remapped_is_paper = np.all(remapped[..., :3] == 255, axis=-1)
+    np.testing.assert_array_equal(default_is_paper, remapped_is_paper)
+
+    assert not np.array_equal(default_out[..., :3], remapped[..., :3])
+
+
+def test_cmyk_halftone_garbage_ink_falls_back_to_process_default():
+    rng = np.random.default_rng(36)
+    img = _random_rgba(rng, h=20, w=20)
+    params = {"dot_size": 4.0, "seed": 5}
+
+    default_out = cmyk_halftone(img, params)
+    garbage_out = cmyk_halftone(
+        img, {**params, "ink_c": "puce", "ink_k": "not-a-colour"}
+    )
 
     np.testing.assert_array_equal(garbage_out, default_out)
