@@ -8,11 +8,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ops import OPS
+from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS
 from ops.colour_crush import colour_crush
+from ops.colourise import colourise
 from ops.desaturate import desaturate
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
+from ops.recolour import recolour
 from ops.xerox import xerox
 
 ALL_OPS = [
@@ -21,6 +23,19 @@ ALL_OPS = [
     (ink_starved, {"direction": "h", "starvation": 0.4, "banding": 0.2, "seed": 7}),
     (desaturate, {"amount": 0.6}),
     (pixelate, {"cell_size": 4}),
+    (colourise, {"colour": "#7a5c3a", "amount": 0.6, "preserve_luma": True}),
+    (
+        recolour,
+        {
+            "stop_1": "#000000",
+            "stop_2": "#4a3f6b",
+            "stop_3": "#b06a4a",
+            "stop_4": "#ffffff",
+            "stops": 3,
+            "blend": 0.8,
+            "preserve_luma": False,
+        },
+    ),
 ]
 
 
@@ -62,7 +77,15 @@ def test_alpha_untouched(fn, params):
 
 @pytest.mark.parametrize(
     "name",
-    ["colour_crush", "xerox", "ink_starved", "desaturate", "pixelate"],
+    [
+        "colour_crush",
+        "xerox",
+        "ink_starved",
+        "desaturate",
+        "pixelate",
+        "colourise",
+        "recolour",
+    ],
 )
 def test_registered_in_ops_registry(name):
     assert name in OPS
@@ -399,3 +422,94 @@ def test_pixelate_edge_padding_replicates_not_zero_fills():
     out = pixelate(img, {"cell_size": 8})
 
     np.testing.assert_array_equal(out, img)
+
+
+# --- colourise --------------------------------------------------------------
+
+
+def test_colourise_amount_zero_is_identity():
+    rng = np.random.default_rng(20)
+    img = _random_rgba(rng)
+
+    out = colourise(img, {"colour": "#7a5c3a", "amount": 0.0})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_colourise_preserve_luma_matches_source_luma_on_mid_grey():
+    img = np.full((16, 16, 4), 128, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = colourise(
+        img,
+        {"colour": "#7a5c3a", "amount": 1.0, "preserve_luma": True},
+    )
+
+    out_rgb = out[..., :3].astype(np.float64)
+    out_luma = (
+        out_rgb[..., 0] * LUMA_R709
+        + out_rgb[..., 1] * LUMA_G709
+        + out_rgb[..., 2] * LUMA_B709
+    )
+    src_luma = 128 * LUMA_R709 + 128 * LUMA_G709 + 128 * LUMA_B709
+
+    np.testing.assert_allclose(out_luma, src_luma, atol=1.5)
+
+
+def test_colourise_garbage_colour_falls_back_to_default():
+    rng = np.random.default_rng(21)
+    img = _random_rgba(rng, h=20, w=20)
+
+    default_out = colourise(img, {"colour": "#7a5c3a", "amount": 1.0})
+    garbage_out = colourise(img, {"colour": "puce", "amount": 1.0})
+
+    np.testing.assert_array_equal(garbage_out, default_out)
+
+
+# --- recolour -----------------------------------------------------------
+
+
+def test_recolour_blend_zero_is_identity():
+    rng = np.random.default_rng(22)
+    img = _random_rgba(rng)
+
+    out = recolour(img, {"blend": 0.0})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_recolour_two_stop_black_white_approximates_greyscale():
+    rng = np.random.default_rng(23)
+    img = _random_rgba(rng, h=24, w=24)
+    img[..., 3] = 255
+
+    out = recolour(
+        img,
+        {
+            "stop_1": "#000000",
+            "stop_2": "#ffffff",
+            "stops": 2,
+            "blend": 1.0,
+            "preserve_luma": False,
+        },
+    )
+
+    rgb = img[..., :3].astype(np.float64)
+    expected_luma = (
+        rgb[..., 0] * LUMA_R709 + rgb[..., 1] * LUMA_G709 + rgb[..., 2] * LUMA_B709
+    )
+
+    out_rgb = out[..., :3].astype(np.float64)
+    np.testing.assert_allclose(out_rgb[..., 0], expected_luma, atol=1.5)
+    np.testing.assert_allclose(out_rgb[..., 1], expected_luma, atol=1.5)
+    np.testing.assert_allclose(out_rgb[..., 2], expected_luma, atol=1.5)
+
+
+def test_recolour_garbage_stop_colour_falls_back_to_default():
+    rng = np.random.default_rng(24)
+    img = _random_rgba(rng, h=20, w=20)
+
+    default_out = recolour(img, {"stop_2": "#4a3f6b"})
+    garbage_out = recolour(img, {"stop_2": "puce"})
+
+    np.testing.assert_array_equal(garbage_out, default_out)
