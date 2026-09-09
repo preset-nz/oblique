@@ -14,6 +14,7 @@ from ops.colour_crush import colour_crush
 from ops.colourise import colourise
 from ops.desaturate import desaturate
 from ops.dilate import dilate
+from ops.edge_noise import edge_noise
 from ops.erode import erode
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
@@ -41,6 +42,7 @@ ALL_OPS = [
     ),
     (dilate, {"radius": 3.0}),
     (erode, {"radius": 3.0}),
+    (edge_noise, {"amount": 0.4, "scale": 12.0, "seed": 7}),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to

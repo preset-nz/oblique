@@ -208,6 +208,7 @@ from ops import colour_crush as _colour_crush  # noqa: E402, F401
 from ops import colourise as _colourise  # noqa: E402, F401
 from ops import desaturate as _desaturate  # noqa: E402, F401
 from ops import dilate as _dilate  # noqa: E402, F401
+from ops import edge_noise as _edge_noise  # noqa: E402, F401
 from ops import erode as _erode  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
