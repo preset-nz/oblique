@@ -39,6 +39,14 @@ ALL_OPS = [
     ),
 ]
 
+# `test_alpha_untouched` is the only battery test that doesn't apply to
+# every op — an op declaring `writes_alpha=True` is exempt from it, and
+# stays covered by the other three. Derived from the registry, not a
+# hand-maintained list, so a future alpha-writing op can't be forgotten.
+ALPHA_PRESERVING_OPS = [
+    (fn, params) for (fn, params) in ALL_OPS if not OPS[fn.__name__].writes_alpha
+]
+
 
 def _random_rgba(rng: np.random.Generator, h: int = 24, w: int = 32) -> np.ndarray:
     return rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
@@ -66,7 +74,7 @@ def test_op_does_not_mutate_input(fn, params):
     np.testing.assert_array_equal(img, before)
 
 
-@pytest.mark.parametrize("fn,params", ALL_OPS)
+@pytest.mark.parametrize("fn,params", ALPHA_PRESERVING_OPS)
 def test_alpha_untouched(fn, params):
     rng = np.random.default_rng(2)
     img = _random_rgba(rng)
@@ -74,6 +82,22 @@ def test_alpha_untouched(fn, params):
     out = fn(img, params)
 
     np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_alpha_preserving_ops_declare_it():
+    for fn, _ in ALPHA_PRESERVING_OPS:
+        assert OPS[fn.__name__].writes_alpha is False
+
+
+def test_all_ops_are_split_between_the_two_suites():
+    alpha_writing = {fn.__name__ for fn, _ in ALL_OPS} - {
+        fn.__name__ for fn, _ in ALPHA_PRESERVING_OPS
+    }
+    for fn, _ in ALL_OPS:
+        if fn.__name__ in alpha_writing:
+            assert OPS[fn.__name__].writes_alpha is True
+        else:
+            assert OPS[fn.__name__].writes_alpha is False
 
 
 @pytest.mark.parametrize(

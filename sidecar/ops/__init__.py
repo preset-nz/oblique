@@ -2,8 +2,10 @@
 
 Every op is a pure function registered with the `@op` decorator: `(img:
 np.ndarray RGBA8, params: dict) -> np.ndarray RGBA8`, same shape in/out,
-must not mutate `img`. The registry is the sidecar's only extension point
-for image ops — the UI never hardcodes param schemas, it reads them from
+must not mutate `img`. By default it also leaves alpha untouched; an op
+that must write into or erase transparency declares `writes_alpha=True`
+and is held to every other clause unchanged. The registry is the
+sidecar's only extension point for image ops — the UI never hardcodes param schemas, it reads them from
 `list_ops` (see guidance/projects/oblique/design/architecture.md Section
 "Op backends"). Individual op implementations live in sibling modules
 (`ops/gaussian_blur.py` etc.) and are imported at the bottom of this file
@@ -138,6 +140,7 @@ class Op:
     fn: OpFn
     label: str = ""
     description: str = ""
+    writes_alpha: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -145,6 +148,7 @@ class Op:
             "backend": self.backend,
             "params": [p.to_dict() for p in self.params],
             "label": self.label or default_label(self.name),
+            "writes_alpha": self.writes_alpha,
         }
         if self.description:
             d["description"] = self.description
@@ -160,6 +164,7 @@ def op(
     *,
     label: str = "",
     description: str = "",
+    writes_alpha: bool = False,
 ) -> Callable[[OpFn], OpFn]:
     """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray.
 
@@ -167,6 +172,12 @@ def op(
     `list_ops` — the stable identifier for scene files, scope keys and
     dispatch stays `name`, always. When `label` is omitted, one is derived
     from `name` at serialisation time (see `default_label`).
+
+    Ops are pure, deterministic (seeded randomness only), same-size RGBA8
+    in and out, and never mutate their input. By default they also leave
+    alpha untouched — an op that must write into or erase transparency
+    declares `writes_alpha=True` and is held to every other clause
+    unchanged.
     """
 
     def decorator(fn: OpFn) -> OpFn:
@@ -177,6 +188,7 @@ def op(
             fn=fn,
             label=label,
             description=description,
+            writes_alpha=writes_alpha,
         )
         return fn
 
