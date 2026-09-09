@@ -666,3 +666,112 @@ def test_cmyk_halftone_garbage_ink_falls_back_to_process_default():
     )
 
     np.testing.assert_array_equal(garbage_out, default_out)
+
+
+@pytest.mark.parametrize("seed,pitch", [(0, 4.0), (11, 8.0), (22, 3.0)])
+def test_cmyk_halftone_white_is_alpha_false_is_byte_identical(seed, pitch):
+    """Explicit `white_is_alpha=False` must match the flag being absent --
+    the byte-identical regression this story is not allowed to break."""
+    rng = np.random.default_rng(seed + 900)
+    img = _random_rgba(rng, h=24, w=24)
+    params = {"dot_size": pitch, "misregistration": 1.0, "seed": seed}
+
+    without_flag = cmyk_halftone(img, params)
+    with_flag_false = cmyk_halftone(img, {**params, "white_is_alpha": False})
+
+    np.testing.assert_array_equal(without_flag, with_flag_false)
+
+
+def test_cmyk_halftone_white_is_alpha_composites_equal_to_flag_off_over_white():
+    """The acceptance criterion that catches a missing un-blend: with an
+    opaque input, `white_is_alpha=True` composited (straight src-over) over
+    an opaque white backdrop must reproduce the `white_is_alpha=False`
+    result within a small tolerance."""
+    rng = np.random.default_rng(50)
+    img = _random_rgba(rng, h=32, w=32)
+    img[..., 3] = 255
+    params = {"dot_size": 5.0, "misregistration": 1.5, "seed": 8}
+
+    opaque_out = cmyk_halftone(img, params)
+    alpha_out = cmyk_halftone(img, {**params, "white_is_alpha": True})
+
+    alpha = alpha_out[..., 3].astype(np.float64) / 255.0
+    composited = alpha_out[..., :3].astype(np.float64) * alpha[..., None] + 255.0 * (
+        1.0 - alpha[..., None]
+    )
+
+    np.testing.assert_allclose(
+        composited, opaque_out[..., :3].astype(np.float64), atol=2.0
+    )
+
+
+def test_cmyk_halftone_white_is_alpha_paper_is_transparent():
+    # Pure white input -> zero ink coverage almost everywhere -> alpha 0.
+    # `_screen_channel`'s 1px AA smoothstep gives a handful of pixels near
+    # exact grid-origin alignment a sliver of ink even at zero coverage
+    # (pre-existing behaviour of the unchanged screening math, not
+    # something this story introduces or fixes) -- so this asserts the
+    # overwhelming majority, not literally every pixel.
+    img = np.full((32, 32, 4), 255, dtype=np.uint8)
+
+    out = cmyk_halftone(img, {"dot_size": 4.0, "white_is_alpha": True})
+
+    assert (out[..., 3] == 0).mean() > 0.75
+
+
+def test_cmyk_halftone_white_is_alpha_solid_ink_matches_input_alpha():
+    # Pure black input -> near-full ink coverage everywhere -> alpha close
+    # to the input's own alpha. The screen's circle-packing overdrive
+    # doesn't perfectly close every cell seam (same pre-existing quirk as
+    # above), so a few pixels land slightly under full coverage.
+    img = np.zeros((32, 32, 4), dtype=np.uint8)
+    img[..., 3] = 200
+
+    out = cmyk_halftone(img, {"dot_size": 4.0, "white_is_alpha": True})
+
+    assert (out[..., 3] == 200).mean() > 0.7
+    assert (out[..., 3] <= 200).all()
+
+
+def test_cmyk_halftone_white_is_alpha_never_exceeds_input_alpha():
+    rng = np.random.default_rng(51)
+    img = _random_rgba(rng, h=28, w=28)
+    img[..., 3] = 120
+
+    out = cmyk_halftone(img, {"dot_size": 5.0, "white_is_alpha": True})
+
+    assert (out[..., 3] <= 120).all()
+
+
+@pytest.mark.parametrize(
+    "img_factory",
+    [
+        lambda: np.zeros((12, 12, 4), dtype=np.uint8),
+        lambda: np.full((12, 12, 4), 255, dtype=np.uint8),
+    ],
+)
+def test_cmyk_halftone_white_is_alpha_no_nan_no_inf_no_wraparound(img_factory):
+    img = img_factory()
+    img[..., 3] = 255
+
+    out = cmyk_halftone(img, {"dot_size": 4.0, "white_is_alpha": True})
+
+    assert out.dtype == np.uint8
+    assert np.isfinite(out).all()
+    assert (out >= 0).all() and (out <= 255).all()
+
+
+def test_cmyk_halftone_white_is_alpha_ignored_in_over_mode():
+    rng = np.random.default_rng(52)
+    img = _random_rgba(rng, h=20, w=20)
+    params = {"dot_size": 4.0, "mode": "over"}
+
+    flag_off = cmyk_halftone(img, params)
+    flag_on = cmyk_halftone(img, {**params, "white_is_alpha": True})
+
+    np.testing.assert_array_equal(flag_off, flag_on)
+    np.testing.assert_array_equal(flag_on[..., 3], img[..., 3])
+
+
+def test_cmyk_halftone_declares_writes_alpha():
+    assert OPS["cmyk_halftone"].writes_alpha is True

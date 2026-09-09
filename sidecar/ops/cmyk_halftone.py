@@ -99,7 +99,8 @@ def _screen_channel(
     description=(
         "Screen-printed CMYK dot raster: classic screen angles, optional "
         "seeded misregistration, and swappable ink colours for spot-ink "
-        "and riso looks."
+        "and riso looks. `white_is_alpha` makes the paper transparent (in "
+        "mode='paper' only) so the dots overprint the layers below."
     ),
     params=[
         # Dogfood fix (Epic 04 stack-rows): the original max=32.0 was a
@@ -135,13 +136,16 @@ def _screen_channel(
         ),
         P("seed", "int", min=0, max=2**31 - 1, default=0, step=1),
         P("mode", "enum", default="paper", choices=("paper", "over")),
+        P("white_is_alpha", "bool", default=False),
     ],
+    writes_alpha=True,
 )
 def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     pitch = max(1.0, float(params.get("dot_size", 6.0)))
     misreg = float(params.get("misregistration", 0.0))
     seed = int(params.get("seed", 0))
     mode = str(params.get("mode", "paper"))
+    white_is_alpha = bool(params.get("white_is_alpha", False)) and mode == "paper"
 
     rgb = img[..., :3].astype(np.float64) / 255.0
     plates = _separate(rgb)
@@ -164,6 +168,7 @@ def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     base = rgb if mode == "over" else np.ones_like(rgb)
 
     out_rgb = base.copy()
+    coverage = np.zeros(rgb.shape[:2], dtype=np.float64)
     for channel in ("c", "m", "y", "k"):
         angle = float(
             params.get(f"angle_{channel}", _DEFAULT_ANGLES[f"angle_{channel}"])
@@ -173,7 +178,26 @@ def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         jitter = rng.uniform(-1.0, 1.0, size=2) * misreg
         ink = _screen_channel(plates[channel], pitch, angle, (jitter[0], jitter[1]))
         out_rgb *= 1.0 - ink[..., None] * absorb[channel]
+        coverage = 1.0 - (1.0 - coverage) * (1.0 - ink)
 
     out = img.copy()
-    out[..., :3] = np.clip(out_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+
+    if white_is_alpha:
+        # `out_rgb` is the ink colour already mixed with the white paper at
+        # partial coverage; un-blend it so the compositor (which reads
+        # non-premultiplied RGB) doesn't see a washed-out colour at dot
+        # edges. Pixels at ~zero coverage have unobservable ink colour —
+        # fill with paper white and never divide by ~0.
+        safe_coverage = np.maximum(coverage, 1e-6)
+        ink_rgb = (out_rgb - (1.0 - coverage[..., None])) / safe_coverage[..., None]
+        ink_rgb = np.where(coverage[..., None] < 1e-6, 1.0, ink_rgb)
+        ink_rgb = np.clip(ink_rgb, 0.0, 1.0)
+
+        out[..., :3] = np.clip(ink_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+        in_alpha = img[..., 3].astype(np.float64) / 255.0
+        out_alpha = in_alpha * coverage
+        out[..., 3] = np.clip(np.round(out_alpha * 255.0), 0.0, 255.0).astype(np.uint8)
+    else:
+        out[..., :3] = np.clip(out_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+
     return out
