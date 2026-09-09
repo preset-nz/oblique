@@ -13,6 +13,8 @@ from ops.cmyk_halftone import _screen_channel, _separate, cmyk_halftone
 from ops.colour_crush import colour_crush
 from ops.colourise import colourise
 from ops.desaturate import desaturate
+from ops.dilate import dilate
+from ops.erode import erode
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
 from ops.recolour import recolour
@@ -37,6 +39,8 @@ ALL_OPS = [
             "preserve_luma": False,
         },
     ),
+    (dilate, {"radius": 3.0}),
+    (erode, {"radius": 3.0}),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to

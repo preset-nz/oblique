@@ -1,0 +1,189 @@
+"""Unit tests for the alpha-writing ops introduced in Epic 16 — `dilate`
+and `erode` (story 2). Story 3 (`edge_noise`) extends this file. Shared
+battery coverage (shape/dtype, no-mutate, determinism, passthrough-suite
+exclusion) lives in `test_flavour_ops.py`; this file is the semantic
+contract from `guidance/projects/oblique/features/16-alpha-and-edges/
+dilate-and-erode.md`.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from ops import OPS
+from ops.dilate import dilate
+from ops.erode import erode
+
+
+def _disc(h: int, w: int, radius: float, colour: tuple[int, int, int]) -> np.ndarray:
+    """White(ish)-on-transparent disc, `colour` opaque inside `radius` px
+    of the canvas centre, fully transparent outside — the vector-mask
+    shape the story's acceptance is written against."""
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = h / 2.0, w / 2.0
+    dist = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    inside = dist <= radius
+    img[inside, 0] = colour[0]
+    img[inside, 1] = colour[1]
+    img[inside, 2] = colour[2]
+    img[inside, 3] = 255
+    return img
+
+
+def _coverage_radius(alpha: np.ndarray, threshold: int = 127) -> float:
+    """Approximate radius of the opaque region: farthest covered pixel
+    from the canvas centre, in px."""
+    h, w = alpha.shape
+    cy, cx = h / 2.0, w / 2.0
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    covered = alpha >= threshold
+    if not np.any(covered):
+        return 0.0
+    return float(dist[covered].max())
+
+
+# --- registration -----------------------------------------------------
+
+
+def test_dilate_and_erode_registered_writes_alpha():
+    assert OPS["dilate"].writes_alpha is True
+    assert OPS["erode"].writes_alpha is True
+
+
+def test_dilate_and_erode_params_are_spatial_scale():
+    for name in ("dilate", "erode"):
+        params = {p["name"]: p for p in OPS[name].to_dict()["params"]}
+        assert params["radius"]["scale"] == "spatial"
+
+
+# --- degenerate cases ---------------------------------------------------
+
+
+def test_dilate_on_fully_opaque_image_is_a_no_op():
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 256, size=(24, 24, 3), dtype=np.uint8)
+    img = np.dstack([img, np.full((24, 24), 255, dtype=np.uint8)])
+
+    out = dilate(img, {"radius": 3.0})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_radius_zero_is_identity_for_both_ops():
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 256, size=(24, 24, 4), dtype=np.uint8)
+
+    np.testing.assert_array_equal(dilate(img, {"radius": 0.0}), img)
+    np.testing.assert_array_equal(erode(img, {"radius": 0.0}), img)
+
+
+def test_negative_radius_is_identity_for_both_ops():
+    rng = np.random.default_rng(2)
+    img = rng.integers(0, 256, size=(24, 24, 4), dtype=np.uint8)
+
+    np.testing.assert_array_equal(dilate(img, {"radius": -5.0}), img)
+    np.testing.assert_array_equal(erode(img, {"radius": -5.0}), img)
+
+
+def test_ops_do_not_mutate_input():
+    rng = np.random.default_rng(3)
+    img = rng.integers(0, 256, size=(24, 24, 4), dtype=np.uint8)
+    before = img.copy()
+
+    dilate(img, {"radius": 3.0})
+    erode(img, {"radius": 3.0})
+
+    np.testing.assert_array_equal(img, before)
+
+
+# --- grow / shrink --------------------------------------------------------
+
+
+def test_dilate_grows_disc_radius_and_band_is_white_not_black():
+    img = _disc(48, 48, radius=10, colour=(255, 255, 255))
+
+    out = dilate(img, {"radius": 4.0})
+
+    grown_radius = _coverage_radius(out[..., 3])
+    assert grown_radius > _coverage_radius(img[..., 3]) + 2.0
+
+    # The newly-covered band (between the original disc edge and the new
+    # one) must be white, not black and not the transparent background's
+    # arbitrary (here: zero) RGB.
+    h, w = out.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((yy - h / 2.0) ** 2 + (xx - w / 2.0) ** 2)
+    band = (dist > 11.0) & (dist < 13.0) & (out[..., 3] > 127)
+    assert np.any(band), "expected some newly-covered band pixels to check"
+    assert np.all(out[..., 0][band] > 200)
+    assert np.all(out[..., 1][band] > 200)
+    assert np.all(out[..., 2][band] > 200)
+
+
+def test_erode_shrinks_disc_radius():
+    img = _disc(48, 48, radius=15, colour=(200, 60, 60))
+
+    out = erode(img, {"radius": 4.0})
+
+    shrunk_radius = _coverage_radius(out[..., 3])
+    assert shrunk_radius < _coverage_radius(img[..., 3]) - 2.0
+
+
+def test_erode_leaves_rgb_untouched():
+    img = _disc(32, 32, radius=12, colour=(200, 60, 60))
+
+    out = erode(img, {"radius": 3.0})
+
+    np.testing.assert_array_equal(out[..., :3], img[..., :3])
+
+
+# --- round trip -----------------------------------------------------------
+
+
+def test_dilate_then_erode_approximately_round_trips():
+    img = _disc(48, 48, radius=14, colour=(255, 255, 255))
+
+    grown = dilate(img, {"radius": 4.0})
+    back = erode(grown, {"radius": 4.0})
+
+    # Allow tolerance for the soft edge the asymmetric premultiply
+    # recovery introduces; the coverage radius should still land close to
+    # the original.
+    orig_r = _coverage_radius(img[..., 3])
+    back_r = _coverage_radius(back[..., 3])
+    assert abs(orig_r - back_r) <= 2.0
+
+
+# --- feathered edges stay soft ---------------------------------------------
+
+
+def test_feathered_edge_stays_soft_not_hardened():
+    h, w = 1, 40
+    ramp = np.clip(np.linspace(-50, 305, w), 0, 255).astype(np.uint8)
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[..., :3] = 255
+    img[..., 3] = ramp
+
+    out = dilate(img, {"radius": 3.0})
+
+    alpha = out[0, :, 3].astype(np.int32)
+    # A soft ramp stays a ramp: several distinct intermediate alpha
+    # values, not a single hard step from 0 to 255.
+    intermediate = np.sum((alpha > 10) & (alpha < 245))
+    assert intermediate >= 5
+
+
+# --- sub-pixel radius ------------------------------------------------------
+
+
+def test_subpixel_radius_still_visibly_changes_alpha():
+    img = _disc(32, 32, radius=10, colour=(255, 255, 255))
+
+    for radius in (0.5, 0.25):
+        out_dilate = dilate(img, {"radius": radius})
+        out_erode = erode(img, {"radius": radius})
+
+        assert not np.array_equal(out_dilate[..., 3], img[..., 3]), radius
+        assert not np.array_equal(out_erode[..., 3], img[..., 3]), radius
