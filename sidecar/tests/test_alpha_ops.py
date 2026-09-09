@@ -9,6 +9,7 @@ dilate-and-erode.md` and `edge-noise.md`.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from ops import OPS
 from ops.dilate import dilate
@@ -371,3 +372,86 @@ def test_edge_noise_amount_0_4_visibly_changes_pixels():
     delta = np.abs(out[..., 3].astype(np.int32) - img[..., 3].astype(np.int32))
     assert delta.max() > 64
     assert (delta > 64).sum() > 20
+
+
+# --- edge_noise `profile` param (backlog 2026-09-10) -----------------------
+
+
+def test_edge_noise_profile_registered_as_enum_with_smooth_default():
+    params = {p["name"]: p for p in OPS["edge_noise"].to_dict()["params"]}
+    profile = params["profile"]
+    assert profile["type"] == "enum"
+    assert profile["default"] == "smooth"
+    assert set(profile["choices"]) == {"smooth", "saw", "rect", "straight"}
+
+
+# SHA-256 of the full RGBA output of the pre-`profile` op (commit ae3d0f4)
+# on `_soft_disc(120, 120, radius=40, colour=(200, 120, 60), ramp_px=1.0)`.
+# Pinned on 2026-09-10 while the two implementations were verified equal.
+_PRE_PROFILE_DIGESTS = {
+    (0.4, 12.0, 1): "f8a8195d243272cb553fa6ec93eb8010b0cee592c7957bfd65ac8fcc06241710",
+    (1.0, 8.0, 7): "7c25340a5a536edf6b359a4d09b7ca222ba08b5a22c9ed243435b67bd3ff9e44",
+    (0.2, 24.0, 99): "5651ae04c6a51a3e2530d66142cc5e9eba4fde2f74e347f01c0df91a00a33d66",
+}
+
+
+def test_edge_noise_smooth_profile_is_byte_identical_to_pre_profile_op():
+    """`profile` defaults to `smooth`, which must reproduce the pre-`profile`
+    op's output exactly for every existing param combination — the whole
+    point of a non-breaking default. Pinned digests, not a git lookup, so
+    the guard survives the commit that introduces the param."""
+    import hashlib
+
+    img = _soft_disc(120, 120, radius=40, colour=(200, 120, 60), ramp_px=1.0)
+    for (amount, scale, seed), digest in _PRE_PROFILE_DIGESTS.items():
+        params = {"amount": amount, "scale": scale, "seed": seed}
+        explicit = edge_noise(img, {**params, "profile": "smooth"})
+        default = edge_noise(img, params)
+        assert hashlib.sha256(explicit.tobytes()).hexdigest() == digest
+        np.testing.assert_array_equal(default, explicit)
+
+
+@pytest.mark.parametrize("profile", ["saw", "rect", "straight"])
+def test_edge_noise_non_smooth_profiles_differ_from_smooth_but_keep_interior_and_opaque_noop(
+    profile,
+):
+    img = _soft_disc(200, 200, radius=60, colour=(255, 255, 255), ramp_px=1.0)
+    params = {"amount": 0.8, "scale": 12.0, "seed": 5}
+
+    out_smooth = edge_noise(img, {**params, "profile": "smooth"})
+    out_profile = edge_noise(img, {**params, "profile": profile})
+
+    assert not np.array_equal(out_smooth[..., 3], out_profile[..., 3])
+
+    # Interior stays fully opaque regardless of profile.
+    h, w = img.shape[:2]
+    cy, cx = h // 2, w // 2
+    assert out_profile[cy, cx, 3] == 255
+
+    # RGB untouched.
+    assert np.array_equal(out_profile[..., :3], img[..., :3])
+
+    # A fully-opaque input is still an exact no-op copy under every profile.
+    opaque = np.full((60, 60, 4), 255, dtype=np.uint8)
+    out_opaque = edge_noise(opaque, {**params, "profile": profile})
+    np.testing.assert_array_equal(out_opaque, opaque)
+
+
+@pytest.mark.parametrize("profile", ["rect", "straight"])
+def test_edge_noise_rect_and_straight_field_is_piecewise_constant(profile):
+    """The distinguishing feature of `rect`/`straight` vs `smooth`: the
+    underlying noise field is flat across whole cells (nearest-neighbour
+    upsample of the low-res field), so a short run of pixels within one
+    cell shows very few distinct field values — unlike the
+    continuously-varying bicubic field."""
+    from ops.edge_noise import _noise_field
+
+    field = _noise_field(200, 200, scale=12.0, seed=5, profile=profile)
+
+    row = 100
+    col_lo, col_hi = 158, 162  # 4 px, inside a 12- (or 36-)px cell
+    segment = field[row, col_lo:col_hi]
+    assert len(np.unique(np.round(segment, 6))) <= 1
+
+    field_smooth = _noise_field(200, 200, scale=12.0, seed=5, profile="smooth")
+    assert not np.allclose(field, field_smooth)

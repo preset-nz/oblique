@@ -14,7 +14,18 @@ full noise cell" at `amount=1`, as the story requires:
 1. Builds a smooth, seeded value-noise field at feature size `scale` —
    low-resolution white noise from the seeded RNG, bicubic-upsampled to
    the image size (the same controllable-feature-size trick the story
-   prescribes; no noise library in the sidecar).
+   prescribes; no noise library in the sidecar). The `profile` param
+   picks how that low-res field is turned into the full-size field:
+   - `smooth` (default) — bicubic upsample, as above. Byte-identical to
+     the pre-`profile` op for every param combination.
+   - `rect` — the same low-res field, upsampled with nearest-neighbour
+     instead of bicubic, so the boundary steps in flat square blocks.
+   - `saw` — the bicubic-upsampled field folded into a ridge/triangle
+     wave (`1 - 2*abs(v)`), which turns smooth wander into sharp,
+     regularly-spaced teeth.
+   - `straight` — nearest-neighbour upsample of a *coarser* field (3x
+     the normal cell size), giving a few large flat displacements —
+     long straight rips with hard corners rather than fine texture.
 2. Softens alpha with a box-blur radius of `max(1, amount * scale)` px
    — wide enough that the resulting gradient band covers every pixel a
    displacement of up to `amount * scale` px could reach — then takes
@@ -73,6 +84,32 @@ def _soften(arr: np.ndarray, radius: float) -> np.ndarray:
     return out
 
 
+def _noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.ndarray:
+    """Seeded value-noise field at feature size `scale`, upsampled to
+    `(h, w)` per `profile` — see the module docstring for the four
+    variants. Values are bounded to roughly [-1, 1]."""
+    rng = np.random.default_rng(seed)
+    field_scale = scale * 3.0 if profile == "straight" else scale
+    small_h = max(1, int(round(h / field_scale)))
+    small_w = max(1, int(round(w / field_scale)))
+    noise_small = rng.uniform(-1.0, 1.0, size=(small_h, small_w)).astype(np.float32)
+    noise_img = Image.fromarray(noise_small, mode="F")
+
+    if profile in ("rect", "straight"):
+        return np.asarray(
+            noise_img.resize((w, h), resample=Image.NEAREST), dtype=np.float64
+        )
+
+    noise_full = np.asarray(
+        noise_img.resize((w, h), resample=Image.BICUBIC), dtype=np.float64
+    )
+    if profile == "saw":
+        # Ridge/triangle wave: folds the smooth [-1, 1] wander into sharp
+        # teeth, still bounded to [-1, 1].
+        noise_full = 1.0 - 2.0 * np.abs(noise_full)
+    return noise_full
+
+
 def _bilinear_sample(arr: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndarray:
     """Bilinearly sample 2D float `arr` at fractional coordinates `ys`,
     `xs` (same shape as `arr`), clamped to the canvas edges."""
@@ -110,12 +147,19 @@ def _bilinear_sample(arr: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndar
             scale="spatial",
         ),
         P("seed", "int", min=0, max=2**31 - 1, default=0, step=1, scale="none"),
+        P(
+            "profile",
+            "enum",
+            default="smooth",
+            choices=("smooth", "saw", "rect", "straight"),
+        ),
     ],
 )
 def edge_noise(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     amount = float(params.get("amount", 0.4))
     scale = max(1e-6, float(params.get("scale", 12.0)))
     seed = int(params.get("seed", 0))
+    profile = str(params.get("profile", "smooth"))
 
     out = img.copy()
     if amount <= 0.0:
@@ -146,14 +190,7 @@ def edge_noise(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     normal_x = np.where(grad_mag > 1e-9, gx / safe_mag, 0.0)
 
     # --- seeded value-noise field, feature size `scale` -----------------
-    rng = np.random.default_rng(seed)
-    small_h = max(1, int(round(h / scale)))
-    small_w = max(1, int(round(w / scale)))
-    noise_small = rng.uniform(-1.0, 1.0, size=(small_h, small_w)).astype(np.float32)
-    noise_img = Image.fromarray(noise_small, mode="F")
-    noise_full = np.asarray(
-        noise_img.resize((w, h), resample=Image.BICUBIC), dtype=np.float64
-    )
+    noise_full = _noise_field(h, w, scale, seed, profile)
 
     displacement = noise_full * amount * scale * weight
     dy = displacement * normal_y
