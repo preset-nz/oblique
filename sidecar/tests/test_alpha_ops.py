@@ -382,7 +382,7 @@ def test_edge_noise_profile_registered_as_enum_with_smooth_default():
     profile = params["profile"]
     assert profile["type"] == "enum"
     assert profile["default"] == "smooth"
-    assert set(profile["choices"]) == {"smooth", "saw", "rect", "straight"}
+    assert set(profile["choices"]) == {"smooth", "linear", "saw", "rect", "straight"}
 
 
 # SHA-256 of the full RGBA output of the pre-`profile` op (commit ae3d0f4)
@@ -411,7 +411,7 @@ def test_edge_noise_smooth_profile_is_byte_identical_to_pre_profile_op():
         np.testing.assert_array_equal(default, explicit)
 
 
-@pytest.mark.parametrize("profile", ["saw", "rect", "straight"])
+@pytest.mark.parametrize("profile", ["linear", "saw", "rect", "straight"])
 def test_edge_noise_non_smooth_profiles_differ_from_smooth_but_keep_interior_and_opaque_noop(
     profile,
 ):
@@ -455,3 +455,19 @@ def test_edge_noise_rect_and_straight_field_is_piecewise_constant(profile):
 
     field_smooth = _noise_field(200, 200, scale=12.0, seed=5, profile="smooth")
     assert not np.allclose(field, field_smooth)
+
+
+def test_edge_noise_linear_profile_is_piecewise_linear_between_dots():
+    """`linear` connects the noise points with straight runs: within one
+    cell the field's second difference along a row is ~0."""
+    from ops.edge_noise import _noise_field
+
+    field = _noise_field(64, 64, 8.0, 3, "linear")
+    # Low-res pixel centres land at 3.5, 11.5, 19.5, ... in full-res
+    # coordinates, so 4..11 lies strictly between two dots. float32
+    # resampling, hence the tolerance.
+    row = field[12:19, 4:12].astype(np.float64)
+    second_diff = np.diff(row, n=2, axis=1)
+    assert np.all(np.abs(second_diff) < 1e-3)
+    # And it is not flat (that would be `rect`).
+    assert np.abs(np.diff(row, axis=1)).max() > 1e-3

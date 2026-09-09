@@ -18,6 +18,9 @@ full noise cell" at `amount=1`, as the story requires:
    picks how that low-res field is turned into the full-size field:
    - `smooth` (default) — bicubic upsample, as above. Byte-identical to
      the pre-`profile` op for every param combination.
+   - `linear` — bilinear upsample: "connect the dots". Straight runs
+     between noise points with a corner at each, so tears are polygonal
+     rather than curved.
    - `rect` — the same low-res field, upsampled with nearest-neighbour
      instead of bicubic, so the boundary steps in flat square blocks.
    - `saw` — the bicubic-upsampled field folded into a ridge/triangle
@@ -86,7 +89,7 @@ def _soften(arr: np.ndarray, radius: float) -> np.ndarray:
 
 def _noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.ndarray:
     """Seeded value-noise field at feature size `scale`, upsampled to
-    `(h, w)` per `profile` — see the module docstring for the four
+    `(h, w)` per `profile` — see the module docstring for the five
     variants. Values are bounded to roughly [-1, 1]."""
     rng = np.random.default_rng(seed)
     field_scale = scale * 3.0 if profile == "straight" else scale
@@ -98,6 +101,13 @@ def _noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.nd
     if profile in ("rect", "straight"):
         return np.asarray(
             noise_img.resize((w, h), resample=Image.NEAREST), dtype=np.float64
+        )
+
+    if profile == "linear":
+        # Connect the dots: straight runs between noise points, corners at
+        # each cell — polygonal tears rather than a bezier wander.
+        return np.asarray(
+            noise_img.resize((w, h), resample=Image.BILINEAR), dtype=np.float64
         )
 
     noise_full = np.asarray(
@@ -151,7 +161,7 @@ def _bilinear_sample(arr: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndar
             "profile",
             "enum",
             default="smooth",
-            choices=("smooth", "saw", "rect", "straight"),
+            choices=("smooth", "linear", "saw", "rect", "straight"),
         ),
     ],
 )
