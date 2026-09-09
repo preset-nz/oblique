@@ -16,9 +16,10 @@ import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { isMaskableMarquee, marqueeToMaskShape, useMarqueeStateStore } from '@/scene/marquee';
+import { beginTransaction, endTransaction } from '@/scene/history';
+import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';
-import { IDENTITY_TRANSFORM_2D, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
+import { isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
 import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
@@ -49,7 +50,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const removeModifier = useSceneStore((s) => s.removeModifier);
   const addModifier = useSceneStore((s) => s.addModifier);
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
-  const setModifierMask = useSceneStore((s) => s.setModifierMask);
+  const applyMarqueeAsVectorMask = useSceneStore((s) => s.applyMarqueeAsVectorMask);
   const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
   // Select the stable nodes array and filter during render — a selector
@@ -99,22 +100,21 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
     useRowCollapseStore.getState().expand(modId);
   }
 
+  /**
+   * "Mask from selection" (marquees-as-vectors.md): converts the active
+   * marquee into a hidden `VectorNode` + a live `VectorMaskRef`, not a baked
+   * `MaskDef` — the mask is document-pinned and editable forever with the
+   * pen tool (the story's whole point). One undo step: node creation +
+   * attach + replace-cleanup all land inside this transaction.
+   */
   function maskFromSelection() {
     if (locked) return;
     const state = useMarqueeStateStore.getState();
     const active = state.marquee;
     if (!isMaskableMarquee(active) || !active) return;
-    // Snapshot the node's CURRENT transform: the mask glues itself to the
-    // node pixels under the marquee right now, and moving the node later
-    // must not re-rasterise or recook (epic acceptance) — see
-    // MaskDef.appliedTransform2d in scene/types.ts.
-    setModifierMask(node.id, modifier.id, {
-      shape: marqueeToMaskShape(active),
-      appliedTransform2d: node.transform2d ?? IDENTITY_TRANSFORM_2D,
-      featherPx: state.params.featherPx,
-      expand: state.params.expand,
-      invert: state.params.invert,
-    });
+    beginTransaction();
+    applyMarqueeAsVectorMask(node.id, modifier.id, active, state.params);
+    endTransaction();
     // Consumed — same "no orphaned overlay state" rule as every other
     // marquee exit.
     state.clear();

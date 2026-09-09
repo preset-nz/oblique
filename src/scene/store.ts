@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import * as cache from './cache';
+import { type MarqueeShape, marqueeToVectorPaths } from './marquee';
 import type {
   BlendMode,
   MaskDef,
@@ -159,6 +160,12 @@ interface SceneState {
    * Attach (or replace) a modifier's mask (selection-to-mask.md). Reuses the
    * modifier's existing maskId when present — replacing a mask is the same
    * dirty/recook path as editing it. Returns the mask id.
+   *
+   * @deprecated legacy (marquees-as-vectors.md, 2026-09-10) — no UI path
+   * calls this any more (`StackRow`'s "Mask from selection" now goes through
+   * `applyMarqueeAsVectorMask`). Kept only so a loaded `.oblique` file's
+   * existing `MaskDef`s stay editable/removable through the same machinery
+   * that reads them.
    */
   setModifierMask: (nodeId: string, modId: string, def: Omit<MaskDef, 'id'>) => string;
 
@@ -180,6 +187,33 @@ interface SceneState {
   ) => string;
   /** Detach and delete a modifier's mask, baked or vector-referenced. */
   removeModifierMask: (nodeId: string, modId: string) => void;
+
+  /**
+   * "Mask from selection" (marquees-as-vectors.md): converts a marquee into
+   * a hidden `VectorNode` (`visible: false`, `output: 'image'`, labelled
+   * `Selection (rect|ellipse|lasso)`) and attaches it to the modifier as a
+   * live `VectorMaskRef` — composing `addVectorNode` + `setModifierVectorMask`
+   * plus the replace-cleanup rule below. No `MaskDef` is created. Same
+   * locked-consumer guard as `setModifierVectorMask` (returns `undefined`,
+   * nothing mutated, on a locked target).
+   *
+   * Replace rule: if the modifier already carried a selection-derived vector
+   * mask, the PREVIOUS vector node is deleted in the same call iff (a) its
+   * label starts with `Selection (` and (b) no other `maskRefs` entry still
+   * points at it after the swap — otherwise it's either user-authored or
+   * shared, and neither is ours to remove.
+   *
+   * Does NOT open the history transaction itself — the caller
+   * (`StackRow.tsx`) wraps this in `beginTransaction`/`endTransaction` so
+   * creation + attach + replace-cleanup land as one undo step, matching how
+   * the store stays history-agnostic today.
+   */
+  applyMarqueeAsVectorMask: (
+    nodeId: string,
+    modId: string,
+    marquee: MarqueeShape,
+    params: { featherPx: number; expand: number; invert: boolean },
+  ) => { vectorNodeId: string; maskId: string } | undefined;
 
   markDirty: (nodeId: string, level: 'draft' | 'working') => void;
   clearDirty: (nodeId: string, level: 'draft' | 'working') => void;
@@ -675,6 +709,48 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         scene: { ...s.scene, nodes: pruned.nodes, masks: pruned.masks, maskRefs: pruned.maskRefs },
       };
     });
+  },
+
+  applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
+    if (isLocked(get().scene.nodes, nodeId)) return undefined;
+
+    // Snapshot what the modifier's mask pointed at BEFORE this call, so the
+    // replace-cleanup rule below can tell whether a previously-converted
+    // selection node is now orphaned.
+    const existingMaskId = get()
+      .scene.nodes.find((n) => n.id === nodeId)
+      ?.modifiers.find((m) => m.id === modId)?.maskId;
+    const previousVectorNodeId = existingMaskId
+      ? get().scene.maskRefs?.[existingMaskId]?.nodeId
+      : undefined;
+
+    const label = `Selection (${marquee.kind})`;
+    const vectorNodeId = get().addVectorNode({
+      paths: marqueeToVectorPaths(marquee),
+      fillRule: 'nonzero',
+      label,
+      visible: false,
+      output: 'image',
+    });
+
+    const maskId = get().setModifierVectorMask(nodeId, modId, vectorNodeId, {
+      featherPx: params.featherPx,
+      expand: params.expand,
+      invert: params.invert,
+    });
+
+    if (previousVectorNodeId && previousVectorNodeId !== vectorNodeId) {
+      const s = get();
+      const previousNode = s.scene.nodes.find((n) => n.id === previousVectorNodeId);
+      const stillReferenced = Object.values(s.scene.maskRefs ?? {}).some(
+        (ref) => ref.nodeId === previousVectorNodeId,
+      );
+      if (previousNode?.label.startsWith('Selection (') && !stillReferenced) {
+        get().removeNode(previousVectorNodeId);
+      }
+    }
+
+    return { vectorNodeId, maskId };
   },
 
   markDirty: (nodeId, level) => {

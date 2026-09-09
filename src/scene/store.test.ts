@@ -931,6 +931,136 @@ describe('setModifierVectorMask', () => {
   });
 });
 
+describe('applyMarqueeAsVectorMask (marquees-as-vectors.md)', () => {
+  const rectMarquee = { kind: 'rect' as const, rect: { x: 0, y: 0, w: 10, h: 10 } };
+  const ellipseMarquee = { kind: 'ellipse' as const, rect: { x: 0, y: 0, w: 10, h: 10 } };
+  const params = { featherPx: 0, expand: 0, invert: false };
+
+  function pixelWithModifier() {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { modifiers: [modifier('m1')] })],
+      },
+    }));
+  }
+
+  function applyOrThrow(
+    nodeId: string,
+    modId: string,
+    marquee: Parameters<ReturnType<typeof useSceneStore.getState>['applyMarqueeAsVectorMask']>[2],
+  ) {
+    const result = useSceneStore
+      .getState()
+      .applyMarqueeAsVectorMask(nodeId, modId, marquee, params);
+    if (!result) throw new Error('expected applyMarqueeAsVectorMask to succeed');
+    return result;
+  }
+
+  it('creates a hidden, image-output vector node labelled Selection (kind) and attaches a live ref', () => {
+    pixelWithModifier();
+    const { vectorNodeId, maskId } = applyOrThrow('a', 'm1', rectMarquee);
+
+    const scene = useSceneStore.getState().scene;
+    const vNode = scene.nodes.find((n) => n.id === vectorNodeId);
+    expect(vNode).toMatchObject({
+      type: 'vector',
+      label: 'Selection (rect)',
+      visible: false,
+      output: 'image',
+    });
+    expect(scene.maskRefs?.[maskId]).toMatchObject({ nodeId: vectorNodeId, ...params });
+    expect(scene.nodes.find((n) => n.id === 'a')?.modifiers[0].maskId).toBe(maskId);
+    // No MaskDef ever created by this path.
+    expect(scene.masks).toBeUndefined();
+  });
+
+  it('labels the hidden node by marquee kind', () => {
+    pixelWithModifier();
+    const { vectorNodeId } = applyOrThrow('a', 'm1', ellipseMarquee);
+    const label = useSceneStore.getState().scene.nodes.find((n) => n.id === vectorNodeId)?.label;
+    expect(label).toBe('Selection (ellipse)');
+  });
+
+  it('replace: applying a new selection deletes the previous Selection(...) node and leaves exactly one', () => {
+    pixelWithModifier();
+    const first = applyOrThrow('a', 'm1', rectMarquee);
+    const second = applyOrThrow('a', 'm1', ellipseMarquee);
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.nodes.find((n) => n.id === first.vectorNodeId)).toBeUndefined();
+    expect(scene.nodes.find((n) => n.id === second.vectorNodeId)).toBeDefined();
+    expect(scene.nodes.filter((n) => n.label.startsWith('Selection (')).length).toBe(1);
+    // The old maskRefs entry under the reused id is gone (overwritten), and
+    // nothing still points at the deleted node.
+    expect(Object.values(scene.maskRefs ?? {}).some((r) => r.nodeId === first.vectorNodeId)).toBe(
+      false,
+    );
+  });
+
+  it('replace: leaves a user-authored vector node (label not "Selection (") alone', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          vectorNode('userShape', { label: 'My hand-drawn shape' }),
+          pixelNode('a', { modifiers: [modifier('m1')] }),
+        ],
+      },
+    }));
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'userShape', {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+
+    useSceneStore.getState().applyMarqueeAsVectorMask('a', 'm1', rectMarquee, params);
+
+    const scene = useSceneStore.getState().scene;
+    expect(scene.nodes.find((n) => n.id === 'userShape')).toBeDefined();
+  });
+
+  it('replace: leaves a shared Selection(...) node alone if another modifier still references it', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          pixelNode('a', { modifiers: [modifier('m1')] }),
+          pixelNode('b', { modifiers: [modifier('m2')] }),
+        ],
+      },
+    }));
+    const first = applyOrThrow('a', 'm1', rectMarquee);
+    // A second modifier shares the same converted selection node.
+    useSceneStore.getState().setModifierVectorMask('b', 'm2', first.vectorNodeId, {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    });
+
+    useSceneStore.getState().applyMarqueeAsVectorMask('a', 'm1', ellipseMarquee, params);
+
+    const scene = useSceneStore.getState().scene;
+    // Still there — 'b' still points at it.
+    expect(scene.nodes.find((n) => n.id === first.vectorNodeId)).toBeDefined();
+  });
+
+  it('no-ops on a locked node', () => {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
+      },
+    }));
+    const before = useSceneStore.getState().scene;
+    const result = useSceneStore
+      .getState()
+      .applyMarqueeAsVectorMask('a', 'm1', rectMarquee, params);
+    expect(result).toBeUndefined();
+    expect(useSceneStore.getState().scene).toBe(before);
+  });
+});
+
 describe('setVectorPaths — cross-node dirty (vector-modifier-masks.md)', () => {
   it('dirties every OTHER node whose modifier references the edited vector node', () => {
     useSceneStore.setState((s) => ({

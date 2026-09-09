@@ -42,6 +42,14 @@ export type MaskShape =
  * params — the rasteriser scales them by the cook resolution factor, same
  * convention as gaussian_blur.radius).
  */
+/**
+ * @deprecated legacy — loaded, never created since 2026-09-10
+ * (marquees-as-vectors.md). Selections now convert to a hidden `VectorNode`
+ * + `VectorMaskRef` (`Modifier.maskId` resolves against `Scene.maskRefs`).
+ * `MaskDef`/`Scene.masks`/`rasterizeMask`/`setModifierMask` stay so old
+ * `.oblique` files keep loading and rendering byte-for-byte — retiring them
+ * is a later story once no dogfooded project still carries one.
+ */
 export interface MaskDef {
   id: string;
   shape: MaskShape;
