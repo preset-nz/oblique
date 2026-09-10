@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
 import { redo, undo } from '@/scene/history';
@@ -13,12 +14,14 @@ import { redo, undo } from '@/scene/history';
  *
  * Double-firing: on macOS, a menu item's accelerator is a native key
  * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
- * keydown reaches the WKWebView, so the menu owns Cmd+N/O/I/S/Shift+Cmd+S/
+ * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
  * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z exclusively — `shortcuts.ts`'s keydown
  * branches for those keys were removed rather than kept as dead/duplicate
  * paths (this is the mainstream, expected behaviour, but wasn't
  * exercisable headlessly in this environment — see the story report for
- * the manual click-test to confirm no double-fire).
+ * the manual click-test to confirm no double-fire). Cmd+, (Settings…,
+ * Epic 17 story 1) never had a `shortcuts.ts` branch to remove — the menu
+ * is its only source.
  *
  * Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split Open
  * vs Import", 2026-07-05): two distinct handlers, not one dialog routed by
@@ -36,6 +39,7 @@ import { redo, undo } from '@/scene/history';
  * would.
  */
 const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
+  'menu://app/settings': () => openSettingsDialog(),
   'menu://file/new': () => newProject(),
   'menu://file/open': () => openProjectDialog(),
   'menu://file/import': () => importImagesDialog(),

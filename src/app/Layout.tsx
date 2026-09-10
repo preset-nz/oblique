@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DocumentSetup } from '@/panels/document/DocumentSetup';
 import { StackPanel } from '@/panels/StackPanel';
+import { SettingsDialog } from '@/panels/settings/SettingsDialog';
 import { VectorsPanel } from '@/panels/VectorsPanel';
 
 export function Layout() {
@@ -57,6 +58,7 @@ export function Layout() {
         <StatusBar />
       </div>
       <Toaster />
+      <SettingsDialog />
     </TooltipProvider>
   );
 }

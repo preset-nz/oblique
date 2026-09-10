@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { loadAiSettings } from './ai/settings';
 import { installProjectWindowIntegration } from './app/closeGuard';
 import { Layout } from './app/Layout';
 import { installMenu } from './app/menu';
@@ -29,6 +30,10 @@ function App() {
 
   useEffect(() => installShortcuts(), []);
   useEffect(() => installMenu(), []);
+  // AI backend settings (Epic 17 story 1) — loaded once at startup so the
+  // Settings dialog shows the persisted endpoint the first time it opens,
+  // per acceptance ("enter an endpoint, restart the app: same value").
+  useEffect(() => void loadAiSettings(), []);
 
   // Once per app, not per StrictMode re-run: window listeners have no
   // teardown API worth building for a singleton window.

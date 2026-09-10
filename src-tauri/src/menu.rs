@@ -41,6 +41,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 /// Epic 14 (friends build) — free, pre-release, no support SLA implied.
 const CONTACT_EMAIL: &str = "georg@preset.nz";
 
+const EVT_APP_SETTINGS: &str = "menu://app/settings";
 const EVT_FILE_NEW: &str = "menu://file/new";
 const EVT_FILE_OPEN: &str = "menu://file/open";
 const EVT_FILE_IMPORT: &str = "menu://file/import";
@@ -64,12 +65,17 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ..Default::default()
     };
 
+    let app_settings =
+        MenuItem::with_id(app, "app-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+
     let app_submenu = Submenu::with_items(
         app,
         &pkg_name,
         true,
         &[
             &PredefinedMenuItem::about(app, None, Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app)?,
+            &app_settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -147,6 +153,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     app.on_menu_event(|app_handle, event| {
         let evt = match event.id().0.as_str() {
+            "app-settings" => EVT_APP_SETTINGS,
             "file-new" => EVT_FILE_NEW,
             "file-open" => EVT_FILE_OPEN,
             "file-import" => EVT_FILE_IMPORT,
