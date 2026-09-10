@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VectorPath } from '@/scene/types';
-import { frameFor } from './coords';
+import { frameFor } from '../selectShared/coords';
 import {
   bufferToMaskPlane,
   OUTLINE_PROMPT_USES_MASK,

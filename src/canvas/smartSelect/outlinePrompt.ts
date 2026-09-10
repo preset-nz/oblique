@@ -1,6 +1,6 @@
 import type { AnchorPoint, Point2D, VectorPath } from '@/scene/types';
 import { buildPath2D, pathCommandsFor } from '@/scene/vectorRasterize';
-import { type Box, type BufferFrame, boundingBox, docToBuffer } from './coords';
+import { type Box, type BufferFrame, boundingBox, docToBuffer } from '../selectShared/coords';
 
 /**
  * The outline prompt (segment-to-vector.md, Georg 2026-09-10: "can I also

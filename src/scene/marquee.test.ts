@@ -4,6 +4,7 @@ import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import {
   DEFAULT_MARQUEE_PARAMS,
+  fillRuleForMarquee,
   isMaskableMarquee,
   KAPPA,
   marqueeToVectorPaths,
@@ -241,6 +242,20 @@ describe('marqueeToVectorPaths', () => {
         expect(anchor.handleOut).toBeUndefined();
       }
     }
+  });
+});
+
+describe('fillRuleForMarquee (colour-range-select.md)', () => {
+  it('polygons rasterises evenodd — trace.py is winding-agnostic, so it is the only rule that reliably cuts holes', () => {
+    expect(fillRuleForMarquee({ kind: 'polygons', polygons: [] })).toBe('evenodd');
+  });
+
+  it('rect/ellipse/lasso stay nonzero — single simple loops, no holes possible', () => {
+    expect(fillRuleForMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 1, h: 1 } })).toBe('nonzero');
+    expect(fillRuleForMarquee({ kind: 'ellipse', rect: { x: 0, y: 0, w: 1, h: 1 } })).toBe(
+      'nonzero',
+    );
+    expect(fillRuleForMarquee({ kind: 'lasso', points: [], closed: true })).toBe('nonzero');
   });
 });
 

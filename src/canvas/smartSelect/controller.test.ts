@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SegmentOptions, SegmentResult } from '@/ai/adapter';
 import { type MarqueeShape, useMarqueeStateStore } from '@/scene/marquee';
+import { frameFor } from '../selectShared/coords';
+import type { TargetPayload } from '../selectShared/payload';
 import { SmartSelectController, type SmartSelectControllerDeps } from './controller';
-import { frameFor } from './coords';
-import type { TargetPayload } from './payload';
 import { useSmartSelectStore } from './state';
 
 function makePayload(): TargetPayload {
@@ -187,6 +187,7 @@ describe('SmartSelectController', () => {
           { x: 100, y: 90 },
         ],
       ],
+      label: 'Selection (segment)',
     });
 
     controller.stop();

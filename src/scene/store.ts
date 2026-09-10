@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import * as cache from './cache';
-import { type MarqueeShape, marqueeToVectorPaths } from './marquee';
+import { fillRuleForMarquee, type MarqueeShape, marqueeToVectorPaths } from './marquee';
 import type {
   BlendMode,
   Modifier,
@@ -658,15 +658,24 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       : undefined;
 
     // A `polygons` marquee is produced by more than one tool (Epic 17's
-    // `select-smart` and 2b's colour-range select share the shape) — the
-    // shape's own `kind` can't disambiguate their commit labels, so
-    // `segment` is the only source today; 2b re-decides this if/when it
-    // lands (segment-to-vector.md's commit label, "Selection (segment)").
+    // `select-smart` and 2b's colour-range-select.md's `select-colour`
+    // share the shape) — the shape's own `kind` can't disambiguate their
+    // commit labels, so each tool stamps its own `label` on the marquee it
+    // writes (`select-smart`'s controller: 'Selection (segment)';
+    // `select-colour`'s controller: 'Selection (colour)'); this falls back
+    // to `'Selection (segment)'` only for a `polygons` marquee with no
+    // label at all (pre-2b callers/tests).
     const label =
-      marquee.kind === 'polygons' ? 'Selection (segment)' : `Selection (${marquee.kind})`;
+      marquee.kind === 'polygons'
+        ? (marquee.label ?? 'Selection (segment)')
+        : `Selection (${marquee.kind})`;
     const vectorNodeId = get().addVectorNode({
       paths: marqueeToVectorPaths(marquee),
-      fillRule: 'nonzero',
+      // evenodd, not nonzero: only `polygons` marquees can carry holes
+      // (colour-range-select.md) and `trace.py` is winding-agnostic, so
+      // evenodd is the only rule that reliably cuts them — see
+      // `fillRuleForMarquee`'s own comment in `scene/marquee.ts`.
+      fillRule: fillRuleForMarquee(marquee),
       label,
       visible: false,
       output: 'image',

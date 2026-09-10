@@ -947,6 +947,67 @@ describe('applyMarqueeAsVectorMask (marquees-as-vectors.md)', () => {
     expect(result).toBeUndefined();
     expect(useSceneStore.getState().scene).toBe(before);
   });
+
+  // colour-range-select.md: `polygons` marquees carry their own commit
+  // label (produced by more than one tool now) and always rasterise
+  // evenodd (holes — colour-range-select.md's wand keeps them, unlike
+  // segment-to-vector.md's v1).
+  it('a polygons marquee with a label uses it verbatim, not "Selection (polygons)"', () => {
+    pixelWithModifier();
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const { vectorNodeId } = applyOrThrow('a', 'm1', {
+      kind: 'polygons',
+      polygons: [square],
+      label: 'Selection (colour)',
+    });
+    const vNode = useSceneStore.getState().scene.nodes.find((n) => n.id === vectorNodeId);
+    expect(vNode?.label).toBe('Selection (colour)');
+  });
+
+  it('a polygons marquee with no label falls back to "Selection (segment)"', () => {
+    pixelWithModifier();
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const { vectorNodeId } = applyOrThrow('a', 'm1', { kind: 'polygons', polygons: [square] });
+    const vNode = useSceneStore.getState().scene.nodes.find((n) => n.id === vectorNodeId);
+    expect(vNode?.label).toBe('Selection (segment)');
+  });
+
+  it('a polygons marquee rasterises evenodd (holes cut out); rect/ellipse stay nonzero', () => {
+    pixelWithModifier();
+    const outer = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const hole = [
+      { x: 3, y: 3 },
+      { x: 3, y: 7 },
+      { x: 7, y: 7 },
+      { x: 7, y: 3 },
+    ];
+    const { vectorNodeId: polyId } = applyOrThrow('a', 'm1', {
+      kind: 'polygons',
+      polygons: [outer, hole],
+      label: 'Selection (colour)',
+    });
+    const polyNode = useSceneStore.getState().scene.nodes.find((n) => n.id === polyId);
+    expect((polyNode as VectorNode).fillRule).toBe('evenodd');
+
+    const { vectorNodeId: rectId } = applyOrThrow('a', 'm1', rectMarquee);
+    const rectNode = useSceneStore.getState().scene.nodes.find((n) => n.id === rectId);
+    expect((rectNode as VectorNode).fillRule).toBe('nonzero');
+  });
 });
 
 describe('setVectorPaths — cross-node dirty (vector-modifier-masks.md)', () => {

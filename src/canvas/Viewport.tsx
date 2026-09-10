@@ -4,11 +4,21 @@ import { destSizeFor } from '@/compositor/composite';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
 import { beginTransaction, endTransaction } from '@/scene/history';
-import { isMaskableMarquee, marqueeToVectorPaths, useMarqueeStateStore } from '@/scene/marquee';
+import {
+  fillRuleForMarquee,
+  isMaskableMarquee,
+  marqueeToVectorPaths,
+  useMarqueeStateStore,
+} from '@/scene/marquee';
 import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D, isVectorNode } from '@/scene/types';
+import { ColourSelectOverlay } from './colourSelect/ColourSelectOverlay';
+import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel';
+import { ColourSelectStatusPanel } from './colourSelect/ColourSelectStatusPanel';
+import { ColourSelectController } from './colourSelect/controller';
+import { useColourSelectStore } from './colourSelect/state';
 import { topmostNodeAt } from './hitTest';
 import { EllipseMarquee } from './marquees/EllipseMarquee';
 import { LassoMarquee } from './marquees/LassoMarquee';
@@ -29,9 +39,9 @@ import {
   recompositeBuffer,
   viewChangeNeedsRecomposite,
 } from './paintScene';
+import { getTargetFrame } from './selectShared/payload';
 import { SmartSelectController } from './smartSelect/controller';
 import { resolveOutlineSeed } from './smartSelect/outlinePrompt';
-import { getTargetFrame } from './smartSelect/payload';
 import { SmartSelectOverlay } from './smartSelect/SmartSelectOverlay';
 import { SmartSelectStatusPanel } from './smartSelect/SmartSelectStatusPanel';
 import { useSmartSelectStore } from './smartSelect/state';
@@ -105,12 +115,23 @@ export function Viewport() {
   const smartPoints = useSmartSelectStore((s) => s.points);
   const smartBox = useSmartSelectStore((s) => s.box);
 
+  const colourSeeds = useColourSelectStore((s) => s.seeds);
+
   // Debounced sidecar `segment` requests for the smart-select prompt
   // (segment-to-vector.md) — one controller for the Viewport's lifetime,
   // same "start once, react to the store" shape as the app-wide
   // `CookScheduler`, just view-local since the prompt itself is view-local.
   useEffect(() => {
     const controller = new SmartSelectController();
+    controller.start();
+    return () => controller.stop();
+  }, []);
+
+  // Same shape for `select-colour`'s prompt (colour-range-select.md) — a
+  // separate controller instance, not a merge with `SmartSelectController`:
+  // different store, different (model-free) request shape.
+  useEffect(() => {
+    const controller = new ColourSelectController();
     controller.start();
     return () => controller.stop();
   }, []);
@@ -149,7 +170,17 @@ export function Viewport() {
           if (frame) {
             const outline =
               activeMarquee && isMaskableMarquee(activeMarquee)
-                ? { paths: marqueeToVectorPaths(activeMarquee), fillRule: 'nonzero' as const }
+                ? {
+                    paths: marqueeToVectorPaths(activeMarquee),
+                    // fillRuleForMarquee, not a hardcoded 'nonzero': a
+                    // `polygons` marquee active here could be a
+                    // colour-range-select.md preview with holes (Escape
+                    // wasn't pressed before switching tools) — evenodd
+                    // keeps the coarse mask this seeds SAM's decoder with
+                    // consistent with how the shape actually rasterises
+                    // once committed (store.ts).
+                    fillRule: fillRuleForMarquee(activeMarquee),
+                  }
                 : node && isVectorNode(node)
                   ? { paths: node.paths, fillRule: node.fillRule }
                   : undefined;
@@ -177,6 +208,27 @@ export function Viewport() {
       }
       if (prevToolRef.current === 'select-smart') {
         useSmartSelectStore.getState().clear();
+      }
+
+      // Activating select-colour (colour-range-select.md): no outline seed
+      // (the wand has no box/mask prompt to consume) — just pick the
+      // target node the same way select-smart does.
+      if (tool === 'select-colour') {
+        const selection = useSelectionStore.getState().selection;
+        const node =
+          selection.kind === 'node'
+            ? useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId)
+            : undefined;
+        const targetId = node && (node.type === 'pixel' || node.type === 'vector') ? node.id : null;
+        useColourSelectStore.getState().setTarget(targetId);
+        if (!targetId) {
+          useColourSelectStore
+            .getState()
+            .setStatus('error', 'Select an image or vector layer to select from');
+        }
+      }
+      if (prevToolRef.current === 'select-colour') {
+        useColourSelectStore.getState().clear();
       }
 
       clearMarquee();
@@ -261,6 +313,8 @@ export function Viewport() {
         // the whole tool — a second Escape or a stray click shouldn't need
         // a tool-switch round trip to work again.
         if (tool === 'select-smart') useSmartSelectStore.getState().clearPrompt();
+        // select-colour's own prompt (colour-range-select.md) — same rule.
+        if (tool === 'select-colour') useColourSelectStore.getState().clearPrompt();
         return;
       }
 
@@ -311,6 +365,7 @@ export function Viewport() {
           e.preventDefault();
           clearMarquee();
           if (tool === 'select-smart') useSmartSelectStore.getState().clearPrompt();
+          if (tool === 'select-colour') useColourSelectStore.getState().clearPrompt();
           return;
         }
       }
@@ -425,6 +480,22 @@ export function Viewport() {
         smartPendingStart = toDoc(e.clientX, e.clientY);
         smartPendingAlt = e.altKey;
         smartPendingMoved = false;
+        return;
+      }
+
+      // select-colour (colour-range-select.md): a single click, no
+      // drag/box concept — click = positive seed (replaces the current
+      // set), Alt-click = negative, Shift-click ADDS to the current set
+      // instead of replacing it (the story's own fixed contract).
+      if (tool === 'select-colour') {
+        e.preventDefault();
+        const docPt = toDoc(e.clientX, e.clientY);
+        const label: 0 | 1 = e.altKey ? 0 : 1;
+        if (e.shiftKey) {
+          useColourSelectStore.getState().addSeed(docPt, label);
+        } else {
+          useColourSelectStore.getState().setSeed(docPt, label);
+        }
         return;
       }
 
@@ -911,10 +982,19 @@ export function Viewport() {
               viewScale={view.scale}
             />
           )}
+          {tool === 'select-colour' && (
+            <ColourSelectOverlay
+              seeds={colourSeeds}
+              polygons={marquee?.kind === 'polygons' ? marquee.polygons : []}
+              viewScale={view.scale}
+            />
+          )}
         </g>
       </svg>
       <MarqueeToolbar />
       {tool === 'select-smart' && <SmartSelectStatusPanel />}
+      {tool === 'select-colour' && <ColourSelectStatusPanel />}
+      {tool === 'select-colour' && <ColourSelectParamsPanel />}
     </div>
   );
 }

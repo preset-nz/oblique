@@ -13,7 +13,7 @@ export interface TargetPayload {
 }
 
 /** Edges injected for tests, same pattern as `cook.ts`'s `CookDeps`. */
-export interface SmartSelectPayloadDeps {
+export interface SelectPayloadDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getCachedWorking: (nodeId: string) => ImageBitmap | undefined;
   getDocumentSize: () => [number, number];
@@ -34,14 +34,14 @@ function realReadBitmap(bitmap: ImageBitmap): Uint8Array {
   );
 }
 
-export const productionSmartSelectPayloadDeps: SmartSelectPayloadDeps = {
+export const productionSelectPayloadDeps: SelectPayloadDeps = {
   getNode: (nodeId) => useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId),
   getCachedWorking: (nodeId) => cache.get(nodeId, 'working'),
   getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   readBitmap: realReadBitmap,
 };
 
-type FrameDeps = Pick<SmartSelectPayloadDeps, 'getNode' | 'getCachedWorking' | 'getDocumentSize'>;
+type FrameDeps = Pick<SelectPayloadDeps, 'getNode' | 'getCachedWorking' | 'getDocumentSize'>;
 
 /** Shared by `getTargetFrame` and `getTargetPayload` — the bitmap lookup and frame maths neither needs the other to duplicate. */
 function resolveTargetFrame(
@@ -72,7 +72,7 @@ function resolveTargetFrame(
  */
 export function getTargetFrame(
   nodeId: string,
-  deps: FrameDeps = productionSmartSelectPayloadDeps,
+  deps: FrameDeps = productionSelectPayloadDeps,
 ): BufferFrame | undefined {
   return resolveTargetFrame(nodeId, deps)?.frame;
 }
@@ -87,7 +87,7 @@ export function getTargetFrame(
  */
 export function getTargetPayload(
   nodeId: string,
-  deps: SmartSelectPayloadDeps = productionSmartSelectPayloadDeps,
+  deps: SelectPayloadDeps = productionSelectPayloadDeps,
 ): TargetPayload | undefined {
   const resolved = resolveTargetFrame(nodeId, deps);
   if (!resolved) return undefined;

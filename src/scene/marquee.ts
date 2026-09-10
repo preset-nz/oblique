@@ -34,14 +34,38 @@ export type MarqueeShape =
   | { kind: 'lasso'; points: Point[]; closed: boolean }
   /**
    * A model/algorithm-traced result (Epic 17: segment-to-vector.md's
-   * `select-smart` tool, and 2b's colour-range select reusing the same
-   * plumbing) — closed contours in document space, outer contours only
-   * (holes dropped server-side per the epic decision). One `MarqueeShape`
-   * variant covers both tool sources; `applyMarqueeAsVectorMask` in
-   * `store.ts` picks the commit label from context it has that this shape
-   * alone doesn't carry.
+   * `select-smart` tool, and 2b's colour-range-select.md's `select-colour`
+   * reusing the same plumbing) — closed contours in document space.
+   * `select-smart` drops holes server-side (v1); `select-colour` keeps them
+   * (`trace_mask(..., keep_holes=True)`) — a wand on a background needs to
+   * select around the object it's touching, not through it.
+   *
+   * `label` is the commit label each tool wants on the hidden selection
+   * node it produces (`store.ts`'s `applyMarqueeAsVectorMask` reads it
+   * directly rather than switching on `marquee.kind`, which can't tell the
+   * two tools' polygons apart) — optional so every OTHER `MarqueeShape`
+   * variant's plain `Selection (${kind})` label stays untouched, and so a
+   * `polygons` marquee built by a test/caller that doesn't care still
+   * commits under `applyMarqueeAsVectorMask`'s own default.
    */
-  | { kind: 'polygons'; polygons: Point[][] };
+  | { kind: 'polygons'; polygons: Point[][]; label?: string };
+
+/**
+ * `fillRule` a `polygons` marquee's contours need to rasterise correctly
+ * (`store.ts`'s `applyMarqueeAsVectorMask`, and any other caller turning a
+ * marquee into a `VectorNode`): `trace.py` is deliberately winding-agnostic
+ * ("direction-agnostic — no case-table winding to get wrong", `ml/trace.py`)
+ * — a hole loop can wind the SAME direction as its outer contour, so
+ * `nonzero` would fill it in rather than cut it out. `evenodd` doesn't care
+ * about winding at all, so it's the only fill rule that reliably honours
+ * holes traced this way. Every other marquee kind draws a single simple
+ * loop (rect/ellipse/lasso can't self-intersect by construction), where
+ * `nonzero` and `evenodd` agree — kept as `nonzero` there for continuity
+ * with pre-Epic-17 behaviour, not because it matters.
+ */
+export function fillRuleForMarquee(marquee: MarqueeShape): 'nonzero' | 'evenodd' {
+  return marquee.kind === 'polygons' ? 'evenodd' : 'nonzero';
+}
 
 /**
  * True when the active marquee is a finished shape a mask can rasterise

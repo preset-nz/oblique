@@ -2,8 +2,8 @@ import type { SegmentOptions, SegmentResult } from '@/ai/adapter';
 import { sidecarSegmentDriver } from '@/ai/sidecarSegment';
 import type { MarqueeShape } from '@/scene/marquee';
 import { useMarqueeStateStore } from '@/scene/marquee';
-import { bufferPolygonsToDoc, docBoxToBufferBox, docPointsToBuffer } from './coords';
-import { getTargetPayload, type TargetPayload } from './payload';
+import { bufferPolygonsToDoc, docBoxToBufferBox, docPointsToBuffer } from '../selectShared/coords';
+import { getTargetPayload, type TargetPayload } from '../selectShared/payload';
 import { hasPrompt, useSmartSelectStore } from './state';
 
 const DEBOUNCE_MS = 150;
@@ -165,7 +165,15 @@ export class SmartSelectController {
       useSmartSelectStore.getState().setStatus('idle');
       const docPolygons = bufferPolygonsToDoc(result.polygons, payload.frame);
       if (docPolygons.length > 0) {
-        this.deps.setMarquee({ kind: 'polygons', polygons: docPolygons });
+        // `label` (colour-range-select.md's `store.ts` change): stamps this
+        // tool's own commit label onto the marquee it writes, since
+        // `applyMarqueeAsVectorMask` can no longer assume every `polygons`
+        // marquee came from `select-smart`.
+        this.deps.setMarquee({
+          kind: 'polygons',
+          polygons: docPolygons,
+          label: 'Selection (segment)',
+        });
       } else {
         // Only arm the suppression when this call will actually cause a
         // non-null -> null transition (the common "no result yet" case

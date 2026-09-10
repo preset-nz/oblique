@@ -18,6 +18,11 @@ import { create } from 'zustand';
  * a drag box prompt the sidecar's MobileSAM segmenter; its in-progress
  * prompt state lives in `canvas/smartSelect/state.ts`, same separation as
  * marquees/pen.
+ *
+ * `select-colour` (Epic 17 story 2b, colour-range-select.md): the magic
+ * wand — click/Alt-click/Shift-click seeds the sidecar's pure-NumPy
+ * `select_colour`; its in-progress prompt state lives in
+ * `canvas/colourSelect/state.ts`, same separation again.
  */
 export type Tool =
   | 'pan'
@@ -26,6 +31,7 @@ export type Tool =
   | 'select-ellipse'
   | 'select-lasso'
   | 'select-smart'
+  | 'select-colour'
   | 'pen';
 
 interface ToolStateStore {

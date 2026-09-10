@@ -2,9 +2,13 @@ import { applyMatrix, docToLocalMatrix, localToDocMatrix } from '@/scene/maskRas
 import { IDENTITY_TRANSFORM_2D, type Point2D, type Transform2D } from '@/scene/types';
 
 /**
- * Document <-> cooked-buffer pixel-space mapping for the `select-smart` tool
- * (segment-to-vector.md's "the client maps document <-> buffer through the
- * node's transform2d and the cook level's factor" — same maths
+ * Document <-> cooked-buffer pixel-space mapping shared by every sidecar
+ * selection tool (`select-smart`, `select-colour` — Epic 17). Moved out of
+ * `smartSelect/` into this sibling `selectShared/` when 2b's colour-range
+ * select landed (colour-range-select.md) so `colourSelect/` importing it
+ * doesn't reach into `smartSelect/`'s own folder for generic plumbing.
+ * Per segment-to-vector.md's "the client maps document <-> buffer through
+ * the node's transform2d and the cook level's factor" — same maths
  * `maskRasterize.ts` and `cook.ts` already use, reused rather than
  * reimplemented per the story's instruction: `docToLocalMatrix` maps
  * document space into the target node's own LOCAL pixel space (its
