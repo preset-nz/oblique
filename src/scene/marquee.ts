@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { MaskShape, VectorPath } from './types';
+import type { VectorPath } from './types';
 
 interface Point {
   x: number;
@@ -47,27 +47,12 @@ export function isMaskableMarquee(marquee: MarqueeShape | null): boolean {
   return marquee.rect.w >= 1 && marquee.rect.h >= 1;
 }
 
-/**
- * The marquee's geometry as a persistable `MaskShape` (drops the lasso's
- * transient `closed` flag).
- *
- * @deprecated legacy (marquees-as-vectors.md, 2026-09-10) — feeds
- * `setModifierMask`/`MaskDef`, which is loaded but never created since this
- * story. `marqueeToVectorPaths` is the live replacement.
- */
-export function marqueeToMaskShape(marquee: MarqueeShape): MaskShape {
-  if (marquee.kind === 'lasso') return { kind: 'lasso', points: marquee.points };
-  return { kind: marquee.kind, rect: marquee.rect };
-}
-
 /** Cubic-bezier handle-length constant for a quarter-circle/ellipse arc approximation. */
 export const KAPPA = 0.5522847498;
 
 /**
  * The marquee's geometry as `VectorPath[]` (marquees-as-vectors.md) — one
- * closed path, document space in, document space out. The live replacement
- * for `marqueeToMaskShape`: feeds `addVectorNode` instead of a baked
- * `MaskDef`.
+ * closed path, document space in, document space out. Feeds `addVectorNode`.
  *
  * - rect: 4 corner anchors, clockwise from top-left, no handles.
  * - ellipse: 4 anchors at the axis midpoints (top/right/bottom/left) with

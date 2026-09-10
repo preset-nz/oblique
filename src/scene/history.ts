@@ -144,17 +144,15 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
  * `restoreScene` leaves the node clean while a stale cached bitmap (from
  * before/after the edit it's undoing) keeps painting.
  *
- * A mask reference resolves through BOTH tables (cook.ts's
- * `makeRasterizeFor` rule): a baked `MaskDef`, or a `VectorMaskRef` plus
- * the referenced vector node's live paths/fillRule — the referenced
- * GEOMETRY is part of the consumer's cook inputs (vector-modifier-masks.md
- * cross-node dirty), so an undo that only changes the referenced vector
- * node's paths must dirty the consumer too, not just the vector node.
+ * A mask reference resolves through `Scene.maskRefs` (cook.ts's
+ * `makeRasterizeFor` rule): a `VectorMaskRef` plus the referenced vector
+ * node's live paths/fillRule — the referenced GEOMETRY is part of the
+ * consumer's cook inputs (vector-modifier-masks.md cross-node dirty), so an
+ * undo that only changes the referenced vector node's paths must dirty the
+ * consumer too, not just the vector node.
  */
 function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
   if (!maskId) return null;
-  const baked = scene.masks?.[maskId];
-  if (baked) return baked;
   const ref = scene.maskRefs?.[maskId];
   if (!ref) return null;
   const target = scene.nodes.find((n) => n.id === ref.nodeId);

@@ -114,29 +114,6 @@ describe('serialise/parse round trip', () => {
     expect(parseProject(serialiseProject(scene))).toEqual(scene);
   });
 
-  it('scene with modifier masks round-trips verbatim (selection-to-mask.md)', () => {
-    const scene = sampleScene();
-    scene.nodes[0].modifiers[0].maskId = 'mask-1';
-    scene.masks = {
-      'mask-1': {
-        id: 'mask-1',
-        shape: {
-          kind: 'lasso',
-          points: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 5, y: 8 },
-          ],
-        },
-        appliedTransform2d: { x: 12, y: -4, scaleX: 2, scaleY: 0.5, rotation: Math.PI / 6 },
-        featherPx: 4,
-        expand: -2,
-        invert: true,
-      },
-    };
-    expect(parseProject(serialiseProject(scene))).toEqual(scene);
-  });
-
   it('maskless scene serialises with no masks key — pre-mask files stay verbatim', () => {
     expect(serialiseProject(sampleScene())).not.toContain('"masks"');
   });
@@ -200,10 +177,10 @@ describe('serialise/parse round trip', () => {
     expect(parseProject(serialiseProject(scene))).toEqual(scene);
   });
 
-  it('a pre-Epic-06 (.oblique from Epic 05, baked masks only) scene has no maskRefs key — loads verbatim', () => {
+  it('a project file with a legacy `masks` key loads, warns once, and drops it (retire-baked-masks.md)', () => {
     const scene = sampleScene();
-    scene.nodes[0].modifiers[0].maskId = 'mask-1';
-    scene.masks = {
+    const doc = JSON.parse(serialiseProject(scene));
+    doc.scene.masks = {
       'mask-1': {
         id: 'mask-1',
         shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
@@ -213,9 +190,14 @@ describe('serialise/parse round trip', () => {
         invert: false,
       },
     };
-    const text = serialiseProject(scene);
-    expect(text).not.toContain('"maskRefs"');
-    expect(parseProject(text)).toEqual(scene);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const loaded = parseProject(JSON.stringify(doc));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(loaded).not.toHaveProperty('masks');
+    expect(loaded).toEqual(scene);
+    warnSpy.mockRestore();
   });
 
   it('scene with a background colour round-trips verbatim (background-colour.md)', () => {

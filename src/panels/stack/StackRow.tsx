@@ -58,15 +58,6 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   // cached invariant and loops forever.
   const sceneNodes = useSceneStore((s) => s.scene.nodes);
   const vectorNodes = sceneNodes.filter(isVectorNode);
-  // Which kind of mask (if any) this modifier's maskId resolves to
-  // (vector-modifier-masks.md's resolution rule: masks table first, then
-  // maskRefs) — drives the Blend indicator's tooltip wording.
-  const maskKind = useSceneStore((s) => {
-    if (!modifier.maskId) return undefined;
-    if (s.scene.masks?.[modifier.maskId]) return 'selection';
-    if (s.scene.maskRefs?.[modifier.maskId]) return 'vector';
-    return undefined;
-  });
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const maskParams = useMarqueeStateStore((s) => s.params);
   const setMaskParams = useMarqueeStateStore((s) => s.setParams);
@@ -102,10 +93,10 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
 
   /**
    * "Mask from selection" (marquees-as-vectors.md): converts the active
-   * marquee into a hidden `VectorNode` + a live `VectorMaskRef`, not a baked
-   * `MaskDef` — the mask is document-pinned and editable forever with the
-   * pen tool (the story's whole point). One undo step: node creation +
-   * attach + replace-cleanup all land inside this transaction.
+   * marquee into a hidden `VectorNode` + a live `VectorMaskRef` — the mask
+   * is document-pinned and editable forever with the pen tool (the story's
+   * whole point). One undo step: node creation + attach + replace-cleanup
+   * all land inside this transaction.
    */
   function maskFromSelection() {
     if (locked) return;
@@ -218,9 +209,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
                 <Blend size={12} className="shrink-0 text-neutral-500" aria-label="Masked" />
               </TooltipTrigger>
               <TooltipContent>
-                {maskKind === 'vector'
-                  ? 'Masked — live vector reference; editing the shape recooks this modifier'
-                  : 'Masked — this modifier affects only its region'}
+                Masked — live vector reference; editing the shape recooks this modifier
               </TooltipContent>
             </Tooltip>
           )}

@@ -56,8 +56,13 @@ export function serialiseProject(scene: Scene): string {
   );
 }
 
-/** Parse + validate project JSON. Throws with a user-showable message; never half-loads. */
-export function parseProject(text: string): Scene {
+/**
+ * Parse + validate project JSON. Throws with a user-showable message; never
+ * half-loads. `sourcePath` is optional and used only to name the file in the
+ * legacy-`masks` warning below (callers without a path, e.g. tests, just get
+ * an unnamed warning).
+ */
+export function parseProject(text: string, sourcePath?: string): Scene {
   let doc: unknown;
   try {
     doc = JSON.parse(text);
@@ -81,7 +86,18 @@ export function parseProject(text: string): Scene {
   if (typeof record.scene !== 'object' || record.scene === null) {
     throw new Error('project file has no scene');
   }
-  return record.scene as Scene;
+  const scene = record.scene as Record<string, unknown> & Scene;
+  // Baked masks (MaskDef via Scene.masks) are retired (retire-baked-masks.md,
+  // 2026-09-10) — no migration, just warn and drop so the Scene stays typed.
+  if ('masks' in scene) {
+    const masks = scene.masks as Record<string, unknown> | undefined;
+    const count = masks ? Object.keys(masks).length : 0;
+    console.warn(
+      `[project] ${sourcePath ?? 'project file'}: dropping ${count} legacy baked mask(s) (masks are retired)`,
+    );
+    delete scene.masks;
+  }
+  return scene;
 }
 
 /** A single entry from a directory listing — the subset baked-dir sweeping needs. */
@@ -253,7 +269,7 @@ export async function loadProject(
 ): Promise<void> {
   let scene: Scene;
   try {
-    scene = parseProject(await deps.readTextFile(path));
+    scene = parseProject(await deps.readTextFile(path), path);
   } catch (err) {
     toast.error(`Couldn't open ${filenameOf(path)}`, {
       description: err instanceof Error ? err.message : String(err),

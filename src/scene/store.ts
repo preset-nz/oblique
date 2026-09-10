@@ -3,7 +3,6 @@ import * as cache from './cache';
 import { type MarqueeShape, marqueeToVectorPaths } from './marquee';
 import type {
   BlendMode,
-  MaskDef,
   Modifier,
   NodeOutput,
   PixelNode,
@@ -157,27 +156,11 @@ interface SceneState {
   setModifierEnabled: (nodeId: string, modId: string, enabled: boolean) => void;
 
   /**
-   * Attach (or replace) a modifier's mask (selection-to-mask.md). Reuses the
-   * modifier's existing maskId when present — replacing a mask is the same
-   * dirty/recook path as editing it. Returns the mask id.
-   *
-   * @deprecated legacy (marquees-as-vectors.md, 2026-09-10) — no UI path
-   * calls this any more (`StackRow`'s "Mask from selection" now goes through
-   * `applyMarqueeAsVectorMask`). Kept only so a loaded `.oblique` file's
-   * existing `MaskDef`s stay editable/removable through the same machinery
-   * that reads them.
-   */
-  setModifierMask: (nodeId: string, modId: string, def: Omit<MaskDef, 'id'>) => string;
-
-  /**
    * Attach (or replace) a modifier's *live* vector mask (vector-modifier-
    * masks.md): `maskId` resolves to a new/reused `Scene.maskRefs` entry
    * pointing at `vectorNodeId`, carrying its own feather/expand/invert.
-   * Reuses the modifier's existing maskId when present (same undo-friendly
-   * posture as `setModifierMask`) and clears any stale baked-mask entry
-   * under that id — switching a modifier from "mask from selection" to
-   * "mask from vector node" must not leave an orphaned `MaskDef` shadowing
-   * the id. Returns the mask id.
+   * Reuses the modifier's existing maskId when present — replacing a mask
+   * is the same dirty/recook path as editing it. Returns the mask id.
    */
   setModifierVectorMask: (
     nodeId: string,
@@ -185,7 +168,7 @@ interface SceneState {
     vectorNodeId: string,
     ref: Omit<VectorMaskRef, 'id' | 'nodeId'>,
   ) => string;
-  /** Detach and delete a modifier's mask, baked or vector-referenced. */
+  /** Detach and delete a modifier's vector mask. */
   removeModifierMask: (nodeId: string, modId: string) => void;
 
   /**
@@ -193,8 +176,8 @@ interface SceneState {
    * a hidden `VectorNode` (`visible: false`, `output: 'image'`, labelled
    * `Selection (rect|ellipse|lasso)`) and attaches it to the modifier as a
    * live `VectorMaskRef` — composing `addVectorNode` + `setModifierVectorMask`
-   * plus the replace-cleanup rule below. No `MaskDef` is created. Same
-   * locked-consumer guard as `setModifierVectorMask` (returns `undefined`,
+   * plus the replace-cleanup rule below. Same locked-consumer guard as
+   * `setModifierVectorMask` (returns `undefined`,
    * nothing mutated, on a locked target).
    *
    * Replace rule: if the modifier already carried a selection-derived vector
@@ -266,45 +249,35 @@ function dirtyMaskRefConsumers(
 }
 
 /**
- * Reconciles `Scene.masks` (baked, 1:1 with their modifier), `Scene.maskRefs`
- * (live vector references, many:1 with a VectorNode allowed), and every
- * node's modifiers' `maskId` in one pass, after any mutation that can orphan
- * one side of that link (deleting a node, a modifier, or — the story's
- * deletion-policy call — a VectorNode a maskRef still points at):
+ * Reconciles `Scene.maskRefs` (live vector references, many:1 with a
+ * VectorNode allowed) and every node's modifiers' `maskId` in one pass,
+ * after any mutation that can orphan one side of that link (deleting a
+ * node, a modifier, or a VectorNode a maskRef still points at):
  *
- * 1. Drop `masks`/`maskRefs` entries no modifier references any more
- *    (unchanged behaviour for `masks`; new for `maskRefs`).
- * 2. ALSO drop `maskRefs` entries whose `nodeId` no longer exists — the
- *    deletion-policy decision: pruning (like `pruneMasks` already did for
- *    baked masks) rather than "keep + warn", because a dangling reference to
- *    a vector node that no longer exists is materially indistinguishable
+ * 1. Drop `maskRefs` entries no modifier references any more.
+ * 2. ALSO drop `maskRefs` entries whose `nodeId` no longer exists —
+ *    pruning rather than "keep + warn", because a dangling reference to a
+ *    vector node that no longer exists is materially indistinguishable
  *    from no mask at all (the sidecar receives nothing to fill either way),
  *    so silently keeping a broken maskId around is dishonest, not gentle.
- * 3. Clear any modifier's `maskId` that no longer resolves into either
+ * 3. Clear any modifier's `maskId` that no longer resolves into the
  *    surviving table (this is what actually removes a stale maskId string
  *    from a modifier whose vector-node target was deleted — step 2 alone
  *    only prunes the `maskRefs` table, not the modifier that pointed at it).
  *
- * Returns the same `masks`/`maskRefs` object references when nothing was
- * pruned so scene identity is preserved (existing behaviour for `masks`).
+ * Returns the same `maskRefs` object reference when nothing was pruned so
+ * scene identity is preserved.
  */
 function pruneMaskState(
   nodes: SceneNode[],
-  masks: Scene['masks'],
   maskRefs: Scene['maskRefs'],
-): { nodes: SceneNode[]; masks: Scene['masks']; maskRefs: Scene['maskRefs'] } {
+): { nodes: SceneNode[]; maskRefs: Scene['maskRefs'] } {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const referenced = new Set<string>();
   for (const node of nodes) {
     for (const modifier of node.modifiers) {
       if (modifier.maskId) referenced.add(modifier.maskId);
     }
-  }
-
-  let prunedMasks = masks;
-  if (masks) {
-    const kept = Object.entries(masks).filter(([id]) => referenced.has(id));
-    if (kept.length !== Object.keys(masks).length) prunedMasks = Object.fromEntries(kept);
   }
 
   let prunedRefs = maskRefs;
@@ -318,7 +291,7 @@ function pruneMaskState(
   const clearedNodes = nodes.map((n) => {
     let changed = false;
     const modifiers = n.modifiers.map((m) => {
-      if (!m.maskId || prunedMasks?.[m.maskId] || prunedRefs?.[m.maskId]) return m;
+      if (!m.maskId || prunedRefs?.[m.maskId]) return m;
       changed = true;
       const { maskId: _dropped, ...rest } = m;
       return rest;
@@ -326,7 +299,7 @@ function pruneMaskState(
     return changed ? { ...n, modifiers } : n;
   });
 
-  return { nodes: clearedNodes, masks: prunedMasks, maskRefs: prunedRefs };
+  return { nodes: clearedNodes, maskRefs: prunedRefs };
 }
 
 export const useSceneStore = create<SceneState>((set, get) => ({
@@ -456,9 +429,9 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   removeNode: (id) => {
     set((s) => {
       const nodes = s.scene.nodes.filter((n) => n.id !== id);
-      const pruned = pruneMaskState(nodes, s.scene.masks, s.scene.maskRefs);
+      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
       return {
-        scene: { ...s.scene, nodes: pruned.nodes, masks: pruned.masks, maskRefs: pruned.maskRefs },
+        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
       };
     });
   },
@@ -557,9 +530,9 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         modifiers: n.modifiers.filter((m) => m.id !== modId),
         dirty: dirtyBoth(),
       }));
-      const pruned = pruneMaskState(nodes, s.scene.masks, s.scene.maskRefs);
+      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
       return {
-        scene: { ...s.scene, nodes: pruned.nodes, masks: pruned.masks, maskRefs: pruned.maskRefs },
+        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
       };
     });
   },
@@ -620,7 +593,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     });
   },
 
-  setModifierMask: (nodeId, modId, def) => {
+  setModifierVectorMask: (nodeId, modId, vectorNodeId, ref) => {
     // Reuse the existing maskId if the modifier already has one — a
     // replace IS an edit, and keeping the id stable means undo restores
     // land on the same entry. Dirty per rule 4: masking changes the pixel
@@ -630,53 +603,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       ?.modifiers.find((m) => m.id === modId)?.maskId;
     const maskId = existing ?? crypto.randomUUID();
     set((s) => {
-      // Guarded (lock-state-machine.md) — mask apply is a cook input. The id
-      // is still returned below (same no-op-on-bad-target posture as an
-      // unresolved nodeId/modId already has).
-      if (isLocked(s.scene.nodes, nodeId)) return s;
-      // Clear a stale maskRefs entry under this id — switching a modifier
-      // from vector-referenced to baked must not leave the old vector
-      // reference shadowed-but-alive under the same id. No-op (preserves
-      // `undefined` identity) when there's no maskRefs table yet.
-      const maskRefs = s.scene.maskRefs?.[maskId] ? { ...s.scene.maskRefs } : s.scene.maskRefs;
-      if (maskRefs) delete maskRefs[maskId];
-      return {
-        scene: {
-          ...s.scene,
-          masks: { ...s.scene.masks, [maskId]: { ...def, id: maskId } },
-          maskRefs,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-            ...n,
-            modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, maskId } : m)),
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-    return maskId;
-  },
-
-  setModifierVectorMask: (nodeId, modId, vectorNodeId, ref) => {
-    // Same reuse-the-existing-id posture as setModifierMask, mirrored.
-    const existing = get()
-      .scene.nodes.find((n) => n.id === nodeId)
-      ?.modifiers.find((m) => m.id === modId)?.maskId;
-    const maskId = existing ?? crypto.randomUUID();
-    set((s) => {
       // Guarded on the CONSUMER's lock state (lock-state-machine.md) — the
       // referenced vector node's own lock state is irrelevant here, mirrors
       // every other guard being keyed on the mutated node's target id.
       if (isLocked(s.scene.nodes, nodeId)) return s;
-      // Clear a stale baked-mask entry under this id — switching a modifier
-      // from baked to vector-referenced must not leave the old MaskDef
-      // shadowed-but-alive under the same id. No-op (preserves `undefined`
-      // identity) when there's no masks table yet.
-      const masks = s.scene.masks?.[maskId] ? { ...s.scene.masks } : s.scene.masks;
-      if (masks) delete masks[maskId];
       return {
         scene: {
           ...s.scene,
-          masks,
           maskRefs: {
             ...s.scene.maskRefs,
             [maskId]: { id: maskId, nodeId: vectorNodeId, ...ref },
@@ -704,9 +637,9 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         }),
         dirty: dirtyBoth(),
       }));
-      const pruned = pruneMaskState(nodes, s.scene.masks, s.scene.maskRefs);
+      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
       return {
-        scene: { ...s.scene, nodes: pruned.nodes, masks: pruned.masks, maskRefs: pruned.maskRefs },
+        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
       };
     });
   },

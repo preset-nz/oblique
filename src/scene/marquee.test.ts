@@ -6,7 +6,6 @@ import {
   DEFAULT_MARQUEE_PARAMS,
   isMaskableMarquee,
   KAPPA,
-  marqueeToMaskShape,
   marqueeToVectorPaths,
   useMarqueeStateStore,
 } from './marquee';
@@ -83,19 +82,6 @@ describe('isMaskableMarquee', () => {
   });
 });
 
-describe('marqueeToMaskShape', () => {
-  it('passes rect/ellipse geometry through and drops the lasso closed flag', () => {
-    expect(marqueeToMaskShape({ kind: 'ellipse', rect: { x: 1, y: 2, w: 3, h: 4 } })).toEqual({
-      kind: 'ellipse',
-      rect: { x: 1, y: 2, w: 3, h: 4 },
-    });
-    expect(marqueeToMaskShape({ kind: 'lasso', points: [{ x: 1, y: 1 }], closed: true })).toEqual({
-      kind: 'lasso',
-      points: [{ x: 1, y: 1 }],
-    });
-  });
-});
-
 describe('marqueeToVectorPaths', () => {
   it('rect: 4 corner anchors clockwise from top-left, no handles, closed', () => {
     const paths = marqueeToVectorPaths({ kind: 'rect', rect: { x: 10, y: 20, w: 30, h: 40 } });
@@ -169,9 +155,9 @@ describe('marqueeToVectorPaths', () => {
   /**
    * Acceptance's "rasterised alpha differs < 2% of pixels" can't run
    * headlessly — this repo's vitest has no DOM/OffscreenCanvas (no jsdom
-   * dependency, no `environment` config), so neither `rasterizeMask` nor
-   * `rasterizeVectorMask` (both `OffscreenCanvas`-only, production-only per
-   * their doc comments) can execute here. Standing in with the analytic
+   * dependency, no `environment` config), so `rasterizeVectorMask`
+   * (`OffscreenCanvas`-only, production-only per its doc comment) can't
+   * execute here. Standing in with the analytic
    * claim the story itself makes: the 4-cubic approximation is within
    * 0.03% radial error of the true ellipse. If that holds, a Canvas 2D fill
    * of the two shapes cannot meaningfully differ in rasterised pixels.

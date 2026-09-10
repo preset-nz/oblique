@@ -16,70 +16,23 @@ export interface Modifier {
   type: string; // op name from sidecar list_ops
   enabled: boolean;
   params: Record<string, number | string | boolean>;
-  maskId?: string; // references Scene.masks (selection-to-mask.md); per-MODIFIER scope, deliberately not per-node
-}
-
-/**
- * The geometry a mask rasterises from (selection-to-mask.md) — the marquee's
- * shape as drawn, document-space coordinates. Stored as a path, never a
- * baked bitmap: the bitmap is derived at cook time (maskRasterize.ts) and
- * rebuilt like any cache. A lasso is always closed here (an open lasso
- * can't become a mask).
- */
-export type MaskShape =
-  | { kind: 'rect'; rect: { x: number; y: number; w: number; h: number } }
-  | { kind: 'ellipse'; rect: { x: number; y: number; w: number; h: number } }
-  | { kind: 'lasso'; points: { x: number; y: number }[] };
-
-/**
- * One modifier mask (selection-to-mask.md). `shape` stays in document space
- * exactly as the marquee was drawn; `appliedTransform2d` snapshots the
- * node's transform at apply time so rasterisation can map document → node-
- * local pixels once, forever. The snapshot — not the live transform — is
- * what keeps the epic acceptance true: moving a masked node later never
- * re-rasterises or recooks (the mask rides along, glued to the node pixels
- * it was applied to). `featherPx`/`expand` are document-space px (spatial
- * params — the rasteriser scales them by the cook resolution factor, same
- * convention as gaussian_blur.radius).
- */
-/**
- * @deprecated legacy — loaded, never created since 2026-09-10
- * (marquees-as-vectors.md). Selections now convert to a hidden `VectorNode`
- * + `VectorMaskRef` (`Modifier.maskId` resolves against `Scene.maskRefs`).
- * `MaskDef`/`Scene.masks`/`rasterizeMask`/`setModifierMask` stay so old
- * `.oblique` files keep loading and rendering byte-for-byte — retiring them
- * is a later story once no dogfooded project still carries one.
- */
-export interface MaskDef {
-  id: string;
-  shape: MaskShape;
-  appliedTransform2d: Transform2D;
-  featherPx: number;
-  expand: number;
-  invert: boolean;
+  maskId?: string; // resolves against Scene.maskRefs (vector-modifier-masks.md); per-MODIFIER scope, deliberately not per-node
 }
 
 /**
  * A modifier mask that stays *live* against a VectorNode's current paths
- * (vector-modifier-masks.md) — the epic's "editable forever" half, sitting
- * alongside `MaskDef`'s apply-time bake. `Modifier.maskId` resolves against
- * `Scene.masks` first (a baked shape), then `Scene.maskRefs` (this type);
- * the two id spaces are otherwise identical strings, so a modifier never
- * needs to know which kind it has.
+ * (vector-modifier-masks.md) — the epic's "editable forever" half.
  *
  * `featherPx`/`expand`/`invert` live HERE, not on the `VectorNode` — the
  * story's explicit call: the reference decides how soft/expanded/inverted
  * the mask reads, the node just supplies geometry. That is also what makes
  * reuse free: many `VectorMaskRef` entries (one per modifier that wants its
- * own feather/invert) can point at the same `nodeId`, unlike `MaskDef`,
- * which stays 1:1 with its modifier (a baked shape has nowhere else to
- * live).
+ * own feather/invert) can point at the same `nodeId`.
  *
  * Vector masks are DOCUMENT-PINNED (Georg's call, 2026-07-06 dogfood): the
- * mask reads where the shape sits in the document, always — unlike
- * `MaskDef.appliedTransform2d`'s apply-time snapshot, which glues a baked
- * mask to the consumer's pixels. The rasteriser maps document space into
- * the consumer's local buffer through the consumer's CURRENT transform2d
+ * mask reads where the shape sits in the document, always. The rasteriser
+ * maps document space into the consumer's local buffer through the
+ * consumer's CURRENT transform2d
  * at cook time (cook.ts passes it), so moving the consumer re-rasterises
  * the mask in its new frame — a deliberate, narrow exception to the
  * "transform2d never recooks" rule (dirty rule 4), scoped to nodes whose
@@ -226,18 +179,11 @@ export interface Scene {
   resolution: Resolution; // current global cook target ('working' default)
   documentSize: [number, number];
   /**
-   * Modifier masks by id (selection-to-mask.md), referenced from
-   * `Modifier.maskId`. Optional so pre-mask `.oblique` files load verbatim —
-   * treat absence as empty. 1:1 with modifiers today (see the story's open
-   * question); entries are pruned when their modifier/node goes.
-   */
-  masks?: Record<string, MaskDef>;
-  /**
    * Live vector-referenced modifier masks (vector-modifier-masks.md),
-   * `Modifier.maskId`'s second resolution target after `Scene.masks`.
-   * Optional so pre-Epic-06 `.oblique` files load verbatim — treat absence
-   * as empty. Entries are pruned when their modifier, node, or referenced
-   * vector node goes (see `store.ts`'s `pruneMaskState`).
+   * what `Modifier.maskId` resolves against. Optional so pre-Epic-06
+   * `.oblique` files load verbatim — treat absence as empty. Entries are
+   * pruned when their modifier, node, or referenced vector node goes (see
+   * `store.ts`'s `pruneMaskState`).
    */
   maskRefs?: Record<string, VectorMaskRef>;
   /**

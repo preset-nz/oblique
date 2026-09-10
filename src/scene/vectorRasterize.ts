@@ -13,8 +13,8 @@ import type { AnchorPoint, Point2D, VectorPath } from './types';
  * deterministic by browser contract, so byte-identical output for identical
  * commands isn't this module's to prove). `rasterizeVector`, the
  * OffscreenCanvas/Path2D composition, is production-only and injected
- * through `CookDeps.rasterizeVector` (cook.ts) exactly like
- * `CookDeps.rasterizeMask` — cook tests stub it, never need a canvas.
+ * through `CookDeps.rasterizeVector` (cook.ts) — cook tests stub it, never
+ * need a canvas.
  */
 
 /** One segment of a flattened path, in the order `Path2D` calls happen. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sceneChangedIgnoringDirty } from './sceneDiff';
-import type { MaskDef, Scene } from './types';
+import type { Scene, VectorMaskRef } from './types';
 
 function scene(overrides: Partial<Scene> = {}): Scene {
   return {
@@ -14,31 +14,30 @@ function scene(overrides: Partial<Scene> = {}): Scene {
   };
 }
 
-function mask(featherPx: number): MaskDef {
+function maskRef(featherPx: number): VectorMaskRef {
   return {
-    id: 'mask-1',
-    shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
-    appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+    id: 'ref-1',
+    nodeId: 'v1',
     featherPx,
     expand: 0,
     invert: false,
   };
 }
 
-describe('sceneChangedIgnoringDirty — masks', () => {
-  it('an edited mask definition is a real edit', () => {
-    const a = scene({ masks: { 'mask-1': mask(0) } });
-    const b = scene({ masks: { 'mask-1': mask(12) } });
+describe('sceneChangedIgnoringDirty — maskRefs', () => {
+  it('an edited mask ref definition is a real edit', () => {
+    const a = scene({ maskRefs: { 'ref-1': maskRef(0) } });
+    const b = scene({ maskRefs: { 'ref-1': maskRef(12) } });
     expect(sceneChangedIgnoringDirty(a, b)).toBe(true);
   });
 
-  it('absent and empty mask tables are equivalent (pre-mask files)', () => {
-    expect(sceneChangedIgnoringDirty(scene(), scene({ masks: {} }))).toBe(false);
+  it('absent and empty maskRefs tables are equivalent (pre-mask files)', () => {
+    expect(sceneChangedIgnoringDirty(scene(), scene({ maskRefs: {} }))).toBe(false);
   });
 
-  it('identical mask tables register no change', () => {
-    const a = scene({ masks: { 'mask-1': mask(5) } });
-    const b = scene({ masks: { 'mask-1': mask(5) } });
+  it('identical maskRefs tables register no change', () => {
+    const a = scene({ maskRefs: { 'ref-1': maskRef(5) } });
+    const b = scene({ maskRefs: { 'ref-1': maskRef(5) } });
     expect(sceneChangedIgnoringDirty(a, b)).toBe(false);
   });
 });

@@ -382,24 +382,6 @@ describe('mutation guards on a locked node (lock-state-machine.md)', () => {
     expect(useSceneStore.getState().scene.nodes[0].modifiers[0].enabled).toBe(true);
   });
 
-  it('setModifierMask no-ops', () => {
-    useSceneStore.setState((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: [pixelNode('a', { state: 'locked', modifiers: [modifier('m1')] })],
-      },
-    }));
-    useSceneStore.getState().setModifierMask('a', 'm1', {
-      shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      featherPx: 0,
-      expand: 0,
-      invert: false,
-    });
-    expect(useSceneStore.getState().scene.masks).toBeUndefined();
-    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].maskId).toBeUndefined();
-  });
-
   it('setModifierVectorMask no-ops', () => {
     useSceneStore.setState((s) => ({
       scene: {
@@ -415,15 +397,14 @@ describe('mutation guards on a locked node (lock-state-machine.md)', () => {
 
   it('removeModifierMask no-ops', () => {
     useSceneStore.setState((s) => ({
-      scene: { ...s.scene, nodes: [pixelNode('a', { modifiers: [modifier('m1')] })] },
+      scene: {
+        ...s.scene,
+        nodes: [vectorNode('v'), pixelNode('a', { modifiers: [modifier('m1')] })],
+      },
     }));
-    const maskId = useSceneStore.getState().setModifierMask('a', 'm1', {
-      shape: { kind: 'rect', rect: { x: 0, y: 0, w: 10, h: 10 } },
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      featherPx: 0,
-      expand: 0,
-      invert: false,
-    });
+    const maskId = useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v', { featherPx: 0, expand: 0, invert: false });
     useSceneStore.setState((s) => ({
       scene: {
         ...s.scene,
@@ -431,7 +412,7 @@ describe('mutation guards on a locked node (lock-state-machine.md)', () => {
       },
     }));
     useSceneStore.getState().removeModifierMask('a', 'm1');
-    expect(useSceneStore.getState().scene.nodes[0].modifiers[0].maskId).toBe(maskId);
+    expect(useSceneStore.getState().scene.nodes[1].modifiers[0].maskId).toBe(maskId);
   });
 
   it('compositing-only props (opacity/blendMode/visibility/label) and reorder stay writable', () => {
@@ -720,78 +701,6 @@ describe('setModifierEnabled', () => {
   });
 });
 
-describe('setModifierMask / removeModifierMask', () => {
-  const maskDef = {
-    shape: { kind: 'rect' as const, rect: { x: 10, y: 10, w: 40, h: 20 } },
-    appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-    featherPx: 6,
-    expand: 0,
-    invert: false,
-  };
-
-  function nodeWithModifier() {
-    useSceneStore.setState((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: [
-          pixelNode('n1', {
-            modifiers: [modifier('m1')],
-            dirty: { draft: false, working: false },
-          }),
-        ],
-      },
-    }));
-  }
-
-  it('stores the mask, points the modifier at it, and dirties both levels', () => {
-    nodeWithModifier();
-    const maskId = useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
-
-    const scene = useSceneStore.getState().scene;
-    expect(scene.masks?.[maskId]).toEqual({ ...maskDef, id: maskId });
-    expect(scene.nodes[0].modifiers[0].maskId).toBe(maskId);
-    expect(scene.nodes[0].dirty).toEqual({ draft: true, working: true });
-  });
-
-  it('replacing a mask reuses the same id (a replace IS an edit)', () => {
-    nodeWithModifier();
-    const first = useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
-    const second = useSceneStore
-      .getState()
-      .setModifierMask('n1', 'm1', { ...maskDef, featherPx: 20 });
-
-    expect(second).toBe(first);
-    const scene = useSceneStore.getState().scene;
-    expect(scene.masks?.[first]?.featherPx).toBe(20);
-    expect(Object.keys(scene.masks ?? {})).toHaveLength(1);
-  });
-
-  it('removeModifierMask drops the maskId and prunes the orphaned entry', () => {
-    nodeWithModifier();
-    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
-    useSceneStore.getState().removeModifierMask('n1', 'm1');
-
-    const scene = useSceneStore.getState().scene;
-    expect(scene.nodes[0].modifiers[0].maskId).toBeUndefined();
-    expect(scene.masks).toEqual({});
-    expect(scene.nodes[0].dirty).toEqual({ draft: true, working: true });
-  });
-
-  it('removing a masked modifier prunes its mask entry (1:1)', () => {
-    nodeWithModifier();
-    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
-    useSceneStore.getState().removeModifier('n1', 'm1');
-    expect(useSceneStore.getState().scene.masks).toEqual({});
-  });
-
-  it('removing a node prunes its modifiers’ mask entries', () => {
-    nodeWithModifier();
-    useSceneStore.getState().setModifierMask('n1', 'm1', maskDef);
-    useSceneStore.getState().removeNode('n1');
-    expect(useSceneStore.getState().scene.masks).toEqual({});
-  });
-});
-
 describe('setModifierVectorMask', () => {
   const ref = { featherPx: 4, expand: 0, invert: false };
 
@@ -816,8 +725,6 @@ describe('setModifierVectorMask', () => {
     expect(scene.maskRefs?.[maskId]).toEqual({ ...ref, id: maskId, nodeId: 'v1' });
     expect(scene.nodes[1].modifiers[0].maskId).toBe(maskId);
     expect(scene.nodes[1].dirty).toEqual({ draft: true, working: true });
-    // Baked masks table untouched.
-    expect(scene.masks).toBeUndefined();
   });
 
   it('two modifiers can reference the same vector node with independent feather/invert', () => {
@@ -848,23 +755,6 @@ describe('setModifierVectorMask', () => {
 
     expect(second).toBe(first);
     expect(useSceneStore.getState().scene.maskRefs?.[first]?.featherPx).toBe(20);
-  });
-
-  it('switching a modifier from baked to vector clears the stale masks entry under the same id', () => {
-    nodesWithVectorAndTwoConsumers();
-    const maskDef = {
-      shape: { kind: 'rect' as const, rect: { x: 0, y: 0, w: 10, h: 10 } },
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      featherPx: 0,
-      expand: 0,
-      invert: false,
-    };
-    const id = useSceneStore.getState().setModifierMask('a', 'm1', maskDef);
-    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', ref);
-
-    const scene = useSceneStore.getState().scene;
-    expect(scene.masks?.[id]).toBeUndefined();
-    expect(scene.maskRefs?.[id]).toMatchObject({ nodeId: 'v1' });
   });
 
   it('removeModifierMask drops a vector ref and prunes the orphaned entry', () => {
@@ -971,8 +861,6 @@ describe('applyMarqueeAsVectorMask (marquees-as-vectors.md)', () => {
     });
     expect(scene.maskRefs?.[maskId]).toMatchObject({ nodeId: vectorNodeId, ...params });
     expect(scene.nodes.find((n) => n.id === 'a')?.modifiers[0].maskId).toBe(maskId);
-    // No MaskDef ever created by this path.
-    expect(scene.masks).toBeUndefined();
   });
 
   it('labels the hidden node by marquee kind', () => {

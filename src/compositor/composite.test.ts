@@ -90,8 +90,8 @@ function fakeCtx(): Composite2DContext & {
 /**
  * A recording scratch factory — the mask-scoping tests' stand-in for
  * `realCreateScratch` (which needs a real `OffscreenCanvas`, unavailable in
- * this node test env, same reason `rasterizeVector`/`rasterizeMask` are
- * never exercised directly here). Every scratch it hands out is just another
+ * this node test env, same reason `rasterizeVector`/`rasterizeVectorMask`
+ * are never exercised directly here). Every scratch it hands out is just another
  * `fakeCtx()`, tagged with the (w, h) it was asked for so a test can find
  * "the scratch used for this span" among however many spans got masked.
  */

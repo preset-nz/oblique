@@ -79,11 +79,7 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
     getSource: vi.fn(() => fakeBitmap()),
     getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
     getOps: vi.fn(() => opsFixture),
-    getMask: vi.fn(() => undefined),
     getVectorMaskRef: vi.fn(() => undefined),
-    rasterizeMask: vi.fn(
-      (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
-    ),
     rasterizeVectorMask: vi.fn(
       (
         _paths,
@@ -242,45 +238,7 @@ describe('packMaskedPayload', () => {
 });
 
 describe('cookNode — masks', () => {
-  it('rasterises a masked modifier at the cook target size and hands the plane to the run', async () => {
-    const maskDef = {
-      id: 'mask-1',
-      shape: { kind: 'rect' as const, rect: { x: 0, y: 0, w: 100, h: 100 } },
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      featherPx: 4,
-      expand: 0,
-      invert: false,
-    };
-    const nodeRef = {
-      current: makeNode({
-        sourceSize: [800, 400],
-        modifiers: [
-          {
-            id: 'm1',
-            type: 'gaussian_blur',
-            enabled: true,
-            params: { radius: 8 },
-            maskId: 'mask-1',
-          },
-        ],
-      }),
-    };
-    const plane = new Uint8Array(100 * 50);
-    const deps = makeDeps(nodeRef, {
-      getMask: vi.fn((id: string) => (id === 'mask-1' ? maskDef : undefined)),
-      rasterizeMask: vi.fn(() => plane),
-    });
-
-    await cookNode('node-1', 'draft', deps);
-
-    // Rasterised at the DRAFT target size with the DRAFT factor — the mask
-    // downscales in lockstep with the source (story acceptance).
-    expect(deps.rasterizeMask).toHaveBeenCalledWith(maskDef, [800, 400], 100, 50, 1 / 8);
-    const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(runModifiers[0].mask).toBe(plane);
-  });
-
-  it('resolves a maskId against a vector-node reference when getMask comes up empty (the resolution rule)', async () => {
+  it('resolves a maskId against a vector-node reference and hands the rasterised plane to the run', async () => {
     const vectorTransform = { x: -15, y: 8, scaleX: 1, scaleY: 1, rotation: -0.2 };
     const vectorNode = makeVectorNode({ id: 'v1', transform2d: vectorTransform }) as VectorNode;
     const ref = {
@@ -308,7 +266,6 @@ describe('cookNode — masks', () => {
     };
     const plane = new Uint8Array(100 * 50);
     const deps = makeDeps(nodeRef, {
-      getMask: vi.fn(() => undefined),
       getVectorMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
       // getNode must resolve BOTH the cooking node and the referenced vector node.
       getNode: vi.fn((id: string) =>
@@ -333,39 +290,6 @@ describe('cookNode — masks', () => {
     );
     const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(runModifiers[0].mask).toBe(plane);
-  });
-
-  it('prefers a baked MaskDef over a same-id vector ref (masks first, per the resolution rule)', async () => {
-    const maskDef = {
-      id: 'shared-1',
-      shape: { kind: 'rect' as const, rect: { x: 0, y: 0, w: 10, h: 10 } },
-      appliedTransform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      featherPx: 0,
-      expand: 0,
-      invert: false,
-    };
-    const nodeRef = {
-      current: makeNode({
-        modifiers: [
-          { id: 'm1', type: 'gaussian_blur', enabled: true, params: {}, maskId: 'shared-1' },
-        ],
-      }),
-    };
-    const deps = makeDeps(nodeRef, {
-      getMask: vi.fn((id: string) => (id === 'shared-1' ? maskDef : undefined)),
-      getVectorMaskRef: vi.fn(() => ({
-        id: 'shared-1',
-        nodeId: 'v1',
-        featherPx: 0,
-        expand: 0,
-        invert: false,
-      })),
-    });
-
-    await cookNode('node-1', 'draft', deps);
-
-    expect(deps.rasterizeMask).toHaveBeenCalled();
-    expect(deps.rasterizeVectorMask).not.toHaveBeenCalled();
   });
 
   it('a vector ref whose target node has vanished resolves to no mask (last-line-of-defence)', async () => {
@@ -607,11 +531,7 @@ describe('cookNodeFullRes', () => {
       getSource: vi.fn(() => fakeBitmap()),
       getOps: vi.fn(() => opsFixture),
       getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
-      getMask: vi.fn(() => undefined),
       getVectorMaskRef: vi.fn(() => undefined),
-      rasterizeMask: vi.fn(
-        (_mask, _sourceSize, w: number, h: number, _factor: number) => new Uint8Array(w * h),
-      ),
       rasterizeVectorMask: vi.fn(
         (
           _paths,

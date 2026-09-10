@@ -1,12 +1,11 @@
 import { toast } from 'sonner';
 import * as cache from '@/scene/cache';
-import { rasterizeMask, rasterizeVectorMask } from '@/scene/maskRasterize';
+import { rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
   IDENTITY_TRANSFORM_2D,
   isVectorNode,
-  type MaskDef,
   type Modifier,
   type PixelNode,
   type SceneNode,
@@ -166,18 +165,9 @@ export interface CookDeps {
   /** `Scene.documentSize` — a vector node's raster spans this (vector-node-model.md's Sizing note), it has no `sourceSize` of its own. */
   getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
-  getMask: (maskId: string) => MaskDef | undefined;
-  /** `Modifier.maskId`'s second resolution target (vector-modifier-masks.md) — a live vector reference, resolved after `getMask` comes up empty. */
+  /** `Modifier.maskId` resolves against this — a live vector reference. */
   getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
-  /** Rasterise a mask to a single-channel plane at the cook target size (scene/maskRasterize.ts; needs OffscreenCanvas, so injected). */
-  rasterizeMask: (
-    mask: MaskDef,
-    sourceSize: [number, number],
-    width: number,
-    height: number,
-    factor: number,
-  ) => Uint8Array;
-  /** Rasterise a live vector-referenced mask (scene/maskRasterize.ts's `rasterizeVectorMask`; needs OffscreenCanvas, so injected, same pattern as `rasterizeMask`). */
+  /** Rasterise a live vector-referenced mask (scene/maskRasterize.ts's `rasterizeVectorMask`; needs OffscreenCanvas, so injected). */
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
@@ -192,7 +182,7 @@ export interface CookDeps {
   ) => Uint8Array;
   /** Draw `source` into an offscreen surface at `[w, h]` and read back RGBA8 bytes. */
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
-  /** Rasterise a vector node's paths at the cook target size — a vector node's "source pixels" (scene/vectorRasterize.ts; needs OffscreenCanvas, so injected, same pattern as `rasterizeMask`). */
+  /** Rasterise a vector node's paths at the cook target size — a vector node's "source pixels" (scene/vectorRasterize.ts; needs OffscreenCanvas, so injected). */
   rasterizeVector: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
@@ -267,27 +257,14 @@ async function realRunPython(
 }
 
 /**
- * `Modifier.maskId` resolution rule (vector-modifier-masks.md, the epic's
- * data-model decision): try `Scene.masks` first (a baked `MaskDef`), then
- * `Scene.maskRefs` (a live vector reference) — the two id spaces are
- * disjoint by construction (`store.ts`'s `setModifierMask`/
- * `setModifierVectorMask` each clear the other table's entry under the same
- * id), so "try masks, else maskRefs" never has to break a tie. A maskRefs
- * hit whose target node has since gone missing or isn't a vector any more
- * (shouldn't happen post-`pruneMaskState`, but this is the last line of
- * defence) resolves to "no mask" rather than throwing — same posture as an
- * unresolved id today.
+ * `Modifier.maskId` resolution (vector-modifier-masks.md): resolves against
+ * `Scene.maskRefs` (a live vector reference). A hit whose target node has
+ * since gone missing or isn't a vector any more (shouldn't happen post-
+ * `pruneMaskState`, but this is the last line of defence) resolves to "no
+ * mask" rather than throwing — same posture as an unresolved id today.
  */
 function makeRasterizeFor(
-  deps: Pick<
-    CookDeps,
-    | 'getNode'
-    | 'getMask'
-    | 'getVectorMaskRef'
-    | 'getDocumentSize'
-    | 'rasterizeMask'
-    | 'rasterizeVectorMask'
-  >,
+  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef' | 'getDocumentSize' | 'rasterizeVectorMask'>,
   nodeExtent: [number, number],
   consumerTransform2d: Transform2D,
   width: number,
@@ -295,9 +272,6 @@ function makeRasterizeFor(
   factor: number,
 ): (maskId: string) => Uint8Array | undefined {
   return (maskId: string) => {
-    const mask = deps.getMask(maskId);
-    if (mask) return deps.rasterizeMask(mask, nodeExtent, width, height, factor);
-
     const ref = deps.getVectorMaskRef(maskId);
     if (!ref) return undefined;
     const vectorNode = deps.getNode(ref.nodeId);
@@ -323,9 +297,7 @@ export const productionCookDeps: CookDeps = {
   getSource: (nodeId) => sources.get(nodeId),
   getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   getOps: () => useOpsCacheStore.getState().ops,
-  getMask: (maskId) => useSceneStore.getState().scene.masks?.[maskId],
   getVectorMaskRef: (maskId) => useSceneStore.getState().scene.maskRefs?.[maskId],
-  rasterizeMask,
   rasterizeVectorMask,
   downscale: realDownscale,
   rasterizeVector,
@@ -344,15 +316,7 @@ export interface FullResCookDeps {
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
   getDocumentSize: () => [number, number];
-  getMask: (maskId: string) => MaskDef | undefined;
   getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
-  rasterizeMask: (
-    mask: MaskDef,
-    sourceSize: [number, number],
-    width: number,
-    height: number,
-    factor: number,
-  ) => Uint8Array;
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
@@ -389,9 +353,7 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getSource: productionCookDeps.getSource,
   getOps: productionCookDeps.getOps,
   getDocumentSize: productionCookDeps.getDocumentSize,
-  getMask: productionCookDeps.getMask,
   getVectorMaskRef: productionCookDeps.getVectorMaskRef,
-  rasterizeMask: productionCookDeps.rasterizeMask,
   rasterizeVectorMask: productionCookDeps.rasterizeVectorMask,
   rasterizeVector: productionCookDeps.rasterizeVector,
   downscale: realDownscale,
