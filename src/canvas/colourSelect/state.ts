@@ -4,6 +4,7 @@ import {
   type ColourSelectParams,
   DEFAULT_COLOUR_SELECT_PARAMS,
 } from '@/ai/sidecarSelectColour';
+import { clearWhenTargetGone } from '@/canvas/selectShared/clearWhenTargetGone';
 
 /**
  * The `select-colour` tool's in-progress prompt (Epic 17 story 2b,
@@ -69,6 +70,11 @@ export const useColourSelectStore = create<ColourSelectState>((set) => ({
   clearPrompt: () => set({ ...PROMPT_ONLY }),
   clear: () => set({ ...INITIAL }),
 }));
+
+clearWhenTargetGone(
+  () => useColourSelectStore.getState().targetNodeId,
+  () => useColourSelectStore.getState().clear(),
+);
 
 /** True once there's at least one seed to fire a request for — pure so `controller.ts`/tests don't need the store's React glue, mirroring `smartSelect/state.ts`'s `hasPrompt`. */
 export function hasSeeds(state: Pick<ColourSelectState, 'seeds'>): boolean {

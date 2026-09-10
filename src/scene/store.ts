@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import * as cache from './cache';
-import { fillRuleForMarquee, type MarqueeShape, marqueeToVectorPaths } from './marquee';
+import {
+  fillRuleForMarquee,
+  type MarqueeShape,
+  marqueeToVectorPaths,
+  useMarqueeStateStore,
+} from './marquee';
 import type {
   BlendMode,
   Modifier,
@@ -731,9 +736,17 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // Verbatim — no dirty rewrite. Recook-on-load is the persistence
     // story's job (deferred: project-persistence.md).
     set({ scene });
+    // A marquee is transient editing state over the OLD scene; carrying it
+    // across a whole-scene swap leaves a selection floating over nothing
+    // (Georg, 2026-09-10: Cmd+N mid colour-select). The canvas tool stores
+    // clear themselves when their target node disappears (selectShared/
+    // clearWhenTargetGone.ts); the marquee store lives here, so this is
+    // the one place that can clear it without scene/ importing canvas/.
+    useMarqueeStateStore.getState().clear();
   },
 
   resetScene: () => {
     set({ scene: makeEmptyScene() });
+    useMarqueeStateStore.getState().clear();
   },
 }));

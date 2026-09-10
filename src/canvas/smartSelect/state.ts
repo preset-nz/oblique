@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { clearWhenTargetGone } from '@/canvas/selectShared/clearWhenTargetGone';
 
 /**
  * The `select-smart` tool's in-progress prompt (Epic 17, segment-to-vector.md).
@@ -103,6 +104,11 @@ export const useSmartSelectStore = create<SmartSelectState>((set) => ({
   clearPrompt: () => set({ ...PROMPT_ONLY }),
   clear: () => set({ ...INITIAL }),
 }));
+
+clearWhenTargetGone(
+  () => useSmartSelectStore.getState().targetNodeId,
+  () => useSmartSelectStore.getState().clear(),
+);
 
 /**
  * True once there's enough of a prompt to fire a segment request: at least
