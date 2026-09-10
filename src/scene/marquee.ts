@@ -1,10 +1,8 @@
 import { create } from 'zustand';
-import type { VectorPath } from './types';
+import type { Point2D, VectorPath } from './types';
 
-interface Point {
-  x: number;
-  y: number;
-}
+/** Structurally identical to `scene/types.ts`'s `Point2D` — kept as a local alias (pre-dates it) rather than a rename sweep. */
+type Point = Point2D;
 
 interface Rect {
   x: number;
@@ -33,17 +31,29 @@ interface Rect {
 export type MarqueeShape =
   | { kind: 'rect'; rect: Rect }
   | { kind: 'ellipse'; rect: Rect }
-  | { kind: 'lasso'; points: Point[]; closed: boolean };
+  | { kind: 'lasso'; points: Point[]; closed: boolean }
+  /**
+   * A model/algorithm-traced result (Epic 17: segment-to-vector.md's
+   * `select-smart` tool, and 2b's colour-range select reusing the same
+   * plumbing) — closed contours in document space, outer contours only
+   * (holes dropped server-side per the epic decision). One `MarqueeShape`
+   * variant covers both tool sources; `applyMarqueeAsVectorMask` in
+   * `store.ts` picks the commit label from context it has that this shape
+   * alone doesn't carry.
+   */
+  | { kind: 'polygons'; polygons: Point[][] };
 
 /**
  * True when the active marquee is a finished shape a mask can rasterise
- * from: a rect/ellipse with real area, or a closed lasso with enough
- * points. Mirrors `marqueeGeometry.ts`'s isDrawnRect/isDrawnLasso bounds
- * (kept in sync by scene/marquee.test.ts, not by importing canvas code).
+ * from: a rect/ellipse with real area, a closed lasso with enough points,
+ * or at least one traced polygon with enough points. Mirrors
+ * `marqueeGeometry.ts`'s isDrawnRect/isDrawnLasso bounds (kept in sync by
+ * scene/marquee.test.ts, not by importing canvas code).
  */
 export function isMaskableMarquee(marquee: MarqueeShape | null): boolean {
   if (!marquee) return false;
   if (marquee.kind === 'lasso') return marquee.closed && marquee.points.length >= 3;
+  if (marquee.kind === 'polygons') return marquee.polygons.some((p) => p.length >= 3);
   return marquee.rect.w >= 1 && marquee.rect.h >= 1;
 }
 
@@ -118,12 +128,21 @@ export function marqueeToVectorPaths(marquee: MarqueeShape): VectorPath[] {
     ];
   }
 
-  return [
-    {
-      closed: true,
-      anchors: marquee.points.map((p) => ({ point: { x: p.x, y: p.y } })),
-    },
-  ];
+  if (marquee.kind === 'lasso') {
+    return [
+      {
+        closed: true,
+        anchors: marquee.points.map((p) => ({ point: { x: p.x, y: p.y } })),
+      },
+    ];
+  }
+
+  // polygons: one closed, handle-less path per traced contour — same
+  // "point density is the source of truth" convention as the lasso case.
+  return marquee.polygons.map((points) => ({
+    closed: true,
+    anchors: points.map((p) => ({ point: { x: p.x, y: p.y } })),
+  }));
 }
 
 export interface MarqueeParams {

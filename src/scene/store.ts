@@ -657,7 +657,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       ? get().scene.maskRefs?.[existingMaskId]?.nodeId
       : undefined;
 
-    const label = `Selection (${marquee.kind})`;
+    // A `polygons` marquee is produced by more than one tool (Epic 17's
+    // `select-smart` and 2b's colour-range select share the shape) — the
+    // shape's own `kind` can't disambiguate their commit labels, so
+    // `segment` is the only source today; 2b re-decides this if/when it
+    // lands (segment-to-vector.md's commit label, "Selection (segment)").
+    const label =
+      marquee.kind === 'polygons' ? 'Selection (segment)' : `Selection (${marquee.kind})`;
     const vectorNodeId = get().addVectorNode({
       paths: marqueeToVectorPaths(marquee),
       fillRule: 'nonzero',

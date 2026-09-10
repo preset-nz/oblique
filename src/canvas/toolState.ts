@@ -13,8 +13,20 @@ import { create } from 'zustand';
  * `pen` (Epic 06, pen-tool.md) draws a `VectorNode` — its in-progress path
  * lives in `canvas/vector/penState.ts`, not here (same separation as
  * marquees: this store only ever answers "what does my pointer do").
+ *
+ * `select-smart` (Epic 17, segment-to-vector.md): click/Alt-click points and
+ * a drag box prompt the sidecar's MobileSAM segmenter; its in-progress
+ * prompt state lives in `canvas/smartSelect/state.ts`, same separation as
+ * marquees/pen.
  */
-export type Tool = 'pan' | 'move' | 'select-rect' | 'select-ellipse' | 'select-lasso' | 'pen';
+export type Tool =
+  | 'pan'
+  | 'move'
+  | 'select-rect'
+  | 'select-ellipse'
+  | 'select-lasso'
+  | 'select-smart'
+  | 'pen';
 
 interface ToolStateStore {
   tool: Tool;

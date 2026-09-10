@@ -14,6 +14,7 @@ import traceback
 from typing import Any
 
 from handlers.cook import handle_cook
+from handlers.segment import handle_segment
 from ops import OPS
 from protocol import read_frame, stdin_buffer, stdout_buffer, write_frame
 
@@ -40,6 +41,8 @@ def dispatch(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any], by
         return handle_list_ops(header, payload)
     if op_name == "cook":
         return handle_cook(header, payload)
+    if op_name == "segment":
+        return handle_segment(header, payload)
 
     op = OPS.get(op_name)
     if op is None:

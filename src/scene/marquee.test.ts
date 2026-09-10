@@ -80,6 +80,20 @@ describe('isMaskableMarquee', () => {
       false,
     );
   });
+
+  it('accepts a polygons marquee with at least one polygon of >= 3 points', () => {
+    const triangle = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 5, y: 10 },
+    ];
+    expect(isMaskableMarquee({ kind: 'polygons', polygons: [triangle] })).toBe(true);
+    expect(
+      isMaskableMarquee({ kind: 'polygons', polygons: [triangle.slice(0, 2), triangle] }),
+    ).toBe(true);
+    expect(isMaskableMarquee({ kind: 'polygons', polygons: [triangle.slice(0, 2)] })).toBe(false);
+    expect(isMaskableMarquee({ kind: 'polygons', polygons: [] })).toBe(false);
+  });
 });
 
 describe('marqueeToVectorPaths', () => {
@@ -201,6 +215,32 @@ describe('marqueeToVectorPaths', () => {
       }
     }
     expect(maxRelError).toBeLessThan(0.0003);
+  });
+
+  it('polygons: one closed handle-less path per contour, document space in, document space out', () => {
+    const a = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 5, y: 10 },
+    ];
+    const b = [
+      { x: 100, y: 100 },
+      { x: 110, y: 100 },
+      { x: 110, y: 110 },
+      { x: 100, y: 110 },
+    ];
+    const paths = marqueeToVectorPaths({ kind: 'polygons', polygons: [a, b] });
+    expect(paths).toHaveLength(2);
+    expect(paths[0].closed).toBe(true);
+    expect(paths[0].anchors.map((anchor) => anchor.point)).toEqual(a);
+    expect(paths[1].closed).toBe(true);
+    expect(paths[1].anchors.map((anchor) => anchor.point)).toEqual(b);
+    for (const path of paths) {
+      for (const anchor of path.anchors) {
+        expect(anchor.handleIn).toBeUndefined();
+        expect(anchor.handleOut).toBeUndefined();
+      }
+    }
   });
 });
 

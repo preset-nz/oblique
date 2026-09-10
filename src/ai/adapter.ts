@@ -58,10 +58,42 @@ export interface UpscaleOptions {
   factor: number;
 }
 
+/** A SAM-style point prompt: `label` 1 = positive (include), 0 = negative (exclude). */
+export interface SegmentPoint {
+  x: number;
+  y: number;
+  label: 0 | 1;
+}
+
+/** Bounding-box prompt, corner coordinates (not width/height) — the sidecar's own `segment` request shape (segment-to-vector.md). */
+export interface SegmentBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * Segment request (story 2, segment-to-vector.md — the smallest useful
+ * shape story 1 left provisional, now pinned to the sidecar's fixed wire
+ * contract). `image`/`width`/`height` are the target node's cooked RGBA8 at
+ * WORKING resolution — coordinates in `points`/`box`/`mask` are in that same
+ * buffer's pixel space; the caller (`src/canvas/smartSelect/`) maps
+ * document <-> buffer, this module never sees document space.
+ */
 export interface SegmentOptions {
+  /** RGBA8, `width * height * 4` bytes. */
   image: Uint8Array;
-  points?: Array<{ x: number; y: number; positive: boolean }>;
-  box?: { x: number; y: number; width: number; height: number };
+  width: number;
+  height: number;
+  points?: SegmentPoint[];
+  box?: SegmentBox | null;
+  /**
+   * Optional 256x256 u8 coarse mask (0/255) — the outline prompt
+   * (segment-to-vector.md's "can I also draw a vector outline" note):
+   * biases the decoder toward a drawn region rather than merely bounding it.
+   */
+  mask?: Uint8Array;
 }
 
 export interface CaptionOptions {
@@ -81,9 +113,16 @@ export interface CaptionResult {
 }
 
 export interface SegmentResult {
+  /** Single-channel u8 mask, `width * height` bytes, same buffer pixel space as the request. */
   mask: Uint8Array;
-  /** Document-space closed polygons, sidecar-traced (epic decision: tracing lives server-side). */
-  polygons: Array<Array<[number, number]>>;
+  /**
+   * Closed contours, sidecar-traced (epic decision: tracing lives
+   * server-side), outer contours only — in the REQUEST's buffer pixel
+   * space, not document space (segment-to-vector.md's Coordinates note).
+   * The caller maps these to document space before writing them into
+   * `scene/marquee.ts`'s `polygons` marquee variant.
+   */
+  polygons: Array<Array<{ x: number; y: number }>>;
 }
 
 /**

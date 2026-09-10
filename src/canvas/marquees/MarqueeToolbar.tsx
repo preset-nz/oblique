@@ -9,7 +9,12 @@ import { lassoBounds, type Rect } from './marqueeGeometry';
 const TOOLBAR_OFFSET_PX = 8;
 
 function boundsFor(marquee: MarqueeShape): Rect {
-  return marquee.kind === 'lasso' ? lassoBounds(marquee.points) : marquee.rect;
+  if (marquee.kind === 'lasso') return lassoBounds(marquee.points);
+  // polygons (Epic 17's select-smart/colour-range): no single "rect", so
+  // the toolbar positions off the union bounds of every traced contour —
+  // same flattening `lassoBounds` already does for one contour's points.
+  if (marquee.kind === 'polygons') return lassoBounds(marquee.polygons.flat());
+  return marquee.rect;
 }
 
 /**

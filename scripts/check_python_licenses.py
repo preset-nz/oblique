@@ -43,6 +43,7 @@ ALLOWED = {
 NORMALISE = {
     "MIT License": "MIT",
     "BSD License": "BSD-3-Clause",
+    "3-Clause BSD License": "BSD-3-Clause",  # protobuf, pulled in by onnxruntime (Epic 17 story 2)
     "Apache Software License": "Apache-2.0",
     "GNU General Public License v2 (GPLv2)": "GPL-2.0",
     "Python Software Foundation License": "Python-2.0",

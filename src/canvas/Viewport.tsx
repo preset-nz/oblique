@@ -4,7 +4,7 @@ import { destSizeFor } from '@/compositor/composite';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useCacheVersionStore } from '@/scene/cache';
 import { beginTransaction, endTransaction } from '@/scene/history';
-import { useMarqueeStateStore } from '@/scene/marquee';
+import { isMaskableMarquee, marqueeToVectorPaths, useMarqueeStateStore } from '@/scene/marquee';
 import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
@@ -29,6 +29,12 @@ import {
   recompositeBuffer,
   viewChangeNeedsRecomposite,
 } from './paintScene';
+import { SmartSelectController } from './smartSelect/controller';
+import { resolveOutlineSeed } from './smartSelect/outlinePrompt';
+import { getTargetFrame } from './smartSelect/payload';
+import { SmartSelectOverlay } from './smartSelect/SmartSelectOverlay';
+import { SmartSelectStatusPanel } from './smartSelect/SmartSelectStatusPanel';
+import { useSmartSelectStore } from './smartSelect/state';
 import { TransformBox } from './TransformBox';
 import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
@@ -38,6 +44,9 @@ import { PenTool } from './vector/PenTool';
 import { deleteAnchor } from './vector/pathEdit';
 import { MIN_ANCHORS_TO_CLOSE, usePenStateStore } from './vector/penState';
 import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
+
+/** Screen-space drag threshold that tells a smart-select click (a point) apart from a drag (a box) — segment-to-vector.md's "drag >= 4px = box". */
+const SMART_SELECT_DRAG_SCREEN_PX = 4;
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 
@@ -93,6 +102,19 @@ export function Viewport() {
   const penAnchors = usePenStateStore((s) => s.anchors);
   const cancelPen = usePenStateStore((s) => s.cancel);
 
+  const smartPoints = useSmartSelectStore((s) => s.points);
+  const smartBox = useSmartSelectStore((s) => s.box);
+
+  // Debounced sidecar `segment` requests for the smart-select prompt
+  // (segment-to-vector.md) — one controller for the Viewport's lifetime,
+  // same "start once, react to the store" shape as the app-wide
+  // `CookScheduler`, just view-local since the prompt itself is view-local.
+  useEffect(() => {
+    const controller = new SmartSelectController();
+    controller.start();
+    return () => controller.stop();
+  }, []);
+
   // Tool-switch-away clears the marquee and the in-progress pen path (epic
   // acceptance: "no orphaned overlay state"). Reactive on `tool` rather than
   // living inside `setTool` itself — covers both the `M`/`V` shortcuts
@@ -103,6 +125,60 @@ export function Viewport() {
   const prevToolRef = useRef(tool);
   useEffect(() => {
     if (prevToolRef.current !== tool) {
+      // Activating select-smart (segment-to-vector.md's outline prompt):
+      // seed the first request from whatever outline is already on offer —
+      // an active marquee, or a selected vector node's own paths — BEFORE
+      // clearMarquee() below consumes it. Read directly off the stores
+      // (not the render-time `marquee`/`selectedNode` values) so this
+      // effect's own deps don't need to widen.
+      if (tool === 'select-smart') {
+        const activeMarquee = useMarqueeStateStore.getState().marquee;
+        const selection = useSelectionStore.getState().selection;
+        const node =
+          selection.kind === 'node'
+            ? useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId)
+            : undefined;
+        const targetId = node && (node.type === 'pixel' || node.type === 'vector') ? node.id : null;
+        useSmartSelectStore.getState().setTarget(targetId);
+
+        if (targetId) {
+          // Only the mapping frame is needed to seed the outline (its own
+          // pixel bytes aren't) — `getTargetFrame` skips the OffscreenCanvas
+          // readback `getTargetPayload`/`fire()` pays for 150ms later.
+          const frame = getTargetFrame(targetId);
+          if (frame) {
+            const outline =
+              activeMarquee && isMaskableMarquee(activeMarquee)
+                ? { paths: marqueeToVectorPaths(activeMarquee), fillRule: 'nonzero' as const }
+                : node && isVectorNode(node)
+                  ? { paths: node.paths, fillRule: node.fillRule }
+                  : undefined;
+            const seed = outline && resolveOutlineSeed(outline.paths, outline.fillRule, frame);
+            if (seed) {
+              // OUTLINE_PROMPT_USES_MASK (sidecar dogfooding note,
+              // outlinePrompt.ts): box-only by default — `seed.mask` is
+              // `null` unless that flag is flipped back on.
+              if (seed.mask) {
+                useSmartSelectStore.getState().seedOutline(seed.box, seed.mask);
+              } else {
+                useSmartSelectStore.getState().setBox(seed.box);
+              }
+            }
+          } else {
+            // Nothing cooked yet to segment — honest status instead of a
+            // silent dead tool (epic acceptance: "never a silent failure").
+            useSmartSelectStore.getState().setStatus('error', 'Nothing cooked to segment yet');
+          }
+        } else {
+          useSmartSelectStore
+            .getState()
+            .setStatus('error', 'Select an image or vector layer to segment');
+        }
+      }
+      if (prevToolRef.current === 'select-smart') {
+        useSmartSelectStore.getState().clear();
+      }
+
       clearMarquee();
       cancelPen();
       // Same "no orphaned overlay state" rule for path-editing.md's active
@@ -178,6 +254,13 @@ export function Viewport() {
         clearSelection();
         clearMarquee();
         usePenStateStore.getState().cancel();
+        // select-smart's own prompt (segment-to-vector.md) — same
+        // "no orphaned overlay state" rule; clearMarquee() above already
+        // drops the polygons preview it writes there. `clearPrompt` (not
+        // `clear`) keeps the tool's target: Escape drops the prompt, not
+        // the whole tool — a second Escape or a stray click shouldn't need
+        // a tool-switch round trip to work again.
+        if (tool === 'select-smart') useSmartSelectStore.getState().clearPrompt();
         return;
       }
 
@@ -227,6 +310,7 @@ export function Viewport() {
         if (useMarqueeStateStore.getState().marquee) {
           e.preventDefault();
           clearMarquee();
+          if (tool === 'select-smart') useSmartSelectStore.getState().clearPrompt();
           return;
         }
       }
@@ -291,6 +375,15 @@ export function Viewport() {
     let penPendingAnchor: Point | null = null;
     let penPendingMoved = false;
 
+    // Smart-select draw state (segment-to-vector.md). Every pointerdown is
+    // *pending* until pointerup/move decides click (a point) vs. drag (a
+    // box) — same click-vs-drag deferral as the pen tool's own pending
+    // anchor above, just with a document-space distance threshold instead
+    // of a boolean.
+    let smartPendingStart: Point | null = null;
+    let smartPendingAlt = false;
+    let smartPendingMoved = false;
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
 
@@ -323,6 +416,15 @@ export function Viewport() {
         lassoStart = docPt;
         lassoLeftStart = false;
         setMarquee({ kind: 'lasso', points: [docPt], closed: false });
+        return;
+      }
+
+      if (tool === 'select-smart') {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        smartPendingStart = toDoc(e.clientX, e.clientY);
+        smartPendingAlt = e.altKey;
+        smartPendingMoved = false;
         return;
       }
 
@@ -406,6 +508,24 @@ export function Viewport() {
         return;
       }
 
+      if (smartPendingStart) {
+        const docPt = toDoc(e.clientX, e.clientY);
+        const viewScale = useViewTransformStore.getState().view.scale;
+        const dragThresholdDoc = SMART_SELECT_DRAG_SCREEN_PX / Math.max(viewScale, 0.0001);
+        const dx = docPt.x - smartPendingStart.x;
+        const dy = docPt.y - smartPendingStart.y;
+        if (dx * dx + dy * dy > dragThresholdDoc * dragThresholdDoc) smartPendingMoved = true;
+        if (smartPendingMoved) {
+          useSmartSelectStore.getState().setBox({
+            x0: smartPendingStart.x,
+            y0: smartPendingStart.y,
+            x1: docPt.x,
+            y1: docPt.y,
+          });
+        }
+        return;
+      }
+
       if (tool === 'pen') {
         const docPt = toDoc(e.clientX, e.clientY);
         // Rubber-band target updates on every move, dragging an anchor's
@@ -478,6 +598,19 @@ export function Viewport() {
             setMarquee({ kind: 'lasso', points: current.points, closed: true });
           }
         }
+        return;
+      }
+
+      if (smartPendingStart) {
+        canvas.releasePointerCapture(e.pointerId);
+        // A drag already wrote the box live in onPointerMove — only a
+        // stationary press (no drag) becomes a point here (click = positive,
+        // Alt-click = negative, segment-to-vector.md).
+        if (!smartPendingMoved) {
+          useSmartSelectStore.getState().addPoint(smartPendingStart, smartPendingAlt ? 0 : 1);
+        }
+        smartPendingStart = null;
+        smartPendingMoved = false;
         return;
       }
 
@@ -770,9 +903,18 @@ export function Viewport() {
             />
           )}
           {tool === 'pen' && penAnchors.length > 0 && <PenTool viewScale={view.scale} />}
+          {tool === 'select-smart' && (
+            <SmartSelectOverlay
+              points={smartPoints}
+              box={smartBox}
+              polygons={marquee?.kind === 'polygons' ? marquee.polygons : []}
+              viewScale={view.scale}
+            />
+          )}
         </g>
       </svg>
       <MarqueeToolbar />
+      {tool === 'select-smart' && <SmartSelectStatusPanel />}
     </div>
   );
 }

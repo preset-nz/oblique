@@ -120,10 +120,18 @@ export class SidecarClient {
     }
   }
 
-  /** Send a request frame; resolves with the matching response frame. */
+  /**
+   * Send a request frame; resolves with the matching response frame.
+   * `timeoutMs` defaults to `REQUEST_TIMEOUT_MS` — overridable per call for
+   * the rare request whose real work can honestly exceed it (Epic 17's
+   * `segment`: the first call downloads ~40 MB of weights synchronously
+   * inside the sidecar, no progress frames, so the client-side timeout has
+   * to cover that download, not just an ordinary cook).
+   */
   request(
     header: Record<string, unknown>,
     payload: Uint8Array = new Uint8Array(0),
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
   ): Promise<SidecarResponse> {
     const id = crypto.randomUUID();
     const fullHeader = { ...header, id };
@@ -132,12 +140,8 @@ export class SidecarClient {
     return new Promise<SidecarResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(
-          new Error(
-            `sidecar request '${String(header.op)}' timed out after ${REQUEST_TIMEOUT_MS}ms`,
-          ),
-        );
-      }, REQUEST_TIMEOUT_MS);
+        reject(new Error(`sidecar request '${String(header.op)}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timeout });
 
