@@ -1,4 +1,4 @@
-import { registerBuiltinRenderers } from '@preset.nz/property-editors';
+import { registerBuiltinRenderers } from '@preset.nz/facets';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 import { registerModifierFieldRenderers } from './modifierFieldRenderers';
 import { registerModifierScopes } from './modifierScope';

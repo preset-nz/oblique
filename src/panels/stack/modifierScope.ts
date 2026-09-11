@@ -8,7 +8,7 @@ import {
   type Scope,
   type SelectFieldDef,
   type SliderFieldDef,
-} from '@preset.nz/property-editors';
+} from '@preset.nz/facets';
 import { useSceneStore } from '@/scene/store';
 import type { OpDescriptor, OpParamSpec } from '@/sidecar/opsCache';
 

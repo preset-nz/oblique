@@ -4,7 +4,7 @@ import {
   type FieldRenderer,
   registerFieldRenderer,
   type SelectFieldDef,
-} from '@preset.nz/property-editors';
+} from '@preset.nz/facets';
 import { InputNumber } from '@/components/InputNumber';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { beginTransaction, endTransaction } from '@/scene/history';

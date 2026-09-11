@@ -1,4 +1,4 @@
-import { PropertyPanel } from '@preset.nz/property-editors';
+import { PropertyPanel } from '@preset.nz/facets';
 import {
   Blend,
   ChevronDown,
