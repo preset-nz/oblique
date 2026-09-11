@@ -19,6 +19,9 @@ import type { Scene } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
 import { filenameOf, importFiles, tauriImportDeps } from './import';
 
+// On-disk format identifiers, deliberately not `PRODUCT_NAME`: the marker and
+// the `.oblique` extension must survive a product rename or existing files
+// stop opening. Only displayed strings route through branding.
 export const PROJECT_FORMAT = 'oblique-project';
 // v2 (baked-persistence.md, 2026-07-06): scene shape is unchanged — v2 only
 // *means* "a `<name>.oblique.baked/` sidecar dir may exist beside this file".
@@ -71,7 +74,7 @@ export function parseProject(text: string, sourcePath?: string): Scene {
   }
   const record = doc as Record<string, unknown>;
   if (record?.format !== PROJECT_FORMAT) {
-    throw new Error('not an Oblique project file');
+    throw new Error(`not an ${PRODUCT_NAME} project file`);
   }
   const version = record.version;
   if (
@@ -241,7 +244,7 @@ export async function saveProject(
   let path = options.as ? null : meta.path;
   if (!path) {
     const picked = await saveDialog({
-      filters: [{ name: 'Oblique project', extensions: ['oblique'] }],
+      filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
     });
     if (!picked) return;
     path = picked;
@@ -377,7 +380,7 @@ export async function newProject(
  */
 export async function openProjectDialog(): Promise<void> {
   const selected = await openDialog({
-    filters: [{ name: 'Oblique project', extensions: ['oblique'] }],
+    filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
   });
   if (!selected) return;
   const path = Array.isArray(selected) ? selected[0] : selected;

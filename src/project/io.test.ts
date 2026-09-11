@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PRODUCT_NAME } from '@/branding';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
@@ -220,7 +221,7 @@ describe('serialise/parse round trip', () => {
 
   it('rejects wrong format marker', () => {
     expect(() => parseProject(JSON.stringify({ format: 'other', version: 1, scene: {} }))).toThrow(
-      /not an Oblique project/,
+      `not an ${PRODUCT_NAME} project`,
     );
   });
 
@@ -588,7 +589,7 @@ describe('openProjectDialog vs importImagesDialog (roadmap: split Open vs Import
 
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({
-        filters: [{ name: 'Oblique project', extensions: ['oblique'] }],
+        filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
       }),
     );
     expect(useSceneStore.getState().scene.id).toBe('scene-1');
