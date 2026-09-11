@@ -1,9 +1,10 @@
 [project]
 name = "sidecar"
 version = "0.1.0"
-description = "Add your description here"
+description = "Image-operator sidecar — NumPy/Pillow ops over a framed stdio protocol."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = [
     "numpy>=2.5.0",
     "pillow>=12.3.0",
