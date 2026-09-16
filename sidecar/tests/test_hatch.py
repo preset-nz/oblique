@@ -485,6 +485,88 @@ def test_crosses_ignore_seed():
     np.testing.assert_array_equal(a, b)
 
 
+# --- pen: the widest a stroke gets -----------------------------------------------------
+
+_STROKE_PATTERNS = ("lines", "dashes", "crosses")
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_pen_one_is_the_uncapped_op(pattern):
+    rng = np.random.default_rng(51)
+    img = _random_rgba(rng)
+    params = {"pattern": pattern, "layers": 3, "angle": 30, "seed": 7}
+
+    a = hatch(img, params)
+    b = hatch(img, {**params, "pen": 1.0})
+
+    np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("pattern", _STROKE_PATTERNS)
+def test_pen_below_one_stays_open(pattern):
+    img = _flat(0)
+
+    out = hatch(img, {"pattern": pattern, "pen": 0.2, "seed": 7})
+
+    assert np.any(np.all(out[..., :3] == 255, axis=-1))
+
+
+def test_pen_caps_line_ink_per_period():
+    # Black, one layer, horizontal lines: every stroke is at full coverage,
+    # so its half-width is exactly `pen * (S + 1) / 2` and the period holds
+    # `pen * (S + 1)` px of ink. 40 rows is five whole periods of 8.
+    img = _flat(0)
+    spacing, pen = 8.0, 0.25
+
+    out = hatch(img, {"layers": 1, "angle": 0, "spacing": spacing, "pen": pen})
+
+    ink = 1.0 - out[..., 0].mean() / 255.0
+    assert ink == pytest.approx(pen * (spacing + 1.0) / spacing, abs=0.01)
+
+
+@pytest.mark.parametrize("pattern", _STROKE_PATTERNS)
+@pytest.mark.parametrize("layers", [1, 4])
+def test_pen_keeps_ink_coverage_monotonic(pattern, layers):
+    means = []
+    for step in range(11):
+        value = round((1.0 - step / 10.0) * 255)
+        out = hatch(_flat(value), {"pattern": pattern, "layers": layers, "pen": 0.2})
+        means.append(1.0 - out[..., 0].mean() / 255.0)
+
+    assert all(means[i] <= means[i + 1] + 1e-9 for i in range(len(means) - 1))
+
+
+def test_pen_crosses_arms_reach_full_length_as_hairlines():
+    # Black, one layer of `+` at angle 0: arms at full reach join their
+    # neighbours into a continuous row through the cell centres, while the
+    # capped bars leave the row between them mostly paper.
+    img = _flat(0, h=64, w=64)
+    spacing = 16
+
+    out = hatch(
+        img,
+        {
+            "pattern": "crosses",
+            "layers": 1,
+            "angle": 0,
+            "spacing": spacing,
+            "pen": 0.1,
+        },
+    )
+
+    assert np.all(out[spacing, :, :3] == 0)
+    assert np.mean(out[spacing // 2, :, 0] == 255) > 0.5
+
+
+def test_stipple_ignores_pen():
+    img = _flat(128, h=64, w=64)
+
+    a = hatch(img, {"pattern": "stipple", "seed": 3})
+    b = hatch(img, {"pattern": "stipple", "seed": 3, "pen": 0.1})
+
+    np.testing.assert_array_equal(a, b)
+
+
 # --- helpers: _area, _hash01 ----------------------------------------------------------
 
 

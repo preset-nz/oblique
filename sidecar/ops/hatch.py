@@ -67,6 +67,18 @@ so every pixel in a cell is covered by at least one full-length arm before
 either bar starts thickening — the no-pinhole closure. `crosses` ignores
 `seed`.
 
+**`pen` is the widest a stroke gets**, as a fraction of the width that
+closes to solid ink (`(spacing + 1) / 2` half-width for `lines`/`dashes`,
+`W` for a `crosses` bar). A stroke grows with tone as above until it
+reaches the pen, then holds, so a low `pen` draws hairlines and tone keeps
+building through `layers` crossing over each other (and, for `crosses`,
+arm length). It is a cap, not a scale: `weight` scales every layer's
+coverage down, where `pen` leaves the light tones alone and only stops the
+dark ones from fattening. `pen = 1` is exactly the uncapped op; below 1,
+black no longer closes to solid. A ratio rather than pixels, so
+`spacing` stays the only spatial param. `stipple` ignores it — a dot has
+no stroke.
+
 `stipple` draws one jittered, anti-aliased disc per cell, born once
 `c_k` crosses a per-cell seeded threshold (`_hash01` salted 1) and then
 growing in radius (light tones are density-led: dots appear one at a
@@ -232,11 +244,13 @@ def _cell_lattice(
 
 
 def _crosses_ink(
-    du: np.ndarray, dv: np.ndarray, c: np.ndarray, k: int, spacing: float
+    du: np.ndarray, dv: np.ndarray, c: np.ndarray, k: int, spacing: float, pen: float
 ) -> np.ndarray:
     """`crosses`' per-layer ink: a `+` (k = 0, 2) or `×` (k = 1, 3), the
     union of two perpendicular `_area` bars. Geometry constants and growth
-    are pinned 2026-09-16 (story 2 doc, "crosses") — do not re-derive."""
+    are pinned 2026-09-16 (story 2 doc, "crosses") — do not re-derive.
+    `pen` caps the bar half-width at a fraction of its closing width, so
+    arms still reach full length while the bars stay hairlines."""
     s = spacing
     if k % 2 == 0:
         p, r = du, dv
@@ -252,6 +266,7 @@ def _crosses_ink(
     phase1 = c <= 0.5
     a = np.where(phase1, a_max * (c / 0.5), a_max)
     hw = np.where(phase1, h0, h0 + (w_close - h0) * ((c - 0.5) / 0.5))
+    hw = np.minimum(hw, pen * w_close)
 
     bar1 = _area(np.abs(r), hw) * _area(np.abs(p), a)
     bar2 = _area(np.abs(p), hw) * _area(np.abs(r), a)
@@ -327,6 +342,7 @@ def _stipple_ink(
         ),
         P("angle", "float", min=0.0, max=180.0, default=45.0, step=1.0),
         P("weight", "float", min=0.05, max=1.0, default=1.0, step=0.01),
+        P("pen", "float", min=0.01, max=1.0, default=1.0, step=0.01),
         P(
             "source",
             "enum",
@@ -350,6 +366,8 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     spacing = max(1.0, float(params.get("spacing", 8.0)))
     angle = float(params.get("angle", 45.0))
     weight = float(params.get("weight", 1.0))
+    pen = max(0.0, min(1.0, float(params.get("pen", 1.0))))
+    pen_f = np.float32(pen)
     seed = int(params.get("seed", 0))
 
     t = _tone(img, params)
@@ -371,7 +389,7 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
                 u, v, k, spacing, cos_t, sin_t, t, h, w
             )
             c_k = _c_k(t_cell, k, layers, weight)
-            ink_k = _crosses_ink(du, dv, c_k, k, spacing)
+            ink_k = _crosses_ink(du, dv, c_k, k, spacing, pen)
         elif pattern == "stipple":
             du, dv, cu, cv, t_cell = _cell_lattice(
                 u, v, k, spacing, cos_t, sin_t, t, h, w
@@ -384,7 +402,7 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             c_k = _c_k(t, k, layers, weight)
 
             a = np.sqrt(c_k)
-            across_h = a * np.float32((spacing + 1.0) / 2.0)
+            across_h = np.minimum(a, pen_f) * np.float32((spacing + 1.0) / 2.0)
             ink_k = _area(d, across_h)
 
             period = np.float32(_DASH_PERIOD * spacing)
@@ -397,7 +415,7 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             d = np.abs(v - n * np.float32(spacing))
             c_k = _c_k(t, k, layers, weight)
 
-            stroke_h = c_k * np.float32((spacing + 1.0) / 2.0)
+            stroke_h = np.minimum(c_k, pen_f) * np.float32((spacing + 1.0) / 2.0)
             ink_k = _area(d, stroke_h)
 
         coverage = 1.0 - (1.0 - coverage) * (1.0 - ink_k)
