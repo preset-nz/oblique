@@ -1,6 +1,7 @@
 """`hatch` — redraw tone as ink marks: hatched lines, dashes, crosses or
 stipple dots whose density follows the image's darkness (epic 18, story 1:
-`lines`/`dashes`; story 2 adds `crosses`/`stipple` on the same machinery).
+`lines`/`dashes`; story 2 adds `crosses`/`stipple` on the same machinery;
+story 3 adds `pen`; story 4 adds `crosses`' `cross_size`/`cross_aspect`).
 
 **Tone.** `source` picks a 0..1 channel — `luma` via the shared
 `LUMA_R709`/`LUMA_G709`/`LUMA_B709` weights, or a single `red`/`green`/
@@ -52,20 +53,40 @@ calls it and so ignores `seed` outright.
 shape as `_screen_channel` in `cmyk_halftone.py`): one whole mark per
 lattice cell, tone sampled once at the cell centre rather than per pixel,
 so a mark is whole and sized to its cell's tone rather than thickening
-along its own length. The lattice rotates by `angle` only — cell patterns
-carry no per-layer angle offset (`crosses` puts its orientation in the
-mark instead) — and layer `k` shifts the lattice by a per-layer offset in
-cell units, `((0, 0), (½, ½), (½, 0), (0, ½))[k]`, so successive layers
-don't stack on the same cell seams. Only a pixel's own cell is evaluated;
-neighbouring cells at different tones meet at a visible seam, the same
-trade-off `cmyk_halftone` makes.
+along its own length. The cell-centre tone lookup itself — map the centre
+back to image space, round, clip to bounds, read `t` — is factored into
+`_cell_centre_tone`, shared by `_cell_lattice`'s own-cell tone and, for
+`crosses`' neighbour sweep below, every neighbour cell it visits. The
+lattice rotates by `angle` only — cell patterns carry no per-layer angle
+offset (`crosses` puts its orientation in the mark instead) — and layer
+`k` shifts the lattice by a per-layer offset in cell units, `((0, 0), (½,
+½), (½, 0), (0, ½))[k]`, so successive layers don't stack on the same
+cell seams. Only a pixel's own cell is evaluated for `stipple`, and for
+`crosses` at default arm sizes; neighbouring cells at different tones
+meet at a visible seam, the same trade-off `cmyk_halftone` makes.
 
 `crosses` draws a `+` (layers 0, 2) or `×` (layers 1, 3): the union of two
 perpendicular bars, each bar a product of two `_area` calls (one across,
-one along), with geometry constants (`A_max`, `W`, `h0`) pinned 2026-09-16
-so every pixel in a cell is covered by at least one full-length arm before
-either bar starts thickening — the no-pinhole closure. `crosses` ignores
-`seed`.
+one along), with geometry constants (`A_max`, `W`, `h0`, one place per
+orientation, `_cross_geometry`) pinned 2026-09-16 so every pixel in a cell
+is covered by at least one full-length arm before either bar starts
+thickening — the no-pinhole closure. `cross_size` is bar2's (the `r`-axis
+bar's) arm-length factor and `cross_aspect` multiplies bar1's (the
+`p`-axis bar's) factor on top of it — `f1 = cross_size * cross_aspect`,
+`f2 = cross_size` — so raising `cross_aspect` only ever stretches one bar
+longer, never shrinks the other, pinned 2026-09-17 (story 4 doc,
+"Geometry"). At `f1 = f2 = 1` a pixel evaluates only its own cell
+(`_crosses_ink`, bit-identical to the op before this pair existed,
+`reach * 1.0 == reach`). Past `max(f1, f2) = 1` an arm can bleed past its
+own cell's edge, so each bar instead unions its own cell's mark with
+every neighbouring cell's mark that can reach it (`_crosses_ink_sweep`),
+each neighbour drawn at *its own* cell-centre tone rather than the
+pixel's — which neighbours can reach is an exact separating-axis test
+against the bar's rectangle, worked out once per layer per bar rather
+than per pixel (`_bar_offsets`, story 4 doc, "Offset selection"). Both
+`_crosses_ink` and the sweep share one bar's growth/pen-cap maths
+(`_bar_ink`) so the pinned formula lives in exactly one place. `crosses`
+ignores `seed`.
 
 **`pen` is the widest a stroke gets**, as a fraction of the width that
 closes to solid ink (`(spacing + 1) / 2` half-width for `lines`/`dashes`,
@@ -201,6 +222,30 @@ def _tone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     return 1.0 - v
 
 
+def _cell_centre_tone(
+    u_centre: np.ndarray,
+    v_centre: np.ndarray,
+    cos_t: np.floating,
+    sin_t: np.floating,
+    t: np.ndarray,
+    h: int,
+    w: int,
+) -> np.ndarray:
+    """Tone read at a lattice cell centre (`u_centre, v_centre`, rotated
+    frame): mapped back to image space, rounded and clipped to bounds —
+    the same cell-centre lookup `_screen_channel` (`cmyk_halftone.py`)
+    uses. Shared by `_cell_lattice`'s own-cell tone (`crosses`/`stipple`)
+    and, for `crosses` past `cross_size`/`cross_aspect` = 1, every
+    neighbour cell the bar sweep visits (`_crosses_ink_sweep`, story 4) —
+    factored out so both read the identical lookup rather than risking
+    drift between an own-cell and a neighbour-cell copy."""
+    cx = u_centre * cos_t - v_centre * sin_t
+    cy = u_centre * sin_t + v_centre * cos_t
+    ix = np.clip(np.round(cx), 0, w - 1).astype(np.intp)
+    iy = np.clip(np.round(cy), 0, h - 1).astype(np.intp)
+    return t[iy, ix]
+
+
 def _cell_lattice(
     u: np.ndarray,
     v: np.ndarray,
@@ -218,9 +263,7 @@ def _cell_lattice(
     `(du, dv, cu, cv, t_cell)`: `du, dv` are the pixel's offset from its
     cell centre in the rotated frame (`|du|, |dv| <= S/2`); `cu, cv` are
     the cell's integer lattice indices (`int64`, for hashing); `t_cell` is
-    the tone read at the cell centre, mapped back to image space, rounded
-    and clipped to bounds — the same cell-centre lookup `_screen_channel`
-    (`cmyk_halftone.py`) uses."""
+    the tone at the cell centre (`_cell_centre_tone`)."""
     o_u, o_v = _CELL_OFFSETS[k]
     s = np.float32(spacing)
     cu = np.round(u / s - np.float32(o_u))
@@ -234,43 +277,192 @@ def _cell_lattice(
     du = u - u_centre
     dv = v - v_centre
 
-    cx = u_centre * cos_t - v_centre * sin_t
-    cy = u_centre * sin_t + v_centre * cos_t
-    ix = np.clip(np.round(cx), 0, w - 1).astype(np.intp)
-    iy = np.clip(np.round(cy), 0, h - 1).astype(np.intp)
-    t_cell = t[iy, ix]
+    t_cell = _cell_centre_tone(u_centre, v_centre, cos_t, sin_t, t, h, w)
 
     return du, dv, cu.astype(np.int64), cv.astype(np.int64), t_cell
 
 
-def _crosses_ink(
-    du: np.ndarray, dv: np.ndarray, c: np.ndarray, k: int, spacing: float, pen: float
-) -> np.ndarray:
-    """`crosses`' per-layer ink: a `+` (k = 0, 2) or `×` (k = 1, 3), the
-    union of two perpendicular `_area` bars. Geometry constants and growth
-    are pinned 2026-09-16 (story 2 doc, "crosses") — do not re-derive.
-    `pen` caps the bar half-width at a fraction of its closing width, so
-    arms still reach full length while the bars stay hairlines."""
+def _cross_geometry(
+    k: int, spacing: float
+) -> tuple[float, float, float, tuple[float, float], tuple[float, float]]:
+    """`crosses`' per-orientation geometry, one place so `+`'s and `×`'s
+    constants (pinned 2026-09-16, story 2 doc) are never re-derived or
+    copied: `(reach, w_close, h0, p_dir, r_dir)`. `reach` is the arm's
+    unscaled half-length, `w_close` the closing half-width `W`, `h0` the
+    minimum bar half-width; `p_dir`/`r_dir` are unit vectors along the
+    mark frame's `p`/`r` axes in `(du, dv)` space, used by the offsets
+    helper's separating-axis test (story 4 doc, "Offset selection")."""
     s = spacing
     if k % 2 == 0:
-        p, r = du, dv
         reach, w_close = s / 2.0, s / 2.0 + 0.5
+        p_dir, r_dir = (1.0, 0.0), (0.0, 1.0)
     else:
         sqrt2 = np.sqrt(2.0)
-        p, r = (du + dv) / sqrt2, (dv - du) / sqrt2
         reach, w_close = s / sqrt2, s / (2.0 * sqrt2) + 0.5
-
-    a_max = reach + 0.5
+        p_dir, r_dir = (1.0 / sqrt2, 1.0 / sqrt2), (-1.0 / sqrt2, 1.0 / sqrt2)
     h0 = max(0.5, 0.075 * s)
+    return reach, w_close, h0, p_dir, r_dir
 
+
+def _bar_ink(
+    along: np.ndarray,
+    across: np.ndarray,
+    c: np.ndarray,
+    a_max: float,
+    w_close: float,
+    h0: float,
+    pen: float,
+) -> np.ndarray:
+    """One `crosses` bar's ink at coverage `c`: an `_area` box-filter along
+    its own axis (half-length `a`, growing from `0` to `a_max`) times
+    another across its width (half-width `hw`, capped at `pen * w_close`
+    — story 3, unchanged). Shared by the single-cell path (`_crosses_ink`)
+    and every neighbour the sweep visits (`_crosses_ink_sweep`, story 4)
+    — the growth/pen-cap maths pinned in both docs lives here exactly
+    once."""
     phase1 = c <= 0.5
     a = np.where(phase1, a_max * (c / 0.5), a_max)
     hw = np.where(phase1, h0, h0 + (w_close - h0) * ((c - 0.5) / 0.5))
     hw = np.minimum(hw, pen * w_close)
+    return _area(np.abs(across), hw) * _area(np.abs(along), a)
 
-    bar1 = _area(np.abs(r), hw) * _area(np.abs(p), a)
-    bar2 = _area(np.abs(p), hw) * _area(np.abs(r), a)
+
+def _bar_offsets(
+    k: int, bar: int, f: float, pen: float, spacing: float
+) -> list[tuple[int, int]]:
+    """Neighbour cell offsets `(di, dj)`, own-cell-relative in lattice
+    units, whose `bar`'s (`1` along `p`, `2` along `r`) mark rectangle at
+    full growth can reach the own cell — an exact separating-axis test
+    between the own cell's square (half-extent `S/2`) and the neighbour's
+    bar rectangle (half-length `L = reach * f` along the bar axis,
+    half-width `H = max(0, pen * W - 0.5)`), *touching* excluded (story 4
+    doc, "Offset selection"). Pure Python, called once per layer per bar
+    — never per pixel. `(0, 0)` is always included."""
+    s = spacing
+    reach, w_close, _h0, p_dir, r_dir = _cross_geometry(k, s)
+    e, n = (p_dir, r_dir) if bar == 1 else (r_dir, p_dir)
+    axes = ((1.0, 0.0), (0.0, 1.0), e, n)
+
+    length = reach * f
+    half_width = max(0.0, pen * w_close - 0.5)
+    r_max = int(np.ceil((length + half_width) / s)) + 1
+
+    offsets: list[tuple[int, int]] = []
+    for di in range(-r_max, r_max + 1):
+        for dj in range(-r_max, r_max + 1):
+            cx, cy = di * s, dj * s
+            if all(
+                abs(cx * ax + cy * ay)
+                < s / 2.0 * (abs(ax) + abs(ay))
+                + length * abs(e[0] * ax + e[1] * ay)
+                + half_width * abs(n[0] * ax + n[1] * ay)
+                - 1e-9
+                for ax, ay in axes
+            ):
+                offsets.append((di, dj))
+    return offsets
+
+
+def _crosses_ink(
+    du: np.ndarray,
+    dv: np.ndarray,
+    c: np.ndarray,
+    k: int,
+    spacing: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+) -> np.ndarray:
+    """`crosses`' single-cell ink: a `+` (k = 0, 2) or `×` (k = 1, 3), the
+    union of two perpendicular `_area` bars, each pixel evaluating only
+    its own cell. Geometry constants and growth are pinned 2026-09-16
+    (story 2 doc, "crosses"); `cross_size`/`cross_aspect` scale each bar's
+    arm-length maximum independently, pinned 2026-09-17 (story 4 doc,
+    "Geometry") — do not re-derive either. `pen` caps the shared bar
+    half-width at a fraction of the closing width (story 3), so arms
+    still reach full length while the bars stay hairlines. Only the path
+    taken when `max(cross_size, cross_size * cross_aspect) <= 1` — past
+    that an arm can reach past its own cell and `_crosses_ink_sweep`
+    takes over. At `cross_size = cross_aspect = 1` this is bit-identical
+    to the op before this pair existed (`reach * 1.0 == reach`)."""
+    reach, w_close, h0, _p_dir, _r_dir = _cross_geometry(k, spacing)
+    if k % 2 == 0:
+        p, r = du, dv
+    else:
+        sqrt2 = np.sqrt(2.0)
+        p, r = (du + dv) / sqrt2, (dv - du) / sqrt2
+
+    f1 = cross_size * cross_aspect  # bar1, along p
+    f2 = cross_size  # bar2, along r
+
+    bar1 = _bar_ink(p, r, c, reach * f1 + 0.5, w_close, h0, pen)
+    bar2 = _bar_ink(r, p, c, reach * f2 + 0.5, w_close, h0, pen)
     return 1.0 - (1.0 - bar1) * (1.0 - bar2)
+
+
+def _crosses_ink_sweep(
+    cu: np.ndarray,
+    cv: np.ndarray,
+    du: np.ndarray,
+    dv: np.ndarray,
+    k: int,
+    spacing: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+    cos_t: np.floating,
+    sin_t: np.floating,
+    t: np.ndarray,
+    h: int,
+    w: int,
+    layers: int,
+    weight: float,
+) -> np.ndarray:
+    """`crosses`' neighbour sweep, taken when `max(cross_size, cross_size *
+    cross_aspect) > 1` (story 4 doc, "Two paths"): each bar's ink is the
+    union, over every neighbour cell whose bar can reach the pixel's own
+    cell (`_bar_offsets`), of that bar drawn *at the neighbour's own*
+    cell-centre tone (`_cell_centre_tone`) rather than the pixel's own
+    cell's tone. `(0, 0)` is always one of the neighbours, so this
+    subsumes the single-cell case; it isn't used there only because
+    `_bar_offsets` is pure-Python overhead the hot default path doesn't
+    need."""
+    s = spacing
+    o_u, o_v = _CELL_OFFSETS[k]
+    reach, w_close, h0, _p_dir, _r_dir = _cross_geometry(k, s)
+    f1 = cross_size * cross_aspect
+    f2 = cross_size
+    sqrt2 = np.float32(np.sqrt(2.0))
+
+    cu_f = cu.astype(np.float32)
+    cv_f = cv.astype(np.float32)
+    s_f = np.float32(s)
+    o_u_f, o_v_f = np.float32(o_u), np.float32(o_v)
+
+    def bar_union(bar: int, f: float, a_max: float) -> np.ndarray:
+        not_bar = np.ones_like(du, dtype=np.float32)
+        for di, dj in _bar_offsets(k, bar, f, pen, s):
+            du_n = du - np.float32(di) * s_f
+            dv_n = dv - np.float32(dj) * s_f
+            if k % 2 == 0:
+                p_n, r_n = du_n, dv_n
+            else:
+                p_n, r_n = (du_n + dv_n) / sqrt2, (dv_n - du_n) / sqrt2
+
+            u_centre_n = (cu_f + np.float32(di) + o_u_f) * s_f
+            v_centre_n = (cv_f + np.float32(dj) + o_v_f) * s_f
+            t_cell_n = _cell_centre_tone(u_centre_n, v_centre_n, cos_t, sin_t, t, h, w)
+            c_n = _c_k(t_cell_n, k, layers, weight)
+
+            along, across = (p_n, r_n) if bar == 1 else (r_n, p_n)
+            not_bar = not_bar * (
+                1.0 - _bar_ink(along, across, c_n, a_max, w_close, h0, pen)
+            )
+        return 1.0 - not_bar
+
+    bar1_union = bar_union(1, f1, reach * f1 + 0.5)
+    bar2_union = bar_union(2, f2, reach * f2 + 0.5)
+    return 1.0 - (1.0 - bar1_union) * (1.0 - bar2_union)
 
 
 def _stipple_ink(
@@ -343,6 +535,8 @@ def _stipple_ink(
         P("angle", "float", min=0.0, max=180.0, default=45.0, step=1.0),
         P("weight", "float", min=0.05, max=1.0, default=1.0, step=0.01),
         P("pen", "float", min=0.01, max=1.0, default=1.0, step=0.01),
+        P("cross_size", "float", min=0.25, max=3.0, default=1.0, step=0.05),
+        P("cross_aspect", "float", min=1.0, max=4.0, default=1.0, step=0.05),
         P(
             "source",
             "enum",
@@ -368,6 +562,8 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     weight = float(params.get("weight", 1.0))
     pen = max(0.0, min(1.0, float(params.get("pen", 1.0))))
     pen_f = np.float32(pen)
+    cross_size = max(0.25, min(3.0, float(params.get("cross_size", 1.0))))
+    cross_aspect = max(1.0, min(4.0, float(params.get("cross_aspect", 1.0))))
     seed = int(params.get("seed", 0))
 
     t = _tone(img, params)
@@ -385,11 +581,33 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         v = -xs * sin_t + ys * cos_t
 
         if pattern == "crosses":
-            du, dv, _cu, _cv, t_cell = _cell_lattice(
+            du, dv, cu, cv, t_cell = _cell_lattice(
                 u, v, k, spacing, cos_t, sin_t, t, h, w
             )
-            c_k = _c_k(t_cell, k, layers, weight)
-            ink_k = _crosses_ink(du, dv, c_k, k, spacing, pen)
+            if max(cross_size, cross_size * cross_aspect) <= 1.0:
+                c_k = _c_k(t_cell, k, layers, weight)
+                ink_k = _crosses_ink(
+                    du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
+                )
+            else:
+                ink_k = _crosses_ink_sweep(
+                    cu,
+                    cv,
+                    du,
+                    dv,
+                    k,
+                    spacing,
+                    pen,
+                    cross_size,
+                    cross_aspect,
+                    cos_t,
+                    sin_t,
+                    t,
+                    h,
+                    w,
+                    layers,
+                    weight,
+                )
         elif pattern == "stipple":
             du, dv, cu, cv, t_cell = _cell_lattice(
                 u, v, k, spacing, cos_t, sin_t, t, h, w

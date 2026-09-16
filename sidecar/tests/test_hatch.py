@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from ops import OPS
-from ops.hatch import _area, _hash01, hatch
+from ops.hatch import _area, _bar_offsets, _hash01, hatch
 
 PATTERNS = ("lines", "dashes", "crosses", "stipple")
 
@@ -565,6 +565,137 @@ def test_stipple_ignores_pen():
     b = hatch(img, {"pattern": "stipple", "seed": 3, "pen": 0.1})
 
     np.testing.assert_array_equal(a, b)
+
+
+# --- cross shape (story 4) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_cross_size_and_aspect_one_is_the_uncapped_op(pattern):
+    rng = np.random.default_rng(52)
+    img = _random_rgba(rng)
+    params = {"pattern": pattern, "layers": 3, "angle": 30, "seed": 7}
+
+    a = hatch(img, params)
+    b = hatch(img, {**params, "cross_size": 1.0, "cross_aspect": 1.0})
+
+    np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("pattern", ("lines", "dashes", "stipple"))
+def test_cross_size_and_aspect_ignored_outside_crosses(pattern):
+    rng = np.random.default_rng(53)
+    img = _random_rgba(rng)
+    params = {"pattern": pattern, "seed": 3}
+
+    a = hatch(img, params)
+    b = hatch(img, {**params, "cross_size": 2.5, "cross_aspect": 3.0})
+
+    np.testing.assert_array_equal(a, b)
+
+
+def test_cross_aspect_stretches_one_bar():
+    # t ~= 0.25 (flat grey, round(0.75*255)), layers=1, angle=0, S=16:
+    # [16, 22] and [22, 16] are both 6 px along a `+` bar from the cell
+    # centre (16, 16) at defaults -> paper. At cross_aspect=2 bar1 (along
+    # p, the `du` axis) reaches 6 px while bar2 (along r) doesn't (story 4
+    # doc, "Acceptance").
+    img = _flat(round((1.0 - 0.25) * 255), h=64, w=64)
+    params = {"pattern": "crosses", "layers": 1, "angle": 0, "spacing": 16.0}
+
+    out_default = hatch(img, params)
+    assert np.all(out_default[16, 22, :3] == 255)
+    assert np.all(out_default[22, 16, :3] == 255)
+
+    out_aspect = hatch(img, {**params, "cross_aspect": 2.0})
+    assert np.all(out_aspect[16, 22, :3] == 0)
+    assert np.all(out_aspect[22, 16, :3] == 255)
+
+
+def test_cross_size_bleeds_into_lighter_neighbour():
+    # 64x96, columns 0..39 black, the rest white, crosses, layers=1,
+    # angle=0, S=16: at defaults the first all-white cell's centre (16,
+    # 48) is paper. At cross_size=2, the arm reaching out from the black
+    # cell at column 32 (offset (-1, 0) from the white cell) reaches it
+    # (story 4 doc, "Acceptance").
+    img = np.zeros((64, 96, 4), dtype=np.uint8)
+    img[:, 40:] = 255
+    img[..., 3] = 255
+    params = {"pattern": "crosses", "layers": 1, "angle": 0, "spacing": 16.0}
+
+    out_default = hatch(img, params)
+    assert np.all(out_default[16, 48, :3] == 255)
+
+    out_size = hatch(img, {**params, "cross_size": 2.0})
+    assert np.all(out_size[16, 48, :3] == 0)
+
+
+@pytest.mark.parametrize("layers", [1, 4])
+@pytest.mark.parametrize("angle", [0, 30])
+@pytest.mark.parametrize("spacing", [6, 16])
+def test_cross_size_black_closes_at_large_sizes(layers, angle, spacing):
+    img = _flat(0, h=64, w=64)
+
+    out = hatch(
+        img,
+        {
+            "pattern": "crosses",
+            "layers": layers,
+            "angle": angle,
+            "spacing": spacing,
+            "cross_size": 2.0,
+            "cross_aspect": 3.0,
+            "seed": 7,
+        },
+    )
+
+    assert np.all(out[..., :3] == 0)
+
+
+def test_small_crosses_stay_open():
+    img = _flat(0)
+
+    out = hatch(img, {"pattern": "crosses", "cross_size": 0.5})
+
+    assert np.any(np.all(out[..., :3] == 255, axis=-1))
+
+
+@pytest.mark.parametrize("layers", [1, 4])
+def test_cross_size_and_aspect_keep_ink_coverage_monotonic(layers):
+    means = []
+    for step in range(11):
+        value = round((1.0 - step / 10.0) * 255)
+        out = hatch(
+            _flat(value),
+            {
+                "pattern": "crosses",
+                "layers": layers,
+                "cross_size": 2.0,
+                "cross_aspect": 2.0,
+            },
+        )
+        means.append(1.0 - out[..., 0].mean() / 255.0)
+
+    assert all(means[i] <= means[i + 1] + 1e-9 for i in range(len(means) - 1))
+
+
+def test_bar_offsets_single_cell_at_f_one():
+    # `+` (k=0), pen=1, f=1: bar1's arm exactly reaches its own cell edge
+    # and no further (story 4 doc, "Offset selection", "Acceptance").
+    offsets = _bar_offsets(0, 1, 1.0, 1.0, 16.0)
+
+    assert offsets == [(0, 0)]
+
+
+def test_bar_offsets_sweep_includes_along_axis_excludes_across():
+    # `+` (k=0), pen=1, f=2: bar1 runs along p (the `du`/(1, 0) axis), so
+    # its arm reaches the neighbours at (-1, 0)/(1, 0) but not (0, -1)/
+    # (0, 1) (story 4 doc, "Acceptance").
+    offsets = set(_bar_offsets(0, 1, 2.0, 1.0, 16.0))
+
+    assert {(-1, 0), (0, 0), (1, 0)} <= offsets
+    assert (0, 1) not in offsets
+    assert (0, -1) not in offsets
 
 
 # --- helpers: _area, _hash01 ----------------------------------------------------------
