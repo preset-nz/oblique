@@ -16,6 +16,7 @@ from ops.desaturate import desaturate
 from ops.dilate import dilate
 from ops.edge_noise import edge_noise
 from ops.erode import erode
+from ops.hatch import hatch
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
 from ops.recolour import recolour
@@ -43,6 +44,7 @@ ALL_OPS = [
     (dilate, {"radius": 3.0}),
     (erode, {"radius": 3.0}),
     (edge_noise, {"amount": 0.4, "scale": 12.0, "seed": 7}),
+    (hatch, {"pattern": "dashes", "layers": 3, "spacing": 5.0, "seed": 7}),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to
@@ -116,6 +118,7 @@ def test_all_ops_are_split_between_the_two_suites():
         "pixelate",
         "colourise",
         "recolour",
+        "hatch",
     ],
 )
 def test_registered_in_ops_registry(name):

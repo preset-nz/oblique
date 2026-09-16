@@ -212,6 +212,7 @@ from ops import edge_noise as _edge_noise  # noqa: E402, F401
 from ops import erode as _erode  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
+from ops import hatch as _hatch  # noqa: E402, F401
 from ops import ink_starved as _ink_starved  # noqa: E402, F401
 from ops import invert as _invert  # noqa: E402, F401
 from ops import levels as _levels  # noqa: E402, F401
