@@ -1,10 +1,12 @@
-"""Semantic tests for `hatch` (epic 18, story 1: tone model, `lines` and
-`dashes`). `PATTERNS` is deliberately a module-level tuple so story 2
-(`crosses`, `stipple`) extends coverage by appending to it rather than
-duplicating every test.
+"""Semantic tests for `hatch` (epic 18: story 1 — tone model, `lines` and
+`dashes`; story 2 — the cell-based `crosses` and `stipple`). `PATTERNS`
+is deliberately a module-level tuple so story 2 extends the shared
+battery by appending to it rather than duplicating every test.
 """
 
 from __future__ import annotations
+
+import hashlib
 
 import numpy as np
 import pytest
@@ -12,7 +14,15 @@ import pytest
 from ops import OPS
 from ops.hatch import _area, _hash01, hatch
 
-PATTERNS = ("lines", "dashes")
+PATTERNS = ("lines", "dashes", "crosses", "stipple")
+
+# Cell-based patterns (`crosses`/`stipple`) clamp their cell-centre tone
+# lookup to the image bounds (story 2 doc, "Lattice"), so cells within
+# `2 * spacing` of the right/bottom edges can legitimately differ from the
+# same region in a padded image. Tests that rely on every-pixel identity
+# across image sizes (translation stability) compare only the interior
+# for these patterns.
+_CELL_PATTERNS = ("crosses", "stipple")
 
 
 def _flat(value: int, h: int = 40, w: int = 40) -> np.ndarray:
@@ -21,6 +31,31 @@ def _flat(value: int, h: int = 40, w: int = 40) -> np.ndarray:
 
 def _random_rgba(rng: np.random.Generator, h: int = 24, w: int = 32) -> np.ndarray:
     return rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+
+
+# --- story 1 regression: byte-identical `lines`/`dashes` output ---------------
+#
+# Pinned before story 2 touched `hatch.py` at all, on a fixed 64x48 seeded
+# RGBA image (`np.random.default_rng(42)`), `layers=3, angle=30, seed=7`.
+# Story 2 restructures the per-layer coverage machinery to share it with the
+# new cell patterns; these digests guard that `lines`/`dashes` output cannot
+# drift as a side effect.
+
+_STORY_1_REGRESSION_DIGESTS = {
+    "lines": "7e54312079f98f974a7e8a73e70bfde0f6ad7a768446662e26987ab7cf7f02f9",
+    "dashes": "8524a41065c595953424f2c136c6631bd7f55f477edee625c8ff12dfc25167d7",
+}
+
+
+@pytest.mark.parametrize("pattern", ("lines", "dashes"))
+def test_story_1_output_byte_identical_regression(pattern):
+    rng = np.random.default_rng(42)
+    img = rng.integers(0, 256, size=(48, 64, 4), dtype=np.uint8)
+
+    out = hatch(img, {"pattern": pattern, "layers": 3, "angle": 30, "seed": 7})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    assert digest == _STORY_1_REGRESSION_DIGESTS[pattern]
 
 
 # --- shared battery ---------------------------------------------------------
@@ -308,10 +343,12 @@ def test_lines_ignores_seed():
 # --- translation stability --------------------------------------------------------
 
 
-def test_translation_stability():
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_translation_stability(pattern):
     rng = np.random.default_rng(34)
-    h, w = 24, 30
-    pad = 10
+    h, w = 40, 48
+    pad = 12
+    spacing = 8.0
     img = _random_rgba(rng, h=h, w=w)
 
     padded = np.zeros((h + pad, w + pad, 4), dtype=np.uint8)
@@ -319,11 +356,21 @@ def test_translation_stability():
     padded[h:, :] = rng.integers(0, 256, size=(pad, w + pad, 4), dtype=np.uint8)
     padded[:, w:] = rng.integers(0, 256, size=(h + pad, pad, 4), dtype=np.uint8)
 
-    params = {"pattern": "dashes", "seed": 7, "angle": 30}
+    params = {"pattern": pattern, "seed": 7, "angle": 30, "spacing": spacing}
     out_img = hatch(img, params)
     out_padded = hatch(padded, params)[:h, :w]
 
-    np.testing.assert_array_equal(out_img, out_padded)
+    if pattern in _CELL_PATTERNS:
+        # Cell patterns clamp their cell-centre lookup to the image
+        # bounds, so cells within 2 * spacing of the right/bottom edges
+        # can legitimately differ (story 2 doc, "Acceptance").
+        margin = int(2 * spacing)
+        np.testing.assert_array_equal(
+            out_img[: h - margin, : w - margin],
+            out_padded[: h - margin, : w - margin],
+        )
+    else:
+        np.testing.assert_array_equal(out_img, out_padded)
 
 
 # --- one spatial param -------------------------------------------------------------
@@ -347,6 +394,95 @@ def test_garbage_ink_colour_falls_back_to_black():
     garbage_out = hatch(img, {"ink": "not a colour"})
 
     np.testing.assert_array_equal(default_out, garbage_out)
+
+
+# --- crosses and stipple (story 2) ------------------------------------------------
+
+
+def _cells(out_rgb: np.ndarray, margin: int, cell: int) -> np.ndarray:
+    """Reshape an interior crop of `out_rgb` (cropped by `margin` on every
+    side so cell boundaries land on `cell`-px multiples) into one block per
+    lattice cell, `(rows, cell, cols, cell, 3)`."""
+    h, w = out_rgb.shape[:2]
+    cropped = out_rgb[margin : h - margin, margin : w - margin]
+    rows, cols = cropped.shape[0] // cell, cropped.shape[1] // cell
+    cropped = cropped[: rows * cell, : cols * cell]
+    return cropped.reshape(rows, cell, cols, cell, 3)
+
+
+def test_crosses_cell_centre_inked_corner_paper():
+    # t ~= 0.498 (flat grey 128), layers=1 -> c_0 ~= 0.498, the arm-growth
+    # phase (c <= 0.5). Cell centres sit at multiples of `spacing` when
+    # angle=0 and layer 0's lattice offset is (0, 0).
+    img = _flat(128, h=64, w=64)
+
+    out = hatch(img, {"pattern": "crosses", "layers": 1, "angle": 0, "spacing": 16.0})
+
+    assert np.all(out[0, 0, :3] == 0)
+    assert np.all(out[8, 8, :3] == 255)
+
+
+def test_crosses_x_orientation_reaches_further_than_plus_on_the_diagonal():
+    # `+` (k=0, offset (0,0), centre at (0,0)) and `x` (k=1, offset
+    # (1/2, 1/2), centre at (8,8)) have different geometry constants
+    # (story 2 doc, "crosses" — reach S/2 vs S/root2, W S/2+0.5 vs
+    # S/(2*root2)+0.5): the `x` mark's arm runs along the diagonal, so it
+    # reaches a diagonal offset the `+` mark's (axis-aligned) arms can't,
+    # at the same coverage. `t=0.6` puts both layers' arms in the growth
+    # phase (c <= 0.5).
+    img = _flat(round((1.0 - 0.6) * 255), h=64, w=64)
+
+    out = hatch(img, {"pattern": "crosses", "layers": 2, "angle": 0, "spacing": 16.0})
+
+    assert np.all(out[3, 3, :3] == 255)  # `+` centre (0, 0), diagonal offset
+    assert np.any(out[11, 11, :3] < 255)  # `x` centre (8, 8), same offset
+
+
+def test_stipple_sparse_in_the_light():
+    value = round((1.0 - 0.1) * 255)
+    img = _flat(value, h=80, w=80)
+    spacing = 8
+
+    out_a = hatch(
+        img, {"pattern": "stipple", "layers": 1, "spacing": float(spacing), "seed": 1}
+    )
+    out_b = hatch(
+        img, {"pattern": "stipple", "layers": 1, "spacing": float(spacing), "seed": 2}
+    )
+
+    margin = spacing // 2
+    cells_a = _cells(out_a[..., :3], margin, spacing)
+    cells_b = _cells(out_b[..., :3], margin, spacing)
+    inked_a = np.any(cells_a < 255, axis=(1, 3, 4))
+    inked_b = np.any(cells_b < 255, axis=(1, 3, 4))
+
+    assert 0 < inked_a.mean() < 1
+    assert not np.array_equal(inked_a, inked_b)
+
+
+def test_stipple_whole_in_the_dark():
+    value = round((1.0 - 0.6) * 255)
+    img = _flat(value, h=80, w=80)
+    spacing = 8
+
+    out = hatch(
+        img, {"pattern": "stipple", "layers": 1, "spacing": float(spacing), "seed": 1}
+    )
+
+    margin = spacing // 2
+    cells = _cells(out[..., :3], margin, spacing)
+    inked = np.any(cells < 255, axis=(1, 3, 4))
+
+    assert inked.all()
+
+
+def test_crosses_ignore_seed():
+    img = _flat(128, h=64, w=64)
+
+    a = hatch(img, {"pattern": "crosses", "seed": 1})
+    b = hatch(img, {"pattern": "crosses", "seed": 2})
+
+    np.testing.assert_array_equal(a, b)
 
 
 # --- helpers: _area, _hash01 ----------------------------------------------------------

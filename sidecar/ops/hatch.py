@@ -1,6 +1,6 @@
-"""`hatch` — redraw tone as ink marks: hatched lines or dashes whose
-density follows the image's darkness (epic 18, story 1: `lines`/`dashes`;
-story 2 adds `crosses`/`stipple` on the same machinery).
+"""`hatch` — redraw tone as ink marks: hatched lines, dashes, crosses or
+stipple dots whose density follows the image's darkness (epic 18, story 1:
+`lines`/`dashes`; story 2 adds `crosses`/`stipple` on the same machinery).
 
 **Tone.** `source` picks a 0..1 channel — `luma` via the shared
 `LUMA_R709`/`LUMA_G709`/`LUMA_B709` weights, or a single `red`/`green`/
@@ -16,16 +16,18 @@ the last, so the first `layers - 1` layers, treated as independent
 crossing families, together cover roughly `(layers-1)/layers`; the last
 layer is allowed to close to solid, carrying tone to full ink at `t = 1`.
 `layers = 1` degenerates to a single width-modulated family (engraving);
-`layers = 4` is classic stacking crosshatch. Layer `k`'s angle is
-`angle + (0, 90, 45, 135)[k]` degrees, and layers combine as an ink union
-(`K = 1 - prod(1 - ink_k)`).
+`layers = 4` is classic stacking crosshatch. `_c_k` is this model as a
+small reusable helper: `lines`/`dashes` evaluate it on the per-pixel tone;
+`crosses`/`stipple` evaluate it on a per-cell tone lookup (below). Layers
+combine as an ink union (`K = 1 - prod(1 - ink_k)`).
 
-**Marks are analytic**, worked out in rotated per-layer coordinates (`u`
-along the stroke, `v` across it, both a pure function of the pixel's own
-`(x, y)` — no per-image centring, so a mark's position never depends on
-image size). There is **no Python loop except over `layers`**; every
-per-pixel field is `float32` (four `float64` layers at 4K is a lot of
-memory for no visible gain).
+**`lines` and `dashes` are continuous strokes**, worked out in rotated
+per-layer coordinates (`u` along the stroke, `v` across it, both a pure
+function of the pixel's own `(x, y)` — no per-image centring, so a mark's
+position never depends on image size). Layer `k`'s angle is
+`angle + (0, 90, 45, 135)[k]` degrees. There is **no Python loop except
+over `layers`**; every per-pixel field is `float32` (four `float64`
+layers at 4K is a lot of memory for no visible gain).
 
 **Anti-aliasing** is an *exact* 1-D box-filter overlap area (`_area`)
 between a 1 px pixel and a stroke of half-width `h` — not a smoothstep,
@@ -46,6 +48,32 @@ how many lines the image spans, so dash phases would shift between
 DRAFT/WORKING/BAKED and between differently sized nodes. `lines` never
 calls it and so ignores `seed` outright.
 
+**`crosses` and `stipple` are cell-based** (`_cell_lattice`, the same
+shape as `_screen_channel` in `cmyk_halftone.py`): one whole mark per
+lattice cell, tone sampled once at the cell centre rather than per pixel,
+so a mark is whole and sized to its cell's tone rather than thickening
+along its own length. The lattice rotates by `angle` only — cell patterns
+carry no per-layer angle offset (`crosses` puts its orientation in the
+mark instead) — and layer `k` shifts the lattice by a per-layer offset in
+cell units, `((0, 0), (½, ½), (½, 0), (0, ½))[k]`, so successive layers
+don't stack on the same cell seams. Only a pixel's own cell is evaluated;
+neighbouring cells at different tones meet at a visible seam, the same
+trade-off `cmyk_halftone` makes.
+
+`crosses` draws a `+` (layers 0, 2) or `×` (layers 1, 3): the union of two
+perpendicular bars, each bar a product of two `_area` calls (one across,
+one along), with geometry constants (`A_max`, `W`, `h0`) pinned 2026-09-16
+so every pixel in a cell is covered by at least one full-length arm before
+either bar starts thickening — the no-pinhole closure. `crosses` ignores
+`seed`.
+
+`stipple` draws one jittered, anti-aliased disc per cell, born once
+`c_k` crosses a per-cell seeded threshold (`_hash01` salted 1) and then
+growing in radius (light tones are density-led: dots appear one at a
+time) until every cell's dot has merged into solid ink (dark tones are
+size-led). The dot's centre jitters within its cell (`_hash01` salted 2
+and 3) so it never lines up into a regular screen. `stipple` uses `seed`.
+
 **Output.** Colours parse via `hex_to_rgb01`, falling back to their own
 default on a garbage string. `paper_is_alpha=False` (default) paints
 `paper*(1-K) + ink*K` into RGB and leaves alpha exactly as the input's;
@@ -62,12 +90,24 @@ import numpy as np
 
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, hex_to_rgb01, op
 
-# Layer k's angle offset from the `angle` param, degrees. Two layers give a
-# perpendicular crosshatch; three and four add the diagonals.
+# Layer k's angle offset from the `angle` param, degrees, for the
+# continuous-stroke patterns (`lines`/`dashes`). Two layers give a
+# perpendicular crosshatch; three and four add the diagonals. Cell
+# patterns (`crosses`/`stipple`) don't use this table — they rotate by
+# `angle` only and carry per-layer variation in the lattice offset and,
+# for `crosses`, the mark orientation instead.
 _LAYER_ANGLE_OFFSETS = (0.0, 90.0, 45.0, 135.0)
 
 # `dashes`' along-line dash period, as a multiple of `spacing`.
 _DASH_PERIOD = 3.0
+
+# Layer k's lattice offset, in cell units, for the cell-based patterns
+# (`crosses`/`stipple`). Keeps successive layers off the same cell seams.
+_CELL_OFFSETS = ((0.0, 0.0), (0.5, 0.5), (0.5, 0.0), (0.0, 0.5))
+
+# `stipple`'s birth threshold, as a fraction of full coverage: a cell's
+# dot is born once its layer coverage `c` reaches `_STIPPLE_BIRTH * h1`.
+_STIPPLE_BIRTH = 0.25
 
 _SPLITMIX_INC = np.uint64(0x9E3779B97F4A7C15)
 
@@ -106,6 +146,18 @@ def _area(d: np.ndarray, h: np.ndarray) -> np.ndarray:
     return np.clip(np.minimum(d + 0.5, h) - np.maximum(d - 0.5, -h), 0.0, 1.0)
 
 
+def _c_k(t: np.ndarray, k: int, layers: int, weight: float) -> np.ndarray:
+    """Layer `k`'s mark coverage in [0, 1] at tone `t` (darkness): the
+    shared layer tone model (module docstring, "Layers"). `t` may be the
+    per-pixel tone (`lines`/`dashes`) or a per-pixel array of cell-centre
+    tone lookups (`crosses`/`stipple`) — the maths is the same either
+    way."""
+    ramp_k = np.clip(t * layers - k, 0.0, 1.0)
+    q = 1.0 - layers ** (-1.0 / (layers - 1)) if layers >= 2 else 1.0
+    q_k = q if k < layers - 1 else 1.0
+    return np.float32(weight * q_k) * ramp_k
+
+
 def _tone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     """RGB -> darkness `t` in [0, 1]: `source` channel, then the `levels`
     op's `black`/`white`/`gamma` remap. `float32` throughout."""
@@ -137,16 +189,132 @@ def _tone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     return 1.0 - v
 
 
+def _cell_lattice(
+    u: np.ndarray,
+    v: np.ndarray,
+    k: int,
+    spacing: float,
+    cos_t: np.floating,
+    sin_t: np.floating,
+    t: np.ndarray,
+    h: int,
+    w: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Lattice for cell-based patterns (`crosses`/`stipple`), layer `k`:
+    `u, v` are the pixel's rotated coordinates (rotation shared across
+    layers — cell patterns carry no per-layer angle offset). Returns
+    `(du, dv, cu, cv, t_cell)`: `du, dv` are the pixel's offset from its
+    cell centre in the rotated frame (`|du|, |dv| <= S/2`); `cu, cv` are
+    the cell's integer lattice indices (`int64`, for hashing); `t_cell` is
+    the tone read at the cell centre, mapped back to image space, rounded
+    and clipped to bounds — the same cell-centre lookup `_screen_channel`
+    (`cmyk_halftone.py`) uses."""
+    o_u, o_v = _CELL_OFFSETS[k]
+    s = np.float32(spacing)
+    cu = np.round(u / s - np.float32(o_u))
+    cv = np.round(v / s - np.float32(o_v))
+
+    # Cell centre in the rotated frame, shared by `du`/`dv` and the
+    # image-space lookup below — a single source so the two can't drift
+    # apart.
+    u_centre = (cu + np.float32(o_u)) * s
+    v_centre = (cv + np.float32(o_v)) * s
+    du = u - u_centre
+    dv = v - v_centre
+
+    cx = u_centre * cos_t - v_centre * sin_t
+    cy = u_centre * sin_t + v_centre * cos_t
+    ix = np.clip(np.round(cx), 0, w - 1).astype(np.intp)
+    iy = np.clip(np.round(cy), 0, h - 1).astype(np.intp)
+    t_cell = t[iy, ix]
+
+    return du, dv, cu.astype(np.int64), cv.astype(np.int64), t_cell
+
+
+def _crosses_ink(
+    du: np.ndarray, dv: np.ndarray, c: np.ndarray, k: int, spacing: float
+) -> np.ndarray:
+    """`crosses`' per-layer ink: a `+` (k = 0, 2) or `×` (k = 1, 3), the
+    union of two perpendicular `_area` bars. Geometry constants and growth
+    are pinned 2026-09-16 (story 2 doc, "crosses") — do not re-derive."""
+    s = spacing
+    if k % 2 == 0:
+        p, r = du, dv
+        reach, w_close = s / 2.0, s / 2.0 + 0.5
+    else:
+        sqrt2 = np.sqrt(2.0)
+        p, r = (du + dv) / sqrt2, (dv - du) / sqrt2
+        reach, w_close = s / sqrt2, s / (2.0 * sqrt2) + 0.5
+
+    a_max = reach + 0.5
+    h0 = max(0.5, 0.075 * s)
+
+    phase1 = c <= 0.5
+    a = np.where(phase1, a_max * (c / 0.5), a_max)
+    hw = np.where(phase1, h0, h0 + (w_close - h0) * ((c - 0.5) / 0.5))
+
+    bar1 = _area(np.abs(r), hw) * _area(np.abs(p), a)
+    bar2 = _area(np.abs(p), hw) * _area(np.abs(r), a)
+    return 1.0 - (1.0 - bar1) * (1.0 - bar2)
+
+
+def _stipple_ink(
+    du: np.ndarray,
+    dv: np.ndarray,
+    c: np.ndarray,
+    cu: np.ndarray,
+    cv: np.ndarray,
+    k: int,
+    seed: int,
+    spacing: float,
+) -> np.ndarray:
+    """`stipple`'s per-layer ink: one jittered, anti-aliased disc per cell,
+    born at a per-cell seeded threshold and growing until it closes the
+    cell (story 2 doc, "stipple"). Density-led in the light tones (dots
+    appear one at a time), size-led in the dark (dots swell to solid)."""
+    s = spacing
+    h1 = _hash01(cu, cv, k, seed, 1).astype(np.float32)
+    h2 = _hash01(cu, cv, k, seed, 2).astype(np.float32)
+    h3 = _hash01(cu, cv, k, seed, 3).astype(np.float32)
+
+    birth = np.float32(_STIPPLE_BIRTH)
+    beta = birth * h1
+    r0 = np.float32(max(0.75, 0.12 * s))
+    r_close = np.float32(s / np.sqrt(2.0) + 0.5)
+
+    r = np.where(
+        c < beta,
+        np.float32(0.0),
+        np.where(
+            c <= birth,
+            r0,
+            r0 + (r_close - r0) * (c - birth) / (np.float32(1.0) - birth),
+        ),
+    )
+
+    j = np.maximum(np.float32(0.0), np.float32(s / 2.0) - r)
+    jx = (h2 - np.float32(0.5)) * np.float32(2.0) * j
+    jy = (h3 - np.float32(0.5)) * np.float32(2.0) * j
+    dist = np.hypot(du - jx, dv - jy)
+
+    return np.where(r <= 0.0, 0.0, np.clip(r - dist + 0.5, 0.0, 1.0))
+
+
 @op(
     "hatch",
     label="Hatch",
     description=(
-        "Redraw tone as pen marks — hatched lines or dashes whose density "
-        "follows the image's darkness. Layers stack crosshatch; one layer "
-        "engraves."
+        "Redraw tone as pen marks — hatched lines, dashes, crosses or "
+        "stipple dots whose density follows the image's darkness. Layers "
+        "stack crosshatch; one layer engraves."
     ),
     params=[
-        P("pattern", "enum", default="lines", choices=("lines", "dashes")),
+        P(
+            "pattern",
+            "enum",
+            default="lines",
+            choices=("lines", "dashes", "crosses", "stipple"),
+        ),
         P("layers", "int", min=1, max=4, default=2, step=1),
         P(
             "spacing",
@@ -185,26 +353,36 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     seed = int(params.get("seed", 0))
 
     t = _tone(img, params)
-
-    q = 1.0 - layers ** (-1.0 / (layers - 1)) if layers >= 2 else 1.0
+    cell_based = pattern in ("crosses", "stipple")
 
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
 
     coverage = np.zeros((h, w), dtype=np.float32)
     for k in range(layers):
-        ramp_k = np.clip(t * layers - k, 0.0, 1.0)
-        q_k = q if k < layers - 1 else 1.0
-        c_k = np.float32(weight * q_k) * ramp_k
-
-        theta = np.deg2rad(angle + _LAYER_ANGLE_OFFSETS[k])
+        theta_deg = angle if cell_based else angle + _LAYER_ANGLE_OFFSETS[k]
+        theta = np.deg2rad(theta_deg)
         cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
 
         u = xs * cos_t + ys * sin_t
         v = -xs * sin_t + ys * cos_t
-        n = np.round(v / np.float32(spacing))
-        d = np.abs(v - n * np.float32(spacing))
 
-        if pattern == "dashes":
+        if pattern == "crosses":
+            du, dv, _cu, _cv, t_cell = _cell_lattice(
+                u, v, k, spacing, cos_t, sin_t, t, h, w
+            )
+            c_k = _c_k(t_cell, k, layers, weight)
+            ink_k = _crosses_ink(du, dv, c_k, k, spacing)
+        elif pattern == "stipple":
+            du, dv, cu, cv, t_cell = _cell_lattice(
+                u, v, k, spacing, cos_t, sin_t, t, h, w
+            )
+            c_k = _c_k(t_cell, k, layers, weight)
+            ink_k = _stipple_ink(du, dv, c_k, cu, cv, k, seed, spacing)
+        elif pattern == "dashes":
+            n = np.round(v / np.float32(spacing))
+            d = np.abs(v - n * np.float32(spacing))
+            c_k = _c_k(t, k, layers, weight)
+
             a = np.sqrt(c_k)
             across_h = a * np.float32((spacing + 1.0) / 2.0)
             ink_k = _area(d, across_h)
@@ -215,6 +393,10 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             along_h = a * ((period + 1.0) / 2.0)
             ink_k = ink_k * _area(e, along_h)
         else:
+            n = np.round(v / np.float32(spacing))
+            d = np.abs(v - n * np.float32(spacing))
+            c_k = _c_k(t, k, layers, weight)
+
             stroke_h = c_k * np.float32((spacing + 1.0) / 2.0)
             ink_k = _area(d, stroke_h)
 
