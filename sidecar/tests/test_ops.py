@@ -378,3 +378,206 @@ def test_hex_to_rgb01_parses_valid_hex(value, expected):
 def test_hex_to_rgb01_falls_back_and_never_raises(value):
     fallback = (0.5, 0.25, 0.75)
     assert hex_to_rgb01(value, fallback=fallback) == fallback
+
+
+# --- disabled_when contract (Epic 18 story 5) ------------------------------
+
+
+def test_no_other_registered_op_emits_disabled_when():
+    # `hatch` is disabled_when's first user (story 5 doc). Every other op's
+    # list_ops payload must stay byte-identical.
+    for name, entry in OPS.items():
+        if name == "hatch":
+            continue
+        for param in entry.to_dict()["params"]:
+            assert "disabledWhen" not in param, (
+                f"{name}.{param['name']} unexpectedly carries disabledWhen"
+            )
+
+
+def test_disabled_when_path_must_name_another_param_of_the_same_op():
+    with pytest.raises(ValueError, match="disabled_when path"):
+
+        @op(
+            "temp_test_disabled_when_unknown_path",
+            [
+                ParamSpec("pattern", "enum", default="a", choices=("a", "b")),
+                ParamSpec(
+                    "pen",
+                    "float",
+                    default=1.0,
+                    disabled_when={"path": "does_not_exist", "equals": "a"},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_unknown_path" not in OPS
+
+
+def test_disabled_when_path_cannot_name_itself():
+    with pytest.raises(ValueError, match="disabled_when path"):
+
+        @op(
+            "temp_test_disabled_when_self_path",
+            [
+                ParamSpec(
+                    "pen",
+                    "float",
+                    default=1.0,
+                    disabled_when={"path": "pen", "equals": 1.0},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_self_path" not in OPS
+
+
+def test_disabled_when_requires_exactly_one_operator():
+    with pytest.raises(ValueError, match="exactly one of"):
+
+        @op(
+            "temp_test_disabled_when_two_operators",
+            [
+                ParamSpec("pattern", "enum", default="a", choices=("a", "b")),
+                ParamSpec(
+                    "pen",
+                    "float",
+                    default=1.0,
+                    disabled_when={
+                        "path": "pattern",
+                        "equals": "a",
+                        "notEquals": "b",
+                    },
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_two_operators" not in OPS
+
+
+def test_disabled_when_requires_at_least_one_operator():
+    with pytest.raises(ValueError, match="exactly one of"):
+
+        @op(
+            "temp_test_disabled_when_no_operator",
+            [
+                ParamSpec("pattern", "enum", default="a", choices=("a", "b")),
+                ParamSpec(
+                    "pen",
+                    "float",
+                    default=1.0,
+                    disabled_when={"path": "pattern"},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_no_operator" not in OPS
+
+
+def test_disabled_when_rejects_unknown_operator_key():
+    with pytest.raises(ValueError, match="unknown key"):
+
+        @op(
+            "temp_test_disabled_when_unknown_key",
+            [
+                ParamSpec("pattern", "enum", default="a", choices=("a", "b")),
+                ParamSpec(
+                    "pen",
+                    "float",
+                    default=1.0,
+                    disabled_when={"path": "pattern", "greaterThan": "a"},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_unknown_key" not in OPS
+
+
+@pytest.mark.parametrize(
+    "case,operand",
+    [("empty_tuple", ()), ("scalar", "a")],
+)
+def test_disabled_when_in_must_be_a_non_empty_list_or_tuple(case, operand):
+    op_name = f"temp_test_disabled_when_bad_in_{case}"
+
+    with pytest.raises(ValueError, match="non-empty list/tuple"):
+
+        @op(
+            op_name,
+            [
+                ParamSpec("pattern", "enum", default="a", choices=("a", "b")),
+                ParamSpec(
+                    "seed",
+                    "int",
+                    default=0,
+                    disabled_when={"path": "pattern", "in": operand},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert op_name not in OPS
+
+
+def test_disabled_when_enum_value_must_be_a_valid_choice():
+    # Catches `"cross"` vs `"crosses"` — a typo'd operand fails at import,
+    # not silently in the UI.
+    with pytest.raises(ValueError, match="not in its choices"):
+
+        @op(
+            "temp_test_disabled_when_bad_enum_value",
+            [
+                ParamSpec(
+                    "pattern",
+                    "enum",
+                    default="lines",
+                    choices=("lines", "dashes", "crosses", "stipple"),
+                ),
+                ParamSpec(
+                    "cross_size",
+                    "float",
+                    default=1.0,
+                    disabled_when={"path": "pattern", "equals": "cross"},
+                ),
+            ],
+        )
+        def _temp(img, params):  # noqa: ANN001, ARG001
+            return img
+
+    assert "temp_test_disabled_when_bad_enum_value" not in OPS
+
+
+def test_disabled_when_valid_registration_round_trips_through_to_dict():
+    @op(
+        "temp_test_disabled_when_valid",
+        [
+            ParamSpec("pattern", "enum", default="lines", choices=("lines", "dashes")),
+            ParamSpec(
+                "seed",
+                "int",
+                default=0,
+                disabled_when={"path": "pattern", "notIn": ("dashes",)},
+            ),
+        ],
+    )
+    def _temp(img, params):  # noqa: ANN001, ARG001
+        return img
+
+    try:
+        assert "temp_test_disabled_when_valid" in OPS
+        entry = OPS["temp_test_disabled_when_valid"].to_dict()
+        seed_param = next(p for p in entry["params"] if p["name"] == "seed")
+        assert seed_param["disabledWhen"] == {"path": "pattern", "notIn": ["dashes"]}
+    finally:
+        del OPS["temp_test_disabled_when_valid"]

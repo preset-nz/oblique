@@ -36,7 +36,14 @@ export interface ModifierSelection {
 }
 
 function paramToField(spec: OpParamSpec): FieldDef {
-  const base = { id: spec.name, path: spec.name, label: spec.name };
+  const base = {
+    id: spec.name,
+    path: spec.name,
+    label: spec.name,
+    // Presentation-only greying (Epic 18 story 5) — no per-op special-casing,
+    // this is a straight pass-through of whatever the op's home backend sent.
+    ...(spec.disabledWhen ? { disabledWhen: spec.disabledWhen } : {}),
+  };
 
   switch (spec.type) {
     case 'bool':

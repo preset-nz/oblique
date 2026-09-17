@@ -46,6 +46,13 @@ class ParamSpec:
     widget: ParamWidget | None = (
         None  # UI hint, e.g. "slider" over the default number field
     )
+    # Disables this param in the panel when another of the same op's params
+    # matches a condition — presentation only, the cook still receives and
+    # ignores the value. Wire keys verbatim (`path`, plus exactly one of
+    # `equals`/`notEquals`/`in`/`notIn`), so `to_dict` can emit it straight
+    # through as `disabledWhen` with no translation layer. Validated at
+    # registration — see `_validate_disabled_when`.
+    disabled_when: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -64,6 +71,15 @@ class ParamSpec:
             d["choices"] = list(self.choices)
         if self.widget is not None:
             d["widget"] = self.widget
+        if self.disabled_when is not None:
+            # Fresh dict, not a reference to `self.disabled_when` — a caller
+            # holding the wire payload must not be able to mutate the spec
+            # — with `in`/`notIn` values coerced to JSON-serialisable lists
+            # (the annotation itself may hold a tuple).
+            d["disabledWhen"] = {
+                key: (list(value) if key in ("in", "notIn") else value)
+                for key, value in self.disabled_when.items()
+            }
         return d
 
 
@@ -157,6 +173,61 @@ class Op:
 
 OPS: dict[str, Op] = {}
 
+_DISABLED_WHEN_OPERATORS = ("equals", "notEquals", "in", "notIn")
+
+
+def _validate_disabled_when(
+    op_name: str, spec: ParamSpec, params_by_name: dict[str, ParamSpec]
+) -> None:
+    """Validates one param's `disabled_when` at registration time, so a typo
+    fails at import rather than silently in the UI (story 5 doc,
+    "Validate at registration")."""
+    cond = spec.disabled_when
+    if cond is None:
+        return
+
+    path = cond.get("path")
+    if not isinstance(path, str) or path == spec.name or path not in params_by_name:
+        raise ValueError(
+            f"{op_name}.{spec.name}: disabled_when path {path!r} must name "
+            "another param of the same op"
+        )
+
+    unknown_keys = set(cond) - {"path", *_DISABLED_WHEN_OPERATORS}
+    if unknown_keys:
+        raise ValueError(
+            f"{op_name}.{spec.name}: disabled_when has unknown key(s) "
+            f"{sorted(unknown_keys)}"
+        )
+
+    operator_keys = [key for key in _DISABLED_WHEN_OPERATORS if key in cond]
+    if len(operator_keys) != 1:
+        raise ValueError(
+            f"{op_name}.{spec.name}: disabled_when must set exactly one of "
+            f"{_DISABLED_WHEN_OPERATORS}, got {operator_keys}"
+        )
+    operator = operator_keys[0]
+    operand = cond[operator]
+
+    if operator in ("in", "notIn"):
+        if not isinstance(operand, (list, tuple)) or len(operand) == 0:
+            raise ValueError(
+                f"{op_name}.{spec.name}: disabled_when.{operator} must be a "
+                "non-empty list/tuple"
+            )
+        values = list(operand)
+    else:
+        values = [operand]
+
+    referenced = params_by_name[path]
+    if referenced.type == "enum" and referenced.choices is not None:
+        bad = [value for value in values if value not in referenced.choices]
+        if bad:
+            raise ValueError(
+                f"{op_name}.{spec.name}: disabled_when references {path!r} "
+                f"with value(s) {bad} not in its choices {referenced.choices}"
+            )
+
 
 def op(
     name: str,
@@ -181,10 +252,15 @@ def op(
     """
 
     def decorator(fn: OpFn) -> OpFn:
+        param_list = params or []
+        params_by_name = {p.name: p for p in param_list}
+        for spec in param_list:
+            _validate_disabled_when(name, spec, params_by_name)
+
         OPS[name] = Op(
             name=name,
             backend="python",
-            params=params or [],
+            params=param_list,
             fn=fn,
             label=label,
             description=description,

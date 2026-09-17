@@ -1,7 +1,11 @@
+import { PropertyPanel, registerBuiltinRenderers, registerScope } from '@preset.nz/facets';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier, PixelNode } from '@/scene/types';
-import type { OpDescriptor } from '@/sidecar/opsCache';
+import type { OpDescriptor, OpParamSpec } from '@/sidecar/opsCache';
+import { registerModifierFieldRenderers } from './modifierFieldRenderers';
 import {
   buildModifierScope,
   type ModifierNumberFieldDef,
@@ -203,5 +207,150 @@ describe('buildModifierScope', () => {
 
     scope.write?.('radius', 30, { nodeId: 'node-1', modId: 'mod-1' }, {});
     expect(scope.read({ nodeId: 'node-1', modId: 'mod-1' }, {}).radius).toBe(30);
+  });
+});
+
+// --- disabledWhen pass-through (Epic 18 story 5) ---------------------------
+
+describe('paramToField disabledWhen pass-through', () => {
+  it('copies disabledWhen through for a spec that carries it', () => {
+    const spec: OpParamSpec = {
+      name: 'seed',
+      type: 'int',
+      default: 0,
+      scale: 'none',
+      disabledWhen: { path: 'pattern', notIn: ['dashes', 'stipple'] },
+    };
+    const field = opParamsToSchema({ name: 'hatch_test', backend: 'python', params: [spec] })
+      .groups[0].rows[0] as ModifierNumberFieldDef;
+
+    expect(field.disabledWhen).toEqual({ path: 'pattern', notIn: ['dashes', 'stipple'] });
+  });
+
+  it('leaves disabledWhen absent for a spec that has none', () => {
+    const spec: OpParamSpec = { name: 'amount', type: 'float', default: 0.5, scale: 'none' };
+    const field = opParamsToSchema({ name: 'hatch_test', backend: 'python', params: [spec] })
+      .groups[0].rows[0] as ModifierNumberFieldDef;
+
+    expect('disabledWhen' in field).toBe(false);
+  });
+});
+
+// --- PropertyPanel rendering: disabledWhen end to end (Epic 18 story 5) ---
+//
+// `renderToStaticMarkup` (react-dom/server) is a real React render pass —
+// hooks run, including `PropertyPanel`'s own `useMemo` — in vitest's default
+// `node` test environment, so no jsdom/testing-library dependency is
+// needed. This exercises `@preset.nz/facets`' own `FieldSlot` disabled
+// evaluation, not a reimplementation of its equals/notEquals/in/notIn
+// precedence.
+
+registerBuiltinRenderers();
+registerModifierFieldRenderers();
+
+// A trimmed stand-in for the real `hatch` descriptor, carrying only the
+// params this story's acceptance criterion names plus the two paths they
+// reference (`pattern`, `paper_is_alpha`) — the sidecar's own `hatch`
+// annotations are covered end to end by `sidecar/tests/test_hatch.py`.
+const HATCH_LIKE_OP: OpDescriptor = {
+  name: 'hatch_disabled_when_test',
+  backend: 'python',
+  params: [
+    {
+      name: 'pattern',
+      type: 'enum',
+      default: 'lines',
+      scale: 'none',
+      choices: ['lines', 'dashes', 'crosses', 'stipple'],
+    },
+    {
+      name: 'pen',
+      type: 'float',
+      default: 1,
+      scale: 'none',
+      disabledWhen: { path: 'pattern', equals: 'stipple' },
+    },
+    {
+      name: 'cross_size',
+      type: 'float',
+      default: 1,
+      scale: 'none',
+      disabledWhen: { path: 'pattern', notEquals: 'crosses' },
+    },
+    {
+      name: 'cross_aspect',
+      type: 'float',
+      default: 1,
+      scale: 'none',
+      disabledWhen: { path: 'pattern', notEquals: 'crosses' },
+    },
+    { name: 'paper_is_alpha', type: 'bool', default: false, scale: 'none' },
+    {
+      name: 'paper',
+      type: 'color',
+      default: '#ffffff',
+      scale: 'none',
+      disabledWhen: { path: 'paper_is_alpha', equals: true },
+    },
+    {
+      name: 'seed',
+      type: 'int',
+      default: 0,
+      scale: 'none',
+      disabledWhen: { path: 'pattern', notIn: ['dashes', 'stipple'] },
+    },
+  ],
+};
+
+const HATCH_LIKE_LABELS = HATCH_LIKE_OP.params.map((p) => p.name);
+
+/** Every field renders its label as a plain text node (`>label<`), so a
+ * label's markup slice runs from its own label marker to the next field's —
+ * order matches `descriptor.params` (unaffected by this story). Isolates a
+ * field's `disabled=""` from its neighbours' without depending on facets'
+ * internal DOM structure. */
+function fieldIsDisabled(markup: string, label: string): boolean {
+  const start = markup.indexOf(`>${label}<`);
+  if (start === -1) throw new Error(`field label not found in markup: ${label}`);
+  const laterStarts = HATCH_LIKE_LABELS.filter((l) => l !== label)
+    .map((l) => markup.indexOf(`>${l}<`))
+    .filter((i) => i > start);
+  const end = laterStarts.length > 0 ? Math.min(...laterStarts) : markup.length;
+  return markup.slice(start, end).includes('disabled=""');
+}
+
+function renderHatchPanel(pattern: string): string {
+  const scopeKey = modifierScopeKey(HATCH_LIKE_OP.name);
+  registerScope(scopeKey, buildModifierScope(HATCH_LIKE_OP));
+
+  const node = pixelNode('node-1', {
+    modifiers: [modifier('mod-1', { type: HATCH_LIKE_OP.name, params: { pattern } })],
+  });
+  useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [node] } }));
+
+  return renderToStaticMarkup(
+    createElement(PropertyPanel, {
+      scopeKey,
+      selection: { nodeId: 'node-1', modId: 'mod-1' },
+      ctx: {},
+    }),
+  );
+}
+
+describe('PropertyPanel rendering a hatch-like descriptor', () => {
+  it('pattern: lines disables seed, cross_size and cross_aspect, and leaves pen enabled', () => {
+    const markup = renderHatchPanel('lines');
+
+    expect(fieldIsDisabled(markup, 'seed')).toBe(true);
+    expect(fieldIsDisabled(markup, 'cross_size')).toBe(true);
+    expect(fieldIsDisabled(markup, 'cross_aspect')).toBe(true);
+    expect(fieldIsDisabled(markup, 'pen')).toBe(false);
+  });
+
+  it('pattern: stipple disables pen, and leaves seed enabled', () => {
+    const markup = renderHatchPanel('stipple');
+
+    expect(fieldIsDisabled(markup, 'pen')).toBe(true);
+    expect(fieldIsDisabled(markup, 'seed')).toBe(false);
   });
 });

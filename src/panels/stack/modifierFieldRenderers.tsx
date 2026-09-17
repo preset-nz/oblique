@@ -7,6 +7,7 @@ import {
 } from '@preset.nz/facets';
 import { InputNumber } from '@/components/InputNumber';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { snapToIntegerStep } from './integerStepFix';
 import type { ModifierNumberFieldDef, ModifierSliderFieldDef } from './modifierScope';
@@ -66,7 +67,12 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
   const readOnly = disabled || !wrapped;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground tracking-wide">
+      <span
+        className={cn(
+          'text-[11px] font-medium text-muted-foreground tracking-wide',
+          readOnly && 'opacity-50',
+        )}
+      >
         {field.label ?? field.id}
       </span>
       <div className="flex items-center gap-2">
@@ -85,7 +91,7 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
           // one drag coalesces into one undo step.
           onPointerDown={() => beginTransaction()}
           onPointerUp={() => endTransaction()}
-          className="flex-1"
+          className="flex-1 disabled:opacity-50"
         />
         {/* Slider drag and InputNumber scrub live on the same row, sharing one value. */}
         <InputNumber
@@ -122,9 +128,15 @@ const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
 }) => {
   const options = field.options ?? [];
   const current = value == null ? '' : String(value);
+  const readOnly = disabled || !onChange;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground tracking-wide">
+      <span
+        className={cn(
+          'text-[11px] font-medium text-muted-foreground tracking-wide',
+          readOnly && 'opacity-50',
+        )}
+      >
         {field.label ?? field.id}
       </span>
       <ToggleGroup
@@ -132,7 +144,7 @@ const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
         size="sm"
         spacing={0}
         value={current}
-        disabled={disabled || !onChange}
+        disabled={readOnly}
         onValueChange={(next) => {
           if (next) onChange?.(next);
         }}
@@ -165,10 +177,15 @@ const ModifierColorRenderer: FieldRenderer<ColorFieldDef> = ({
   const readOnly = disabled || !onChange;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground tracking-wide">
+      <span
+        className={cn(
+          'text-[11px] font-medium text-muted-foreground tracking-wide',
+          readOnly && 'opacity-50',
+        )}
+      >
         {field.label ?? field.id}
       </span>
-      <div className="flex items-center gap-2">
+      <div className={cn('flex items-center gap-2', readOnly && 'opacity-50')}>
         <input
           type="color"
           aria-label={field.label ?? field.id}
@@ -182,7 +199,7 @@ const ModifierColorRenderer: FieldRenderer<ColorFieldDef> = ({
           // coalesces into one undo step.
           onFocus={() => beginTransaction()}
           onBlur={() => endTransaction()}
-          className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent"
+          className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent disabled:cursor-not-allowed"
         />
         <span className="font-mono text-xs text-muted-foreground">{hex}</span>
       </div>

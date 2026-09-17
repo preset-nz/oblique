@@ -1,7 +1,10 @@
 """`hatch` — redraw tone as ink marks: hatched lines, dashes, crosses or
 stipple dots whose density follows the image's darkness (epic 18, story 1:
 `lines`/`dashes`; story 2 adds `crosses`/`stipple` on the same machinery;
-story 3 adds `pen`; story 4 adds `crosses`' `cross_size`/`cross_aspect`).
+story 3 adds `pen`; story 4 adds `crosses`' `cross_size`/`cross_aspect`;
+story 5 annotates the params each pattern ignores with `disabled_when`, so
+the panel greys them out rather than letting a moved slider silently do
+nothing).
 
 **Tone.** `source` picks a 0..1 channel — `luma` via the shared
 `LUMA_R709`/`LUMA_G709`/`LUMA_B709` weights, or a single `red`/`green`/
@@ -47,7 +50,8 @@ number of `int64`-reinterpreted-as-`uint64` arrays/scalars), not a
 `default_rng` table indexed by line number — a table's contents depend on
 how many lines the image spans, so dash phases would shift between
 DRAFT/WORKING/BAKED and between differently sized nodes. `lines` never
-calls it and so ignores `seed` outright.
+calls it and so ignores `seed` outright — the panel greys `seed` out
+unless `pattern` is `dashes` or `stipple`.
 
 **`crosses` and `stipple` are cell-based** (`_cell_lattice`, the same
 shape as `_screen_channel` in `cmyk_halftone.py`): one whole mark per
@@ -86,7 +90,8 @@ against the bar's rectangle, worked out once per layer per bar rather
 than per pixel (`_bar_offsets`, story 4 doc, "Offset selection"). Both
 `_crosses_ink` and the sweep share one bar's growth/pen-cap maths
 (`_bar_ink`) so the pinned formula lives in exactly one place. `crosses`
-ignores `seed`.
+ignores `seed`. `cross_size`/`cross_aspect` only shape `crosses`' own
+marks, so the panel greys both out for every other `pattern`.
 
 **`pen` is the widest a stroke gets**, as a fraction of the width that
 closes to solid ink (`(spacing + 1) / 2` half-width for `lines`/`dashes`,
@@ -98,7 +103,11 @@ coverage down, where `pen` leaves the light tones alone and only stops the
 dark ones from fattening. `pen = 1` is exactly the uncapped op; below 1,
 black no longer closes to solid. A ratio rather than pixels, so
 `spacing` stays the only spatial param. `stipple` ignores it — a dot has
-no stroke.
+no stroke, so the panel greys `pen` out when `pattern` is `stipple`.
+`pen` and `cross_size`/`cross_aspect` are orthogonal: `pen`
+caps a `crosses` bar's shared half-width (`hw`) only, never its arm
+length (`a1`/`a2`), so a low `pen` at a high `cross_size` still draws
+long hairline arms.
 
 `stipple` draws one jittered, anti-aliased disc per cell, born once
 `c_k` crosses a per-cell seeded threshold (`_hash01` salted 1) and then
@@ -112,7 +121,8 @@ default on a garbage string. `paper_is_alpha=False` (default) paints
 `paper*(1-K) + ink*K` into RGB and leaves alpha exactly as the input's;
 `=True` paints `ink` everywhere and multiplies alpha by `K`, so the paper
 becomes transparent and the marks overprint the layers below — the same
-`white_is_alpha` shape as `cmyk_halftone`.
+`white_is_alpha` shape as `cmyk_halftone`. `paper` does nothing while
+`paper_is_alpha` is on, so the panel greys it out then.
 """
 
 from __future__ import annotations
@@ -423,10 +433,14 @@ def _crosses_ink_sweep(
     union, over every neighbour cell whose bar can reach the pixel's own
     cell (`_bar_offsets`), of that bar drawn *at the neighbour's own*
     cell-centre tone (`_cell_centre_tone`) rather than the pixel's own
-    cell's tone. `(0, 0)` is always one of the neighbours, so this
-    subsumes the single-cell case; it isn't used there only because
-    `_bar_offsets` is pure-Python overhead the hot default path doesn't
-    need."""
+    cell's tone. `(0, 0)` is always one of the neighbours, so at `f = 1`
+    this is *mathematically* equal to `_crosses_ink` — but not bit-
+    identical (`1 - (1 - x)` loses a ULP), so `_crosses_ink` stays the
+    single-cell path rather than being replaced by this with a
+    single-offset list: that's what keeps `cross_size = cross_aspect = 1`
+    byte-identical to the op before this pair existed. `_bar_offsets`'
+    pure-Python overhead is a second, smaller reason the hot default path
+    skips this."""
     s = spacing
     o_u, o_v = _CELL_OFFSETS[k]
     reach, w_close, h0, _p_dir, _r_dir = _cross_geometry(k, s)
@@ -534,9 +548,33 @@ def _stipple_ink(
         ),
         P("angle", "float", min=0.0, max=180.0, default=45.0, step=1.0),
         P("weight", "float", min=0.05, max=1.0, default=1.0, step=0.01),
-        P("pen", "float", min=0.01, max=1.0, default=1.0, step=0.01),
-        P("cross_size", "float", min=0.25, max=3.0, default=1.0, step=0.05),
-        P("cross_aspect", "float", min=1.0, max=4.0, default=1.0, step=0.05),
+        P(
+            "pen",
+            "float",
+            min=0.01,
+            max=1.0,
+            default=1.0,
+            step=0.01,
+            disabled_when={"path": "pattern", "equals": "stipple"},
+        ),
+        P(
+            "cross_size",
+            "float",
+            min=0.25,
+            max=3.0,
+            default=1.0,
+            step=0.05,
+            disabled_when={"path": "pattern", "notEquals": "crosses"},
+        ),
+        P(
+            "cross_aspect",
+            "float",
+            min=1.0,
+            max=4.0,
+            default=1.0,
+            step=0.05,
+            disabled_when={"path": "pattern", "notEquals": "crosses"},
+        ),
         P(
             "source",
             "enum",
@@ -547,9 +585,22 @@ def _stipple_ink(
         P("white", "float", min=0.0, max=255.0, default=255.0, step=1.0),
         P("gamma", "float", min=0.1, max=5.0, default=1.0, step=0.05),
         P("ink", "color", default="#000000"),
-        P("paper", "color", default="#ffffff"),
+        P(
+            "paper",
+            "color",
+            default="#ffffff",
+            disabled_when={"path": "paper_is_alpha", "equals": True},
+        ),
         P("paper_is_alpha", "bool", default=False),
-        P("seed", "int", min=0, max=2**31 - 1, default=0, step=1),
+        P(
+            "seed",
+            "int",
+            min=0,
+            max=2**31 - 1,
+            default=0,
+            step=1,
+            disabled_when={"path": "pattern", "notIn": ("dashes", "stipple")},
+        ),
     ],
     writes_alpha=True,
 )

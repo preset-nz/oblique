@@ -1,3 +1,4 @@
+import type { DisabledWhen } from '@preset.nz/facets';
 import { create } from 'zustand';
 
 /**
@@ -15,6 +16,11 @@ export interface OpParamSpec {
   scale: 'spatial' | 'none';
   choices?: string[]; // enum type only
   widget?: 'slider'; // UI hint from the op's home backend — favours the slider kind over plain number
+  /** Disables this param in the panel when another of the same op's params
+   * matches a condition (Epic 18 story 5). Wire keys verbatim, no
+   * translation layer — the type is `@preset.nz/facets`'s own, imported
+   * rather than redeclared. */
+  disabledWhen?: DisabledWhen;
 }
 
 export interface OpDescriptor {

@@ -90,6 +90,46 @@ def test_registered_in_ops_registry():
         assert param["scale"] in ("spatial", "none")
 
 
+# --- disabled_when annotations (Epic 18 story 5) ---------------------------
+
+
+def test_to_dict_emits_the_five_disabled_when_conditions():
+    params_by_name = {p["name"]: p for p in OPS["hatch"].to_dict()["params"]}
+
+    assert params_by_name["pen"]["disabledWhen"] == {
+        "path": "pattern",
+        "equals": "stipple",
+    }
+    assert params_by_name["cross_size"]["disabledWhen"] == {
+        "path": "pattern",
+        "notEquals": "crosses",
+    }
+    assert params_by_name["cross_aspect"]["disabledWhen"] == {
+        "path": "pattern",
+        "notEquals": "crosses",
+    }
+    assert params_by_name["paper"]["disabledWhen"] == {
+        "path": "paper_is_alpha",
+        "equals": True,
+    }
+
+    seed_cond = params_by_name["seed"]["disabledWhen"]
+    assert seed_cond["path"] == "pattern"
+    assert seed_cond["notIn"] == ["dashes", "stipple"]
+    assert isinstance(seed_cond["notIn"], list)  # JSON list, not a tuple
+
+    # Every other param is untouched by this story.
+    untouched = set(params_by_name) - {
+        "pen",
+        "cross_size",
+        "cross_aspect",
+        "paper",
+        "seed",
+    }
+    for name in untouched:
+        assert "disabledWhen" not in params_by_name[name]
+
+
 # --- white closes to paper ---------------------------------------------------
 
 
