@@ -4,7 +4,9 @@ stipple dots whose density follows the image's darkness (epic 18, story 1:
 story 3 adds `pen`; story 4 adds `crosses`' `cross_size`/`cross_aspect`;
 story 5 annotates the params each pattern ignores with `disabled_when`, so
 the panel greys them out rather than letting a moved slider silently do
-nothing).
+nothing; story 6 adds `jitter` — `lines`/`dashes` wobble along the stroke
+and `crosses` drift within their cell, fading out as a layer closes so
+black still closes to solid).
 
 **Tone.** `source` picks a 0..1 channel — `luma` via the shared
 `LUMA_R709`/`LUMA_G709`/`LUMA_B709` weights, or a single `red`/`green`/
@@ -50,8 +52,10 @@ number of `int64`-reinterpreted-as-`uint64` arrays/scalars), not a
 `default_rng` table indexed by line number — a table's contents depend on
 how many lines the image spans, so dash phases would shift between
 DRAFT/WORKING/BAKED and between differently sized nodes. `lines` never
-calls it and so ignores `seed` outright — the panel greys `seed` out
-unless `pattern` is `dashes` or `stipple`.
+calls it on its own account, so it ignores `seed` at `jitter = 0`;
+once `jitter > 0` its wobble reads `seed` too (below), so `seed`
+carries no `disabled_when` of its own — it is always enabled in the
+panel.
 
 **`crosses` and `stipple` are cell-based** (`_cell_lattice`, the same
 shape as `_screen_channel` in `cmyk_halftone.py`): one whole mark per
@@ -90,7 +94,8 @@ against the bar's rectangle, worked out once per layer per bar rather
 than per pixel (`_bar_offsets`, story 4 doc, "Offset selection"). Both
 `_crosses_ink` and the sweep share one bar's growth/pen-cap maths
 (`_bar_ink`) so the pinned formula lives in exactly one place. `crosses`
-ignores `seed`. `cross_size`/`cross_aspect` only shape `crosses`' own
+ignores `seed` at `jitter = 0`; once `jitter > 0` its per-cell offset
+(below) reads it too. `cross_size`/`cross_aspect` only shape `crosses`' own
 marks, so the panel greys both out for every other `pattern`.
 
 **`pen` is the widest a stroke gets**, as a fraction of the width that
@@ -108,6 +113,35 @@ no stroke, so the panel greys `pen` out when `pattern` is `stipple`.
 caps a `crosses` bar's shared half-width (`hw`) only, never its arm
 length (`a1`/`a2`), so a low `pen` at a high `cross_size` still draws
 long hairline arms.
+
+**`jitter` moves a mark's position, never its angle**, gated by an `if`
+so `jitter = 0` takes exactly the pre-story-6 code paths (byte-identical).
+It eases off as a layer closes, `fade(c) = clip(2 * (1 - c), 0, 1)` read
+on the same coverage `c` the mark already reads, so a closing layer still
+lands on its undisturbed, pinned geometry and black still closes to solid
+by construction. The maximum displacement is `D = jitter * spacing / 2`,
+a ratio like every other length here, so `spacing` stays the only spatial
+param. `lines`/`dashes` wobble sideways along a smooth, C¹ 1-D value-noise
+wave (`_WOBBLE_WAVELENGTH * spacing` wavelength, smoothstep-interpolated
+between hashed lattice values salted 4) rather than a straight per-line
+offset; once a line can move off its nominal position, that nominal
+nearest line is no longer the only one that can ink a pixel, so the ink
+is the union of the three nearest lines (`n0 - 1, n0, n0 + 1`) rather than
+just `n0`. `dashes`' along-the-stroke dash phase (`_hash01(m, k, seed)`)
+still belongs to each neighbour line `m` individually, so the wobble only
+ever moves dashes sideways. `crosses` instead drifts its own mark off its
+cell centre (`_hash01` salted 5 and 6) — the tone lookup itself stays at
+the nominal, undisplaced cell centre — and `jitter > 0` forces
+`_crosses_ink_sweep` even at `cross_size = cross_aspect = 1`: a displaced
+mark would otherwise cut off at the cell seam with no neighbour consulted
+to fill the gap. `_bar_offsets` gains a `pad` (default `0.0`, so story 4's
+own tests and call are untouched) that grows the own cell's half-extent by
+`D` in the separating-axis test, so every cell whose *displaced* mark
+could reach the pixel stays in the offset set. `stipple` already jitters
+its dot and already fades that jitter as it grows, so it ignores `jitter`
+outright — the panel greys it out when `pattern` is `stipple`. `lines` and
+`crosses` now read `seed` once `jitter > 0`, so `seed` carries no
+`disabled_when` of its own — it is always enabled in the panel.
 
 `stipple` draws one jittered, anti-aliased disc per cell, born once
 `c_k` crosses a per-cell seeded threshold (`_hash01` salted 1) and then
@@ -151,6 +185,13 @@ _CELL_OFFSETS = ((0.0, 0.0), (0.5, 0.5), (0.5, 0.0), (0.0, 0.5))
 # `stipple`'s birth threshold, as a fraction of full coverage: a cell's
 # dot is born once its layer coverage `c` reaches `_STIPPLE_BIRTH * h1`.
 _STIPPLE_BIRTH = 0.25
+
+# `jitter`'s `lines`/`dashes` wobble wavelength, as a multiple of `spacing`
+# (story 6 doc, "The wave" — don't shorten without redoing that sum).
+_WOBBLE_WAVELENGTH = 6.0
+
+# `_hash01` salt for the wobble, distinct from stipple's 1/2/3.
+_WOBBLE_SALT = 4
 
 _SPLITMIX_INC = np.uint64(0x9E3779B97F4A7C15)
 
@@ -199,6 +240,46 @@ def _c_k(t: np.ndarray, k: int, layers: int, weight: float) -> np.ndarray:
     q = 1.0 - layers ** (-1.0 / (layers - 1)) if layers >= 2 else 1.0
     q_k = q if k < layers - 1 else 1.0
     return np.float32(weight * q_k) * ramp_k
+
+
+def _jitter_fade(c: np.ndarray) -> np.ndarray:
+    """`jitter`'s displacement fade, `clip(2 * (1 - c), 0, 1)` on a layer's
+    own coverage `c` (story 6 doc, "Fade"): `1` for `c <= 0.5`, `0` at
+    `c = 1`, so a closing layer always lands on its undisplaced, pinned
+    geometry and black still closes to solid by construction."""
+    return np.clip(np.float32(2.0) * (np.float32(1.0) - c), 0.0, 1.0)
+
+
+def _wobble_offset(
+    m: np.ndarray,
+    u: np.ndarray,
+    spacing: float,
+    k: int,
+    seed: int,
+    disp: np.ndarray,
+) -> np.ndarray:
+    """`jitter`'s sideways displacement `δ_m` for line index `m` (story 6
+    doc, "The wave"): 1-D value noise along the stroke's own coordinate
+    `u`, smoothstep-interpolated between hashed lattice values (salt
+    `_WOBBLE_SALT`) at a wavelength of `_WOBBLE_WAVELENGTH * spacing`, then
+    scaled by `disp` (`D * fade(c)`, already elementwise). `m` is float
+    (`n0 ± {-1, 0, 1}`), cast to `int64` for hashing, matching every other
+    per-line index this module hashes."""
+    wavelength = np.float32(_WOBBLE_WAVELENGTH) * np.float32(spacing)
+    x = u / wavelength
+    i = np.floor(x)
+    frac = x - i
+    m_i = m.astype(np.int64)
+    i_i = i.astype(np.int64)
+    g0 = np.float32(2.0) * _hash01(m_i, i_i, k, seed, _WOBBLE_SALT).astype(
+        np.float32
+    ) - np.float32(1.0)
+    g1 = np.float32(2.0) * _hash01(m_i, i_i + 1, k, seed, _WOBBLE_SALT).astype(
+        np.float32
+    ) - np.float32(1.0)
+    smooth = frac * frac * (np.float32(3.0) - np.float32(2.0) * frac)
+    w = g0 + (g1 - g0) * smooth
+    return disp * w
 
 
 def _tone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
@@ -338,16 +419,22 @@ def _bar_ink(
 
 
 def _bar_offsets(
-    k: int, bar: int, f: float, pen: float, spacing: float
+    k: int, bar: int, f: float, pen: float, spacing: float, pad: float = 0.0
 ) -> list[tuple[int, int]]:
     """Neighbour cell offsets `(di, dj)`, own-cell-relative in lattice
     units, whose `bar`'s (`1` along `p`, `2` along `r`) mark rectangle at
     full growth can reach the own cell — an exact separating-axis test
-    between the own cell's square (half-extent `S/2`) and the neighbour's
-    bar rectangle (half-length `L = reach * f` along the bar axis,
-    half-width `H = max(0, pen * W - 0.5)`), *touching* excluded (story 4
-    doc, "Offset selection"). Pure Python, called once per layer per bar
-    — never per pixel. `(0, 0)` is always included."""
+    between the own cell's square (half-extent `S/2`, grown to `S/2 + pad`
+    — story 6 doc, "`crosses`: per-cell offset") and the neighbour's bar
+    rectangle (half-length `L = reach * f` along the bar axis, half-width
+    `H = max(0, pen * W - 0.5)`), *touching* excluded (story 4 doc,
+    "Offset selection"). Pure Python, called once per layer per bar —
+    never per pixel. `(0, 0)` is always included. `pad` is `D = jitter *
+    spacing / 2`, the own cell's mark's maximum displacement: moving that
+    mark anywhere within `[-D, D]²` hits the neighbour's unmoved rectangle
+    exactly when the unmoved own cell, grown by `D`, does. `pad = 0.0`
+    (the default) is bit-identical to story 4's helper — `s / 2.0 + 0.0`
+    and `+ pad` with `pad = 0.0` change nothing."""
     s = spacing
     reach, w_close, _h0, p_dir, r_dir = _cross_geometry(k, s)
     e, n = (p_dir, r_dir) if bar == 1 else (r_dir, p_dir)
@@ -355,7 +442,7 @@ def _bar_offsets(
 
     length = reach * f
     half_width = max(0.0, pen * w_close - 0.5)
-    r_max = int(np.ceil((length + half_width) / s)) + 1
+    r_max = int(np.ceil((length + half_width + pad) / s)) + 1
 
     offsets: list[tuple[int, int]] = []
     for di in range(-r_max, r_max + 1):
@@ -363,7 +450,7 @@ def _bar_offsets(
             cx, cy = di * s, dj * s
             if all(
                 abs(cx * ax + cy * ay)
-                < s / 2.0 * (abs(ax) + abs(ay))
+                < (s / 2.0 + pad) * (abs(ax) + abs(ay))
                 + length * abs(e[0] * ax + e[1] * ay)
                 + half_width * abs(n[0] * ax + n[1] * ay)
                 - 1e-9
@@ -427,11 +514,14 @@ def _crosses_ink_sweep(
     w: int,
     layers: int,
     weight: float,
+    jitter: float,
+    seed: int,
 ) -> np.ndarray:
     """`crosses`' neighbour sweep, taken when `max(cross_size, cross_size *
-    cross_aspect) > 1` (story 4 doc, "Two paths"): each bar's ink is the
-    union, over every neighbour cell whose bar can reach the pixel's own
-    cell (`_bar_offsets`), of that bar drawn *at the neighbour's own*
+    cross_aspect) > 1` or `jitter > 0` (story 4 doc, "Two paths"; story 6
+    doc, "`crosses`: per-cell offset"): each bar's ink is the union, over
+    every neighbour cell whose bar can reach the pixel's own cell
+    (`_bar_offsets`), of that bar drawn *at the neighbour's own*
     cell-centre tone (`_cell_centre_tone`) rather than the pixel's own
     cell's tone. `(0, 0)` is always one of the neighbours, so at `f = 1`
     this is *mathematically* equal to `_crosses_ink` — but not bit-
@@ -440,7 +530,13 @@ def _crosses_ink_sweep(
     single-offset list: that's what keeps `cross_size = cross_aspect = 1`
     byte-identical to the op before this pair existed. `_bar_offsets`'
     pure-Python overhead is a second, smaller reason the hot default path
-    skips this."""
+    skips this. At `jitter > 0`, each neighbour's mark also drifts off its
+    own cell centre by `(ju, jv)`, scaled by that neighbour's own fade —
+    computed from `c_n`, so it must be known before the displacement is
+    applied, matching the gate order the story 6 doc pins. At `jitter = 0`
+    this reduces to the pre-story-6 computation exactly (`pad = 0.0`, no
+    displacement) — reordering the independent per-neighbour statements
+    doesn't change any floating-point result."""
     s = spacing
     o_u, o_v = _CELL_OFFSETS[k]
     reach, w_close, h0, _p_dir, _r_dir = _cross_geometry(k, s)
@@ -453,29 +549,61 @@ def _crosses_ink_sweep(
     s_f = np.float32(s)
     o_u_f, o_v_f = np.float32(o_u), np.float32(o_v)
 
-    def bar_union(bar: int, f: float, a_max: float) -> np.ndarray:
-        not_bar = np.ones_like(du, dtype=np.float32)
-        for di, dj in _bar_offsets(k, bar, f, pen, s):
+    pad = jitter * s / 2.0
+    d_disp = np.float32(pad)
+
+    a1_max = reach * f1 + 0.5
+    a2_max = reach * f2 + 0.5
+    offsets1 = set(_bar_offsets(k, 1, f1, pen, s, pad=pad))
+    offsets2 = set(_bar_offsets(k, 2, f2, pen, s, pad=pad))
+
+    # One pass over both bars' neighbours, so a neighbour both bars can
+    # reach pays for its tone lookup, jitter hashes and mark frame once.
+    # `_bar_offsets` emits `(di, dj)` in ascending lexicographic order, so
+    # walking the sorted union keeps each bar's product in its own order —
+    # the same floats as evaluating the bars in two separate loops.
+    not_bar1 = np.ones_like(du, dtype=np.float32)
+    not_bar2 = np.ones_like(du, dtype=np.float32)
+    for di, dj in sorted(offsets1 | offsets2):
+        u_centre_n = (cu_f + np.float32(di) + o_u_f) * s_f
+        v_centre_n = (cv_f + np.float32(dj) + o_v_f) * s_f
+        t_cell_n = _cell_centre_tone(u_centre_n, v_centre_n, cos_t, sin_t, t, h, w)
+        c_n = _c_k(t_cell_n, k, layers, weight)
+
+        if jitter > 0.0:
+            cu_n = cu + np.int64(di)
+            cv_n = cv + np.int64(dj)
+            disp_n = d_disp * _jitter_fade(c_n)
+            ju_n = disp_n * (
+                np.float32(2.0) * _hash01(cu_n, cv_n, k, seed, 5).astype(np.float32)
+                - np.float32(1.0)
+            )
+            jv_n = disp_n * (
+                np.float32(2.0) * _hash01(cu_n, cv_n, k, seed, 6).astype(np.float32)
+                - np.float32(1.0)
+            )
+            du_n = du - np.float32(di) * s_f - ju_n
+            dv_n = dv - np.float32(dj) * s_f - jv_n
+        else:
             du_n = du - np.float32(di) * s_f
             dv_n = dv - np.float32(dj) * s_f
-            if k % 2 == 0:
-                p_n, r_n = du_n, dv_n
-            else:
-                p_n, r_n = (du_n + dv_n) / sqrt2, (dv_n - du_n) / sqrt2
 
-            u_centre_n = (cu_f + np.float32(di) + o_u_f) * s_f
-            v_centre_n = (cv_f + np.float32(dj) + o_v_f) * s_f
-            t_cell_n = _cell_centre_tone(u_centre_n, v_centre_n, cos_t, sin_t, t, h, w)
-            c_n = _c_k(t_cell_n, k, layers, weight)
+        if k % 2 == 0:
+            p_n, r_n = du_n, dv_n
+        else:
+            p_n, r_n = (du_n + dv_n) / sqrt2, (dv_n - du_n) / sqrt2
 
-            along, across = (p_n, r_n) if bar == 1 else (r_n, p_n)
-            not_bar = not_bar * (
-                1.0 - _bar_ink(along, across, c_n, a_max, w_close, h0, pen)
+        if (di, dj) in offsets1:
+            not_bar1 = not_bar1 * (
+                1.0 - _bar_ink(p_n, r_n, c_n, a1_max, w_close, h0, pen)
             )
-        return 1.0 - not_bar
+        if (di, dj) in offsets2:
+            not_bar2 = not_bar2 * (
+                1.0 - _bar_ink(r_n, p_n, c_n, a2_max, w_close, h0, pen)
+            )
 
-    bar1_union = bar_union(1, f1, reach * f1 + 0.5)
-    bar2_union = bar_union(2, f2, reach * f2 + 0.5)
+    bar1_union = 1.0 - not_bar1
+    bar2_union = 1.0 - not_bar2
     return 1.0 - (1.0 - bar1_union) * (1.0 - bar2_union)
 
 
@@ -558,6 +686,15 @@ def _stipple_ink(
             disabled_when={"path": "pattern", "equals": "stipple"},
         ),
         P(
+            "jitter",
+            "float",
+            min=0.0,
+            max=1.0,
+            default=0.0,
+            step=0.01,
+            disabled_when={"path": "pattern", "equals": "stipple"},
+        ),
+        P(
             "cross_size",
             "float",
             min=0.25,
@@ -599,7 +736,6 @@ def _stipple_ink(
             max=2**31 - 1,
             default=0,
             step=1,
-            disabled_when={"path": "pattern", "notIn": ("dashes", "stipple")},
         ),
     ],
     writes_alpha=True,
@@ -615,6 +751,7 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     pen_f = np.float32(pen)
     cross_size = max(0.25, min(3.0, float(params.get("cross_size", 1.0))))
     cross_aspect = max(1.0, min(4.0, float(params.get("cross_aspect", 1.0))))
+    jitter = max(0.0, min(1.0, float(params.get("jitter", 0.0))))
     seed = int(params.get("seed", 0))
 
     t = _tone(img, params)
@@ -635,12 +772,7 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             du, dv, cu, cv, t_cell = _cell_lattice(
                 u, v, k, spacing, cos_t, sin_t, t, h, w
             )
-            if max(cross_size, cross_size * cross_aspect) <= 1.0:
-                c_k = _c_k(t_cell, k, layers, weight)
-                ink_k = _crosses_ink(
-                    du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
-                )
-            else:
+            if max(cross_size, cross_size * cross_aspect) > 1.0 or jitter > 0.0:
                 ink_k = _crosses_ink_sweep(
                     cu,
                     cv,
@@ -658,6 +790,13 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
                     w,
                     layers,
                     weight,
+                    jitter,
+                    seed,
+                )
+            else:
+                c_k = _c_k(t_cell, k, layers, weight)
+                ink_k = _crosses_ink(
+                    du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
                 )
         elif pattern == "stipple":
             du, dv, cu, cv, t_cell = _cell_lattice(
@@ -666,26 +805,53 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
             c_k = _c_k(t_cell, k, layers, weight)
             ink_k = _stipple_ink(du, dv, c_k, cu, cv, k, seed, spacing)
         elif pattern == "dashes":
-            n = np.round(v / np.float32(spacing))
-            d = np.abs(v - n * np.float32(spacing))
+            n0 = np.round(v / np.float32(spacing))
             c_k = _c_k(t, k, layers, weight)
 
             a = np.sqrt(c_k)
             across_h = np.minimum(a, pen_f) * np.float32((spacing + 1.0) / 2.0)
-            ink_k = _area(d, across_h)
-
             period = np.float32(_DASH_PERIOD * spacing)
-            phi = _hash01(n.astype(np.int64), k, seed).astype(np.float32)
-            e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
             along_h = a * ((period + 1.0) / 2.0)
-            ink_k = ink_k * _area(e, along_h)
-        else:
-            n = np.round(v / np.float32(spacing))
-            d = np.abs(v - n * np.float32(spacing))
-            c_k = _c_k(t, k, layers, weight)
 
+            if jitter > 0.0:
+                disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                ink_not = np.ones_like(t, dtype=np.float32)
+                for dn in (-1, 0, 1):
+                    m = n0 + dn
+                    delta = _wobble_offset(m, u, spacing, k, seed, disp)
+                    d_m = np.abs(v - (m * np.float32(spacing) + delta))
+                    ink_across = _area(d_m, across_h)
+
+                    phi = _hash01(m.astype(np.int64), k, seed).astype(np.float32)
+                    e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
+                    ink_along = _area(e, along_h)
+
+                    ink_not = ink_not * (1.0 - ink_across * ink_along)
+                ink_k = 1.0 - ink_not
+            else:
+                d = np.abs(v - n0 * np.float32(spacing))
+                ink_k = _area(d, across_h)
+
+                phi = _hash01(n0.astype(np.int64), k, seed).astype(np.float32)
+                e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
+                ink_k = ink_k * _area(e, along_h)
+        else:
+            n0 = np.round(v / np.float32(spacing))
+            c_k = _c_k(t, k, layers, weight)
             stroke_h = np.minimum(c_k, pen_f) * np.float32((spacing + 1.0) / 2.0)
-            ink_k = _area(d, stroke_h)
+
+            if jitter > 0.0:
+                disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                ink_not = np.ones_like(t, dtype=np.float32)
+                for dn in (-1, 0, 1):
+                    m = n0 + dn
+                    delta = _wobble_offset(m, u, spacing, k, seed, disp)
+                    d_m = np.abs(v - (m * np.float32(spacing) + delta))
+                    ink_not = ink_not * (1.0 - _area(d_m, stroke_h))
+                ink_k = 1.0 - ink_not
+            else:
+                d = np.abs(v - n0 * np.float32(spacing))
+                ink_k = _area(d, stroke_h)
 
         coverage = 1.0 - (1.0 - coverage) * (1.0 - ink_k)
 

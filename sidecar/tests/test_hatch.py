@@ -94,9 +94,16 @@ def test_registered_in_ops_registry():
 
 
 def test_to_dict_emits_the_five_disabled_when_conditions():
+    # Story 6 drops `seed`'s `disabled_when` (`lines`/`crosses` read it once
+    # `jitter > 0`, and a compound condition isn't worth adding for one
+    # slider) and adds `jitter`'s own — the count stays five.
     params_by_name = {p["name"]: p for p in OPS["hatch"].to_dict()["params"]}
 
     assert params_by_name["pen"]["disabledWhen"] == {
+        "path": "pattern",
+        "equals": "stipple",
+    }
+    assert params_by_name["jitter"]["disabledWhen"] == {
         "path": "pattern",
         "equals": "stipple",
     }
@@ -113,18 +120,15 @@ def test_to_dict_emits_the_five_disabled_when_conditions():
         "equals": True,
     }
 
-    seed_cond = params_by_name["seed"]["disabledWhen"]
-    assert seed_cond["path"] == "pattern"
-    assert seed_cond["notIn"] == ["dashes", "stipple"]
-    assert isinstance(seed_cond["notIn"], list)  # JSON list, not a tuple
+    assert "disabledWhen" not in params_by_name["seed"]
 
     # Every other param is untouched by this story.
     untouched = set(params_by_name) - {
         "pen",
+        "jitter",
         "cross_size",
         "cross_aspect",
         "paper",
-        "seed",
     }
     for name in untouched:
         assert "disabledWhen" not in params_by_name[name]
@@ -736,6 +740,176 @@ def test_bar_offsets_sweep_includes_along_axis_excludes_across():
     assert {(-1, 0), (0, 0), (1, 0)} <= offsets
     assert (0, 1) not in offsets
     assert (0, -1) not in offsets
+
+
+# --- jitter (story 6) --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_jitter_zero_is_the_unjittered_op(pattern):
+    rng = np.random.default_rng(54)
+    img = _random_rgba(rng)
+    params = {"pattern": pattern, "layers": 3, "angle": 30, "seed": 7}
+
+    a = hatch(img, params)
+    b = hatch(img, {**params, "jitter": 0.0})
+
+    np.testing.assert_array_equal(a, b)
+
+
+def test_stipple_ignores_jitter():
+    img = _flat(128, h=64, w=64)
+
+    a = hatch(img, {"pattern": "stipple", "seed": 3})
+    b = hatch(img, {"pattern": "stipple", "seed": 3, "jitter": 1.0})
+
+    np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("pattern", ("lines", "dashes", "crosses"))
+def test_jitter_moves_the_mark_and_reads_seed(pattern):
+    # Flat mid-grey (t = 0.3, story 6 doc "It moves").
+    value = round((1.0 - 0.3) * 255)
+    img = _flat(value, h=64, w=64)
+    params = {"pattern": pattern, "seed": 1}
+
+    unjittered = hatch(img, params)
+    jittered = hatch(img, {**params, "jitter": 1.0})
+    assert not np.array_equal(unjittered, jittered)
+
+    other_seed = hatch(img, {**params, "jitter": 1.0, "seed": 2})
+    assert not np.array_equal(jittered, other_seed)
+
+
+def test_lines_wobble_smoothly_along_the_stroke():
+    # One layer of horizontal lines (angle=0, layers=1, pen=0.2, S=16,
+    # jitter=1, flat t=0.3, 64x256): each inked stroke's centroid row,
+    # measured per column, varies by more than 2 px along the image but by
+    # less than 1 px between adjacent columns (story 6 doc, "Acceptance").
+    value = round((1.0 - 0.3) * 255)
+    h, w = 64, 256
+    img = _flat(value, h=h, w=w)
+
+    out = hatch(
+        img,
+        {
+            "pattern": "lines",
+            "layers": 1,
+            "angle": 0,
+            "pen": 0.2,
+            "spacing": 16.0,
+            "jitter": 1.0,
+        },
+    )
+
+    # Isolate the stroke nominally centred on row 32 — a band that spans
+    # its full jitter range (+/- S/2) while staying clear of its
+    # neighbours at rows 16 and 48, so their ink can't blend into this
+    # stroke's centroid.
+    band = out[24:40, :, 0].astype(np.float64)
+    ink = 255.0 - band
+    rows = np.arange(24, 40)[:, None]
+    total = ink.sum(axis=0)
+    assert np.all(total > 0)
+    centroid = (rows * ink).sum(axis=0) / total
+
+    assert centroid.max() - centroid.min() > 2.0
+    assert np.all(np.abs(np.diff(centroid)) < 1.0)
+
+
+@pytest.mark.parametrize("pattern", ("lines", "dashes", "crosses"))
+@pytest.mark.parametrize("layers", [1, 4])
+@pytest.mark.parametrize("angle", [0, 30])
+@pytest.mark.parametrize("spacing", [6, 16])
+def test_jitter_black_closes_to_ink_no_pinholes(pattern, layers, angle, spacing):
+    img = _flat(0)
+
+    out = hatch(
+        img,
+        {
+            "pattern": pattern,
+            "layers": layers,
+            "weight": 1.0,
+            "angle": angle,
+            "spacing": spacing,
+            "jitter": 1.0,
+            "seed": 7,
+        },
+    )
+
+    assert np.all(out[..., :3] == 0)
+
+
+@pytest.mark.parametrize("pattern", ("lines", "dashes", "crosses"))
+@pytest.mark.parametrize("layers", [1, 4])
+def test_jitter_keeps_ink_coverage_monotonic(pattern, layers):
+    means = []
+    for step in range(11):
+        value = round((1.0 - step / 10.0) * 255)
+        out = hatch(
+            _flat(value),
+            {"pattern": pattern, "layers": layers, "jitter": 1.0, "seed": 7},
+        )
+        means.append(1.0 - out[..., 0].mean() / 255.0)
+
+    assert all(means[i] <= means[i + 1] + 1e-9 for i in range(len(means) - 1))
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_jitter_translation_stability(pattern):
+    rng = np.random.default_rng(34)
+    h, w = 40, 48
+    pad = 12
+    spacing = 8.0
+    img = _random_rgba(rng, h=h, w=w)
+
+    padded = np.zeros((h + pad, w + pad, 4), dtype=np.uint8)
+    padded[:h, :w] = img
+    padded[h:, :] = rng.integers(0, 256, size=(pad, w + pad, 4), dtype=np.uint8)
+    padded[:, w:] = rng.integers(0, 256, size=(h + pad, pad, 4), dtype=np.uint8)
+
+    params = {
+        "pattern": pattern,
+        "seed": 7,
+        "angle": 30,
+        "spacing": spacing,
+        "jitter": 1.0,
+    }
+    out_img = hatch(img, params)
+    out_padded = hatch(padded, params)[:h, :w]
+
+    if pattern == "crosses":
+        # `crosses`' own-cell displacement can reach D = jitter * S / 2
+        # beyond the existing 2 * S cell-centre-lookup margin (story 6
+        # doc, "Acceptance"); `stipple` ignores `jitter` outright, so its
+        # margin is unchanged.
+        margin = int(2 * spacing + spacing / 2.0)
+        np.testing.assert_array_equal(
+            out_img[: h - margin, : w - margin],
+            out_padded[: h - margin, : w - margin],
+        )
+    elif pattern == "stipple":
+        margin = int(2 * spacing)
+        np.testing.assert_array_equal(
+            out_img[: h - margin, : w - margin],
+            out_padded[: h - margin, : w - margin],
+        )
+    else:
+        np.testing.assert_array_equal(out_img, out_padded)
+
+
+def test_bar_offsets_pad_grows_own_cell_half_extent():
+    # `+` (k=0), pen=1, f=1, pad=S/2: the own cell's half-extent grows from
+    # S/2 to S, so bar1's arm (which exactly reaches the unpadded cell
+    # edge and no further, `test_bar_offsets_single_cell_at_f_one`) now
+    # also reaches the diagonal and across-axis neighbours (story 6 doc,
+    # "`crosses`: per-cell offset", "Acceptance").
+    offsets = set(_bar_offsets(0, 1, 1.0, 1.0, 16.0, pad=8.0))
+
+    assert {(1, 0), (-1, 0), (0, 1), (0, -1)} <= offsets
+
+    offsets_unpadded = _bar_offsets(0, 1, 1.0, 1.0, 16.0, pad=0.0)
+    assert offsets_unpadded == [(0, 0)]
 
 
 # --- helpers: _area, _hash01 ----------------------------------------------------------
