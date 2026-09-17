@@ -7,6 +7,7 @@ battery by appending to it rather than duplicating every test.
 from __future__ import annotations
 
 import hashlib
+import time
 
 import numpy as np
 import pytest
@@ -56,6 +57,96 @@ def test_story_1_output_byte_identical_regression(pattern):
 
     digest = hashlib.sha256(out.tobytes()).hexdigest()
     assert digest == _STORY_1_REGRESSION_DIGESTS[pattern]
+
+
+# --- story 7 regression: byte-identical lattice-hashing refactor --------------
+#
+# Recorded from `hatch.py` at HEAD *before* story 7 touched it, on a fixed
+# 256x256 seeded RGBA image (`np.random.default_rng(99)`). Story 7 moves every
+# hashed/looked-up quantity that is a function of lattice indices only (the
+# wobble hash, the dash phase hash, the stipple hashes, `_cell_centre_tone`,
+# `_c_k`, `_jitter_fade` inside `_crosses_ink_sweep`) onto a compact grid
+# evaluated once and gathered per pixel — a pure performance change, so every
+# digest here must still match after the refactor (story doc, "Acceptance").
+
+_STORY_7_REGRESSION_DIGESTS = {
+    "lines_layers1_jitter0.0": "6f0e84aceea0d1e97c90f3059f176008b3f6d771aeb98bc5bba11aec1aedc98d",
+    "lines_layers1_jitter0.5": "1f3dc1bb1abdbf6b399396def22da507bdabc51f34ab668b35e276aee1798efc",
+    "lines_layers4_jitter0.0": "9c01606296a9e5a55d9e10c84f9cf8b4e70240309f8b0a01ea856df973a1e31a",
+    "lines_layers4_jitter0.5": "a0c42186b66637e857d6eea83dcc36d3c1297c5706c61822d11824278df79a64",
+    "dashes_layers1_jitter0.0": "354d3c8c0c032c7b97f79ec9343d7274aa51b784edbf4ccc67ab23315b687337",
+    "dashes_layers1_jitter0.5": "46f8d62c28057bcd0f6a14aa2ade5982906910cfd8847e8832dec950525848f7",
+    "dashes_layers4_jitter0.0": "3422482b1594f778a3f40f24c48796eecb6fd7df4a575b3ae48b8e8472384e07",
+    "dashes_layers4_jitter0.5": "8092e65c7f239dc1c2fe4b3f0d41678c2d142a1f524880e0c23dab09d099b03e",
+    "crosses_layers1_jitter0.0": "7690abe90d8be2950fb66dff9a9844713ee90678d2fee8bb49681f4a2212de98",
+    "crosses_layers1_jitter0.5": "a84cea498831c4485f73162eb53797bdca4e776fb8006e0952b7efac621b6126",
+    "crosses_layers4_jitter0.0": "3ab835b5f5ef77373f614c946809a897a5bc35926d404c1ba10e673d88f25162",
+    "crosses_layers4_jitter0.5": "1d3041fb89f6160d701077439b11d3942cbf56e261f0fad167893e4f036be0a4",
+    "stipple_layers1_jitter0.0": "d3152c64f1816a0d5401c17f1a7122bb315d85f4681d1ad5d9d81c33d7371e21",
+    "stipple_layers1_jitter0.5": "d3152c64f1816a0d5401c17f1a7122bb315d85f4681d1ad5d9d81c33d7371e21",
+    "stipple_layers4_jitter0.0": "1fe21ed2626dcf2fad264f12dc64c6bd39ecc2ef7174a7289dacce58b7457e51",
+    "stipple_layers4_jitter0.5": "1fe21ed2626dcf2fad264f12dc64c6bd39ecc2ef7174a7289dacce58b7457e51",
+    "crosses_cross_size2": "a999ec84ef98bcbf65515ad0a273a31c8e4249ce9ab63190ef7d9efe700135b5",
+    "crosses_cross_size2_aspect2_jitter0.5": "2c7750608b982048f7c421ae4322283325c6af1d71010f43476ed17f71f4b954",
+    "dashes_seed7": "4676581860bad3b4fef22fa40cbe8b611073ad13c430c0f4f75eeca986eb3d12",
+    "stipple_seed7": "be8e7bcae964faec4d1d52cfbd2e0d0083977221629cf0031eafaf72fd0e65ee",
+}
+
+
+def _story_7_input() -> np.ndarray:
+    rng = np.random.default_rng(99)
+    return rng.integers(0, 256, size=(256, 256, 4), dtype=np.uint8)
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+@pytest.mark.parametrize("layers", (1, 4))
+@pytest.mark.parametrize("jitter", (0.0, 0.5))
+def test_story_7_output_byte_identical_regression_matrix(pattern, layers, jitter):
+    img = _story_7_input()
+
+    out = hatch(img, {"pattern": pattern, "layers": layers, "jitter": jitter})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    key = f"{pattern}_layers{layers}_jitter{jitter}"
+    assert digest == _STORY_7_REGRESSION_DIGESTS[key]
+
+
+def test_story_7_output_byte_identical_regression_crosses_cross_size():
+    img = _story_7_input()
+
+    out = hatch(img, {"pattern": "crosses", "cross_size": 2.0})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    assert digest == _STORY_7_REGRESSION_DIGESTS["crosses_cross_size2"]
+
+
+def test_story_7_output_byte_identical_regression_crosses_cross_size_aspect_jitter():
+    img = _story_7_input()
+
+    out = hatch(
+        img,
+        {
+            "pattern": "crosses",
+            "cross_size": 2.0,
+            "cross_aspect": 2.0,
+            "jitter": 0.5,
+        },
+    )
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    assert (
+        digest == _STORY_7_REGRESSION_DIGESTS["crosses_cross_size2_aspect2_jitter0.5"]
+    )
+
+
+@pytest.mark.parametrize("pattern", ("dashes", "stipple"))
+def test_story_7_output_byte_identical_regression_seed(pattern):
+    img = _story_7_input()
+
+    out = hatch(img, {"pattern": pattern, "seed": 7})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    assert digest == _STORY_7_REGRESSION_DIGESTS[f"{pattern}_seed7"]
 
 
 # --- shared battery ---------------------------------------------------------
@@ -951,3 +1042,42 @@ def test_hash01_in_unit_interval():
 
     assert np.all(out >= 0.0)
     assert np.all(out < 1.0)
+
+
+# --- perf smoke (story 7) -----------------------------------------------------
+
+
+@pytest.mark.perf
+def test_crosses_jitter_2048_well_under_two_and_a_half_seconds():
+    """Perf smoke test (story 7 doc, "Acceptance") — the pre-story-7 op
+    measured 5.13s here (story doc's table); the lattice-hashing/gather
+    refactor must land it well under 2.5s. Marked `perf`, skipped by
+    default per `pyproject.toml`'s `-m 'not perf'`; run explicitly with
+    `-m perf`."""
+    img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
+    params = {"pattern": "crosses", "layers": 4, "jitter": 0.5}
+
+    hatch(img, params)  # warm up
+    start = time.perf_counter()
+    hatch(img, params)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 2.5, f"crosses jitter=0.5 took {elapsed:.3f}s on a 2048x2048 image"
+
+
+@pytest.mark.perf
+def test_lines_jitter_2048_well_under_half_a_second():
+    """Perf smoke test (story 7 doc, "Acceptance") — the pre-story-7 op
+    measured 1.17s here (story doc's table); the lattice-hashing/gather
+    refactor must land it well under 0.5s. Marked `perf`, skipped by
+    default per `pyproject.toml`'s `-m 'not perf'`; run explicitly with
+    `-m perf`."""
+    img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
+    params = {"pattern": "lines", "layers": 4, "jitter": 0.5}
+
+    hatch(img, params)  # warm up
+    start = time.perf_counter()
+    hatch(img, params)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.5, f"lines jitter=0.5 took {elapsed:.3f}s on a 2048x2048 image"

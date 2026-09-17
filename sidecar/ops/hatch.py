@@ -6,7 +6,9 @@ story 5 annotates the params each pattern ignores with `disabled_when`, so
 the panel greys them out rather than letting a moved slider silently do
 nothing; story 6 adds `jitter` — `lines`/`dashes` wobble along the stroke
 and `crosses` drift within their cell, fading out as a layer closes so
-black still closes to solid).
+black still closes to solid; story 7 evaluates every lattice-indexed hash
+or lookup once per grid cell and gathers it per pixel, for performance —
+byte-identical output).
 
 **Tone.** `source` picks a 0..1 channel — `luma` via the shared
 `LUMA_R709`/`LUMA_G709`/`LUMA_B709` weights, or a single `red`/`green`/
@@ -51,7 +53,15 @@ per line by `_hash01` so it isn't a static picket fence. `_hash01` is a
 number of `int64`-reinterpreted-as-`uint64` arrays/scalars), not a
 `default_rng` table indexed by line number — a table's contents depend on
 how many lines the image spans, so dash phases would shift between
-DRAFT/WORKING/BAKED and between differently sized nodes. `lines` never
+DRAFT/WORKING/BAKED and between differently sized nodes. Since story 7,
+every quantity that is a pure function of lattice indices — a hashed
+value, `_cell_centre_tone`'s lookup, or the layer-coverage/fade maths that
+consume it — is evaluated once on a compact grid spanning the index range
+the image actually spans (line index, wavelength cell, or cell-lattice
+`(cu, cv)` pair) and **gathered** per pixel by integer offset, rather than
+recomputed at every one of an image's pixels; `_hash01` itself is
+unchanged, still the pinned hash, and gathering only moves already-
+computed values, so output stays byte-identical. `lines` never
 calls it on its own account, so it ignores `seed` at `jitter = 0`;
 once `jitter > 0` its wobble reads `seed` too (below), so `seed`
 carries no `disabled_when` of its own — it is always enabled in the
@@ -250,36 +260,92 @@ def _jitter_fade(c: np.ndarray) -> np.ndarray:
     return np.clip(np.float32(2.0) * (np.float32(1.0) - c), 0.0, 1.0)
 
 
-def _wobble_offset(
-    m: np.ndarray,
-    u: np.ndarray,
-    spacing: float,
-    k: int,
-    seed: int,
-    disp: np.ndarray,
-) -> np.ndarray:
-    """`jitter`'s sideways displacement `δ_m` for line index `m` (story 6
-    doc, "The wave"): 1-D value noise along the stroke's own coordinate
-    `u`, smoothstep-interpolated between hashed lattice values (salt
-    `_WOBBLE_SALT`) at a wavelength of `_WOBBLE_WAVELENGTH * spacing`, then
-    scaled by `disp` (`D * fade(c)`, already elementwise). `m` is float
-    (`n0 ± {-1, 0, 1}`), cast to `int64` for hashing, matching every other
-    per-line index this module hashes."""
+def _wobble_prep(u: np.ndarray, spacing: float) -> tuple[np.ndarray, np.ndarray]:
+    """The wobble's `u`-only quantities (story 7 doc): the wavelength-cell
+    index `i` (`int64`, for hashing) and the smoothstep-interpolated
+    fraction within that cell. Identical for every neighbour line `m` a
+    pixel's `dn in (-1, 0, 1)` loop visits, so callers hoist this once per
+    layer instead of recomputing it three times on 4M-element arrays."""
     wavelength = np.float32(_WOBBLE_WAVELENGTH) * np.float32(spacing)
     x = u / wavelength
     i = np.floor(x)
     frac = x - i
-    m_i = m.astype(np.int64)
     i_i = i.astype(np.int64)
-    g0 = np.float32(2.0) * _hash01(m_i, i_i, k, seed, _WOBBLE_SALT).astype(
-        np.float32
-    ) - np.float32(1.0)
-    g1 = np.float32(2.0) * _hash01(m_i, i_i + 1, k, seed, _WOBBLE_SALT).astype(
-        np.float32
-    ) - np.float32(1.0)
     smooth = frac * frac * (np.float32(3.0) - np.float32(2.0) * frac)
+    return i_i, smooth
+
+
+def _wobble_setup(
+    n0: np.ndarray, u: np.ndarray, spacing: float
+) -> tuple[np.ndarray, int, int, np.ndarray, int, int, np.ndarray]:
+    """Shared per-layer index-range prep for `lines`/`dashes`' `jitter`
+    sweep (story 7 doc): `n0`'s `int64` line index, padded by the three
+    `dn in (-1, 0, 1)` neighbours a pixel's loop visits, and `_wobble_prep`'s
+    wavelength-cell index/smoothstep, its own range padded by `+1` so one
+    grid (`_wobble_grid`) can serve both `g0` (index `i`) and `g1` (index
+    `i + 1`). Returns `(n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth)`."""
+    n0_i = n0.astype(np.int64)
+    i_i, smooth = _wobble_prep(u, spacing)
+    m_lo, m_hi = int(n0_i.min()) - 1, int(n0_i.max()) + 1
+    i_lo, i_hi = int(i_i.min()), int(i_i.max()) + 1
+    return n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth
+
+
+def _wobble_grid(
+    m_lo: int, m_hi: int, i_lo: int, i_hi: int, k: int, seed: int
+) -> tuple[np.ndarray, int]:
+    """Hash grid for the wobble's lattice indices (line index `m`,
+    wavelength cell `i`), evaluated once over `[m_lo, m_hi] x [i_lo, i_hi]`
+    (story 7 doc) rather than per pixel, and returned **raveled** with the
+    `i`-axis width `n_i` so `_wobble_gather` can gather by a single flat
+    integer index (`np.take`) instead of two-array fancy indexing — reading
+    `grid.reshape(-1)[a * n_i + b]` is the same C-order memory access as
+    `grid[a, b]`, not a different computation, so this changes nothing
+    about the values, only how they're fetched. `i_hi` must be at least
+    `i.max() + 1` so the same grid gathers both `g0` (index `i`) and `g1`
+    (index `i + 1`) — `_hash01` is a pure function of its integer inputs,
+    so gathering an already-computed value is bit-identical to hashing it
+    at that pixel directly."""
+    m_idx = np.arange(m_lo, m_hi + 1, dtype=np.int64)
+    i_idx = np.arange(i_lo, i_hi + 1, dtype=np.int64)
+    n_i = i_idx.shape[0]
+    grid = _hash01(m_idx[:, None], i_idx[None, :], k, seed, _WOBBLE_SALT).astype(
+        np.float32
+    )
+    return grid.reshape(-1), n_i
+
+
+def _wobble_gather(
+    grid: np.ndarray,
+    n_i: int,
+    m_lo: int,
+    i_lo: int,
+    m_i: np.ndarray,
+    i_i: np.ndarray,
+    smooth: np.ndarray,
+    disp: np.ndarray,
+) -> np.ndarray:
+    """`jitter`'s sideways displacement `δ_m` for line index `m_i`, gathered
+    from the raveled `grid` (`_wobble_grid`) rather than hashed at this
+    pixel (story 7 doc): the same smoothstep interpolation between hashed
+    lattice values (story 6 doc, "The wave") as before, with `g0`/`g1` now
+    read from the grid at flat index `(m_i - m_lo) * n_i + (i_i - i_lo)`
+    (and `+ 1` for `g1`'s `i_i + 1`), scaled by `disp` (`D * fade(c)`,
+    already elementwise)."""
+    idx = (m_i - np.int64(m_lo)) * np.int64(n_i) + (i_i - np.int64(i_lo))
+    g0 = np.float32(2.0) * np.take(grid, idx) - np.float32(1.0)
+    g1 = np.float32(2.0) * np.take(grid, idx + 1) - np.float32(1.0)
     w = g0 + (g1 - g0) * smooth
     return disp * w
+
+
+def _phase_grid(m_lo: int, m_hi: int, k: int, seed: int) -> np.ndarray:
+    """Hash grid for `dashes`' per-line phase `phi`, 1-D over line index
+    `m` in `[m_lo, m_hi]` (story 7 doc) — the same `_hash01(m, k, seed)`
+    call `dashes` made per pixel, evaluated once and gathered by `m - m_lo`
+    instead."""
+    m_idx = np.arange(m_lo, m_hi + 1, dtype=np.int64)
+    return _hash01(m_idx, k, seed).astype(np.float32)
 
 
 def _tone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
@@ -335,6 +401,30 @@ def _cell_centre_tone(
     ix = np.clip(np.round(cx), 0, w - 1).astype(np.intp)
     iy = np.clip(np.round(cy), 0, h - 1).astype(np.intp)
     return t[iy, ix]
+
+
+def _cell_indices(
+    u: np.ndarray, v: np.ndarray, k: int, spacing: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """`du, dv, cu, cv` only — the lattice-geometry half of `_cell_lattice`,
+    with no cell-centre tone lookup. Used by `crosses`' neighbour-sweep path
+    (story 7 doc): the sweep gathers every neighbour's tone, including the
+    pixel's own cell at offset `(0, 0)`, from its own per-layer grid, so the
+    pixel's own-cell tone `_cell_lattice` would compute here is unused —
+    skipping it saves a full-size tone read per layer. Identical maths to
+    `_cell_lattice`'s own `du, dv, cu, cv`, so callers of either get
+    bit-identical results."""
+    o_u, o_v = _CELL_OFFSETS[k]
+    s = np.float32(spacing)
+    cu = np.round(u / s - np.float32(o_u))
+    cv = np.round(v / s - np.float32(o_v))
+
+    u_centre = (cu + np.float32(o_u)) * s
+    v_centre = (cv + np.float32(o_v)) * s
+    du = u - u_centre
+    dv = v - v_centre
+
+    return du, dv, cu.astype(np.int64), cv.astype(np.int64)
 
 
 def _cell_lattice(
@@ -544,8 +634,6 @@ def _crosses_ink_sweep(
     f2 = cross_size
     sqrt2 = np.float32(np.sqrt(2.0))
 
-    cu_f = cu.astype(np.float32)
-    cv_f = cv.astype(np.float32)
     s_f = np.float32(s)
     o_u_f, o_v_f = np.float32(o_u), np.float32(o_v)
 
@@ -556,32 +644,59 @@ def _crosses_ink_sweep(
     a2_max = reach * f2 + 0.5
     offsets1 = set(_bar_offsets(k, 1, f1, pen, s, pad=pad))
     offsets2 = set(_bar_offsets(k, 2, f2, pen, s, pad=pad))
-
-    # One pass over both bars' neighbours, so a neighbour both bars can
-    # reach pays for its tone lookup, jitter hashes and mark frame once.
     # `_bar_offsets` emits `(di, dj)` in ascending lexicographic order, so
     # walking the sorted union keeps each bar's product in its own order —
     # the same floats as evaluating the bars in two separate loops.
+    offsets = sorted(offsets1 | offsets2)
+
+    # Story 7: every neighbour's tone/coverage/jitter is a pure function of
+    # its own cell-lattice index, so build one grid per layer over the
+    # padded index range every offset can reach and gather it per pixel by
+    # integer index, instead of recomputing `_cell_centre_tone`/`_c_k`/the
+    # jitter hashes at every one of an image's pixels for every neighbour.
+    di_lo = min(di for di, _dj in offsets)
+    di_hi = max(di for di, _dj in offsets)
+    dj_lo = min(dj for _di, dj in offsets)
+    dj_hi = max(dj for _di, dj in offsets)
+
+    cu_lo = int(cu.min()) + di_lo
+    cu_hi = int(cu.max()) + di_hi
+    cv_lo = int(cv.min()) + dj_lo
+    cv_hi = int(cv.max()) + dj_hi
+    n_v = cv_hi - cv_lo + 1
+
+    cu_idx = np.arange(cu_lo, cu_hi + 1, dtype=np.int64)
+    cv_idx = np.arange(cv_lo, cv_hi + 1, dtype=np.int64)
+    u_centre_grid = (cu_idx.astype(np.float32)[:, None] + o_u_f) * s_f
+    v_centre_grid = (cv_idx.astype(np.float32)[None, :] + o_v_f) * s_f
+    t_cell_grid = _cell_centre_tone(u_centre_grid, v_centre_grid, cos_t, sin_t, t, h, w)
+    c_n_grid = _c_k(t_cell_grid, k, layers, weight).reshape(-1)
+
+    if jitter > 0.0:
+        disp_grid = d_disp * _jitter_fade(c_n_grid)
+        h5 = _hash01(cu_idx[:, None], cv_idx[None, :], k, seed, 5).astype(np.float32)
+        h6 = _hash01(cu_idx[:, None], cv_idx[None, :], k, seed, 6).astype(np.float32)
+        ju_grid = disp_grid * (np.float32(2.0) * h5.reshape(-1) - np.float32(1.0))
+        jv_grid = disp_grid * (np.float32(2.0) * h6.reshape(-1) - np.float32(1.0))
+
+    # Own-cell flat index into the grid above, computed once per layer; a
+    # neighbour offset `(di, dj)` is then a single scalar shift
+    # (`di * n_v + dj`) rather than rebuilding two 4M-element index arrays —
+    # the padding above guarantees every shifted index stays in bounds, so
+    # the ravelled arithmetic never carries into the wrong row.
+    base = (cu - np.int64(cu_lo)) * np.int64(n_v) + (cv - np.int64(cv_lo))
+
+    # One pass over both bars' neighbours, so a neighbour both bars can
+    # reach pays for its mark-frame maths once.
     not_bar1 = np.ones_like(du, dtype=np.float32)
     not_bar2 = np.ones_like(du, dtype=np.float32)
-    for di, dj in sorted(offsets1 | offsets2):
-        u_centre_n = (cu_f + np.float32(di) + o_u_f) * s_f
-        v_centre_n = (cv_f + np.float32(dj) + o_v_f) * s_f
-        t_cell_n = _cell_centre_tone(u_centre_n, v_centre_n, cos_t, sin_t, t, h, w)
-        c_n = _c_k(t_cell_n, k, layers, weight)
+    for di, dj in offsets:
+        idx = base + np.int64(di) * np.int64(n_v) + np.int64(dj)
+        c_n = np.take(c_n_grid, idx)
 
         if jitter > 0.0:
-            cu_n = cu + np.int64(di)
-            cv_n = cv + np.int64(dj)
-            disp_n = d_disp * _jitter_fade(c_n)
-            ju_n = disp_n * (
-                np.float32(2.0) * _hash01(cu_n, cv_n, k, seed, 5).astype(np.float32)
-                - np.float32(1.0)
-            )
-            jv_n = disp_n * (
-                np.float32(2.0) * _hash01(cu_n, cv_n, k, seed, 6).astype(np.float32)
-                - np.float32(1.0)
-            )
+            ju_n = np.take(ju_grid, idx)
+            jv_n = np.take(jv_grid, idx)
             du_n = du - np.float32(di) * s_f - ju_n
             dv_n = dv - np.float32(dj) * s_f - jv_n
         else:
@@ -620,11 +735,23 @@ def _stipple_ink(
     """`stipple`'s per-layer ink: one jittered, anti-aliased disc per cell,
     born at a per-cell seeded threshold and growing until it closes the
     cell (story 2 doc, "stipple"). Density-led in the light tones (dots
-    appear one at a time), size-led in the dark (dots swell to solid)."""
+    appear one at a time), size-led in the dark (dots swell to solid).
+    Story 7: `h1`/`h2`/`h3` are each a pure function of the cell index
+    `(cu, cv)`, so each is hashed once on a grid over the image's own cell
+    range and gathered per pixel, instead of hashed at every pixel."""
     s = spacing
-    h1 = _hash01(cu, cv, k, seed, 1).astype(np.float32)
-    h2 = _hash01(cu, cv, k, seed, 2).astype(np.float32)
-    h3 = _hash01(cu, cv, k, seed, 3).astype(np.float32)
+    cu_lo, cu_hi = int(cu.min()), int(cu.max())
+    cv_lo, cv_hi = int(cv.min()), int(cv.max())
+    cu_idx = np.arange(cu_lo, cu_hi + 1, dtype=np.int64)
+    cv_idx = np.arange(cv_lo, cv_hi + 1, dtype=np.int64)
+    h1_grid = _hash01(cu_idx[:, None], cv_idx[None, :], k, seed, 1).astype(np.float32)
+    h2_grid = _hash01(cu_idx[:, None], cv_idx[None, :], k, seed, 2).astype(np.float32)
+    h3_grid = _hash01(cu_idx[:, None], cv_idx[None, :], k, seed, 3).astype(np.float32)
+    iu = cu - np.int64(cu_lo)
+    iv = cv - np.int64(cv_lo)
+    h1 = h1_grid[iu, iv]
+    h2 = h2_grid[iu, iv]
+    h3 = h3_grid[iu, iv]
 
     birth = np.float32(_STIPPLE_BIRTH)
     beta = birth * h1
@@ -769,10 +896,12 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         v = -xs * sin_t + ys * cos_t
 
         if pattern == "crosses":
-            du, dv, cu, cv, t_cell = _cell_lattice(
-                u, v, k, spacing, cos_t, sin_t, t, h, w
-            )
             if max(cross_size, cross_size * cross_aspect) > 1.0 or jitter > 0.0:
+                # The sweep gathers every neighbour's tone from its own
+                # per-layer grid, including this cell's own `(0, 0)`
+                # offset, so the own-cell tone `_cell_lattice` would look
+                # up here is unused — `_cell_indices` skips that lookup.
+                du, dv, cu, cv = _cell_indices(u, v, k, spacing)
                 ink_k = _crosses_ink_sweep(
                     cu,
                     cv,
@@ -794,6 +923,9 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
                     seed,
                 )
             else:
+                du, dv, cu, cv, t_cell = _cell_lattice(
+                    u, v, k, spacing, cos_t, sin_t, t, h, w
+                )
                 c_k = _c_k(t_cell, k, layers, weight)
                 ink_k = _crosses_ink(
                     du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
@@ -815,14 +947,22 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
 
             if jitter > 0.0:
                 disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
+                    n0, u, spacing
+                )
+                wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
+                phase_grid = _phase_grid(m_lo, m_hi, k, seed)
                 ink_not = np.ones_like(t, dtype=np.float32)
                 for dn in (-1, 0, 1):
+                    m_i = n0_i + dn
                     m = n0 + dn
-                    delta = _wobble_offset(m, u, spacing, k, seed, disp)
+                    delta = _wobble_gather(
+                        wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                    )
                     d_m = np.abs(v - (m * np.float32(spacing) + delta))
                     ink_across = _area(d_m, across_h)
 
-                    phi = _hash01(m.astype(np.int64), k, seed).astype(np.float32)
+                    phi = phase_grid[m_i - m_lo]
                     e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
                     ink_along = _area(e, along_h)
 
@@ -832,7 +972,10 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
                 d = np.abs(v - n0 * np.float32(spacing))
                 ink_k = _area(d, across_h)
 
-                phi = _hash01(n0.astype(np.int64), k, seed).astype(np.float32)
+                n0_i = n0.astype(np.int64)
+                phase_lo = int(n0_i.min())
+                phase_grid = _phase_grid(phase_lo, int(n0_i.max()), k, seed)
+                phi = phase_grid[n0_i - np.int64(phase_lo)]
                 e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
                 ink_k = ink_k * _area(e, along_h)
         else:
@@ -842,10 +985,17 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
 
             if jitter > 0.0:
                 disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
+                    n0, u, spacing
+                )
+                wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
                 ink_not = np.ones_like(t, dtype=np.float32)
                 for dn in (-1, 0, 1):
+                    m_i = n0_i + dn
                     m = n0 + dn
-                    delta = _wobble_offset(m, u, spacing, k, seed, disp)
+                    delta = _wobble_gather(
+                        wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                    )
                     d_m = np.abs(v - (m * np.float32(spacing) + delta))
                     ink_not = ink_not * (1.0 - _area(d_m, stroke_h))
                 ink_k = 1.0 - ink_not
