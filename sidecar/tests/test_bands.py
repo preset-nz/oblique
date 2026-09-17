@@ -2,7 +2,10 @@
 pool `hatch` opts into via `map_rows`. `hatch`'s own digest/equality tests
 (`test_hatch.py`) cover the value-preserving contract end to end; these
 tests cover `map_rows`/`worker_count` in isolation: band boundaries,
-`worker_count` env parsing, and exception propagation.
+`worker_count` env parsing, and exception propagation. Story 9 caps the
+unset-env fallback at 8 workers (the NumPy ceiling doc's scaling
+measurement) — `test_worker_count_caps_the_unset_fallback_at_eight` is
+the machine-independent guard for that.
 """
 
 from __future__ import annotations
@@ -117,14 +120,24 @@ def test_worker_count_reads_env_var(monkeypatch):
     assert worker_count() == 5
 
 
-def test_worker_count_falls_back_to_cpu_count_when_unset(monkeypatch):
+def test_worker_count_falls_back_to_cpu_count_capped_at_eight_when_unset(monkeypatch):
     monkeypatch.delenv("OBLIQUE_SIDECAR_THREADS", raising=False)
 
-    assert worker_count() == (os.cpu_count() or 1)
+    assert worker_count() == min(os.cpu_count() or 1, 8)
 
 
 @pytest.mark.parametrize("raw", ("0", "-3", "not-a-number", ""))
 def test_worker_count_ignores_non_positive_or_garbage_env_value(monkeypatch, raw):
     monkeypatch.setenv("OBLIQUE_SIDECAR_THREADS", raw)
 
-    assert worker_count() == (os.cpu_count() or 1)
+    assert worker_count() == min(os.cpu_count() or 1, 8)
+
+
+def test_worker_count_caps_the_unset_fallback_at_eight(monkeypatch):
+    # Story 9: scaling stops at 8 threads (story 9 doc, "Why"), so the
+    # fallback caps there regardless of how many cores the machine has —
+    # machine-independent, unlike the two tests above on a <=8-core box.
+    monkeypatch.delenv("OBLIQUE_SIDECAR_THREADS", raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 18)
+
+    assert worker_count() == 8

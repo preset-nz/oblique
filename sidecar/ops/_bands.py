@@ -30,12 +30,22 @@ _executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 
 
+# Default thread cap for `map_rows` (epic 18, story 9 doc, "Why"). Measured
+# on `hatch`'s worst-case config (crosses, jitter 0.5, 2048^2, an 18-core
+# M5 Pro): 2.11s at 1 thread, 0.53s at 8, 0.54s at 12, 0.59s at 18 — scaling
+# stops at 8 because ~1 MB per-band arrays stream from DRAM (128 KB arrays
+# scale 5.6x at 8 threads where 1 MB arrays scale 3.1x) and more threads
+# past that just add GIL hand-off overhead for no further bandwidth. The
+# env var still overrides for machines or ops where that trade-off differs.
+_DEFAULT_MAX_WORKERS = 8
+
+
 def worker_count() -> int:
     """Thread count for `map_rows`. Reads `OBLIQUE_SIDECAR_THREADS` fresh on
     every call (never cached) so a test can force single-threaded execution
     by monkeypatching this function or setting the env var mid-process;
-    falls back to `os.cpu_count() or 1`. A non-positive or unparseable env
-    value is ignored, same fallback."""
+    falls back to `min(os.cpu_count() or 1, _DEFAULT_MAX_WORKERS)`. A
+    non-positive or unparseable env value is ignored, same fallback."""
     raw = os.environ.get("OBLIQUE_SIDECAR_THREADS")
     if raw:
         try:
@@ -44,7 +54,7 @@ def worker_count() -> int:
             n = 0
         if n > 0:
             return n
-    return os.cpu_count() or 1
+    return min(os.cpu_count() or 1, _DEFAULT_MAX_WORKERS)
 
 
 def _get_executor() -> ThreadPoolExecutor:
