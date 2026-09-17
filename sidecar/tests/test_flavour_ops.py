@@ -108,6 +108,22 @@ def test_all_ops_are_split_between_the_two_suites():
             assert OPS[fn.__name__].writes_alpha is False
 
 
+@pytest.mark.parametrize("name", sorted(OPS))
+def test_registry_entry_runs_the_op_it_names(name):
+    """Every registered op's `fn` is the function it is named after, and
+    runs through the registry the way `handlers/cook.py` calls it. Guards a
+    decorator ending up on the wrong function: on 2026-09-17 helpers were
+    inserted between `@op("hatch", ...)` and `def hatch`, so the registry
+    wrapped `_coverage_numpy`. Every test called `hatch()` by name and
+    passed; the app's first cook failed."""
+    entry = OPS[name]
+    assert entry.fn.__name__ == name
+    img = np.random.default_rng(0).integers(0, 256, (24, 31, 4), dtype=np.uint8)
+    out = entry.fn(img, {})
+    assert out.shape == img.shape
+    assert out.dtype == np.uint8
+
+
 @pytest.mark.parametrize(
     "name",
     [

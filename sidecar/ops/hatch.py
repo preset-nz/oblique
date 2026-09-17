@@ -806,97 +806,6 @@ def _stipple_ink(
     return np.where(r <= 0.0, 0.0, np.clip(r - dist + 0.5, 0.0, 1.0))
 
 
-@op(
-    "hatch",
-    label="Hatch",
-    description=(
-        "Redraw tone as pen marks — hatched lines, dashes, crosses or "
-        "stipple dots whose density follows the image's darkness. Layers "
-        "stack crosshatch; one layer engraves."
-    ),
-    params=[
-        P(
-            "pattern",
-            "enum",
-            default="lines",
-            choices=("lines", "dashes", "crosses", "stipple"),
-        ),
-        P("layers", "int", min=1, max=4, default=2, step=1),
-        P(
-            "spacing",
-            "float",
-            min=2.0,
-            max=96.0,
-            default=8.0,
-            step=0.5,
-            scale="spatial",
-        ),
-        P("angle", "float", min=0.0, max=180.0, default=45.0, step=1.0),
-        P("weight", "float", min=0.05, max=1.0, default=1.0, step=0.01),
-        P(
-            "pen",
-            "float",
-            min=0.01,
-            max=1.0,
-            default=1.0,
-            step=0.01,
-            disabled_when={"path": "pattern", "equals": "stipple"},
-        ),
-        P(
-            "jitter",
-            "float",
-            min=0.0,
-            max=1.0,
-            default=0.0,
-            step=0.01,
-            disabled_when={"path": "pattern", "equals": "stipple"},
-        ),
-        P(
-            "cross_size",
-            "float",
-            min=0.25,
-            max=3.0,
-            default=1.0,
-            step=0.05,
-            disabled_when={"path": "pattern", "notEquals": "crosses"},
-        ),
-        P(
-            "cross_aspect",
-            "float",
-            min=1.0,
-            max=4.0,
-            default=1.0,
-            step=0.05,
-            disabled_when={"path": "pattern", "notEquals": "crosses"},
-        ),
-        P(
-            "source",
-            "enum",
-            default="luma",
-            choices=("luma", "red", "green", "blue"),
-        ),
-        P("black", "float", min=0.0, max=255.0, default=0.0, step=1.0),
-        P("white", "float", min=0.0, max=255.0, default=255.0, step=1.0),
-        P("gamma", "float", min=0.1, max=5.0, default=1.0, step=0.05),
-        P("ink", "color", default="#000000"),
-        P(
-            "paper",
-            "color",
-            default="#ffffff",
-            disabled_when={"path": "paper_is_alpha", "equals": True},
-        ),
-        P("paper_is_alpha", "bool", default=False),
-        P(
-            "seed",
-            "int",
-            min=0,
-            max=2**31 - 1,
-            default=0,
-            step=1,
-        ),
-    ],
-    writes_alpha=True,
-)
 def _coverage_numpy(
     t: np.ndarray,
     h: int,
@@ -1196,6 +1105,97 @@ def _coverage(
     return _coverage_numpy(*args)
 
 
+@op(
+    "hatch",
+    label="Hatch",
+    description=(
+        "Redraw tone as pen marks — hatched lines, dashes, crosses or "
+        "stipple dots whose density follows the image's darkness. Layers "
+        "stack crosshatch; one layer engraves."
+    ),
+    params=[
+        P(
+            "pattern",
+            "enum",
+            default="lines",
+            choices=("lines", "dashes", "crosses", "stipple"),
+        ),
+        P("layers", "int", min=1, max=4, default=2, step=1),
+        P(
+            "spacing",
+            "float",
+            min=2.0,
+            max=96.0,
+            default=8.0,
+            step=0.5,
+            scale="spatial",
+        ),
+        P("angle", "float", min=0.0, max=180.0, default=45.0, step=1.0),
+        P("weight", "float", min=0.05, max=1.0, default=1.0, step=0.01),
+        P(
+            "pen",
+            "float",
+            min=0.01,
+            max=1.0,
+            default=1.0,
+            step=0.01,
+            disabled_when={"path": "pattern", "equals": "stipple"},
+        ),
+        P(
+            "jitter",
+            "float",
+            min=0.0,
+            max=1.0,
+            default=0.0,
+            step=0.01,
+            disabled_when={"path": "pattern", "equals": "stipple"},
+        ),
+        P(
+            "cross_size",
+            "float",
+            min=0.25,
+            max=3.0,
+            default=1.0,
+            step=0.05,
+            disabled_when={"path": "pattern", "notEquals": "crosses"},
+        ),
+        P(
+            "cross_aspect",
+            "float",
+            min=1.0,
+            max=4.0,
+            default=1.0,
+            step=0.05,
+            disabled_when={"path": "pattern", "notEquals": "crosses"},
+        ),
+        P(
+            "source",
+            "enum",
+            default="luma",
+            choices=("luma", "red", "green", "blue"),
+        ),
+        P("black", "float", min=0.0, max=255.0, default=0.0, step=1.0),
+        P("white", "float", min=0.0, max=255.0, default=255.0, step=1.0),
+        P("gamma", "float", min=0.1, max=5.0, default=1.0, step=0.05),
+        P("ink", "color", default="#000000"),
+        P(
+            "paper",
+            "color",
+            default="#ffffff",
+            disabled_when={"path": "paper_is_alpha", "equals": True},
+        ),
+        P("paper_is_alpha", "bool", default=False),
+        P(
+            "seed",
+            "int",
+            min=0,
+            max=2**31 - 1,
+            default=0,
+            step=1,
+        ),
+    ],
+    writes_alpha=True,
+)
 def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     h, w = img.shape[:2]
     pattern = str(params.get("pattern", "lines"))
