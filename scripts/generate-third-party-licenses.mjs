@@ -7,12 +7,14 @@
  * Python runtime dependencies (numpy, pillow — bundled into the frozen
  * sidecar) + PyInstaller itself (its compiled bootloader is embedded in
  * the frozen sidecar executable, under its own bootloader exception —
- * see guidance/projects/oblique/design/licensing.md). Excludes dev-only
- * tooling (ruff, pytest, pip-licenses, pyinstaller-hooks-contrib, …) that
- * never ships. Rust/Tauri's dependency tree isn't enumerated here — few
- * hundred transitive crates, licence policy for that tree is still
- * manual review per licensing.md; revisit if/when the "first public
- * release" epic needs a full legal notices file.
+ * see guidance/projects/oblique/design/licensing.md) + the
+ * `sidecar/kernels` Rust crate's own dependency tree (its `.so` ships
+ * inside the frozen sidecar — Epic 19). `src-tauri`'s crate tree is NOT
+ * enumerated here — few hundred transitive crates, licence policy for
+ * that tree is still manual review per licensing.md (its automated gate,
+ * `scripts/check_rust_licenses.py`, only covers `sidecar/kernels` for the
+ * same reason); revisit if/when the "first public release" epic needs a
+ * full legal notices file.
  */
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -54,8 +56,21 @@ function pythonPackages() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function rustKernelsPackages() {
+  const raw = execFileSync(
+    'cargo',
+    ['metadata', '--format-version', '1', '--manifest-path', 'sidecar/kernels/Cargo.toml'],
+    { encoding: 'utf8' },
+  );
+  const { packages } = JSON.parse(raw);
+  return packages
+    .map((pkg) => ({ name: pkg.name, version: pkg.version, licence: pkg.license ?? '(no licence field)' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 const npm = npmPackages();
 const python = pythonPackages();
+const rustKernels = rustKernelsPackages();
 
 const lines = [
   'THIRD-PARTY-LICENSES',
@@ -71,7 +86,13 @@ const lines = [
   '',
   ...python.map((pkg) => `${pkg.name} ${pkg.version} — ${pkg.licence}${pkg.note}`),
   '',
+  '== Rust (sidecar/kernels native extension, embedded in the frozen sidecar) ==',
+  '',
+  ...rustKernels.map((pkg) => `${pkg.name} ${pkg.version} — ${pkg.licence}`),
+  '',
 ];
 
 writeFileSync('THIRD-PARTY-LICENSES', lines.join('\n'));
-console.log(`THIRD-PARTY-LICENSES written: ${npm.length} npm packages, ${python.length} Python packages.`);
+console.log(
+  `THIRD-PARTY-LICENSES written: ${npm.length} npm packages, ${python.length} Python packages, ${rustKernels.length} Rust crates.`,
+);

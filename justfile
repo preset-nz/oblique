@@ -8,7 +8,7 @@ default:
 prep:
     @echo "node:  $(node --version 2>/dev/null || echo MISSING)"
     @echo "pnpm:  $(pnpm --version 2>/dev/null || echo MISSING)"
-    @echo "rustc: $(rustc --version 2>/dev/null || echo MISSING)"
+    @echo "rustc: $(rustc --version 2>/dev/null || echo MISSING) (also builds sidecar/kernels, see just kernels)"
     @echo "uv:    $(uv --version 2>/dev/null || echo MISSING)"
 
 [group('setup')]
@@ -16,6 +16,12 @@ install:
     pnpm install
     uv sync --project sidecar
     pnpm exec lefthook install
+
+# Force-rebuild the native kernels crate (sidecar/kernels) — normally `uv
+# sync` above only rebuilds it when the Rust sources changed.
+[group('build')]
+kernels:
+    uv sync --project sidecar --reinstall-package oblique-kernels
 
 [group('dev')]
 run target="desktop":
@@ -38,12 +44,14 @@ check:
     ./node_modules/.bin/depcruise src
     node scripts/check-licenses.mjs
     python3 scripts/check_python_licenses.py
+    python3 scripts/check_rust_licenses.py
 
 # Licence gate only (also part of `check`) — permissive allowlist, see script header.
 [group('quality')]
 licenses:
     node scripts/check-licenses.mjs
     python3 scripts/check_python_licenses.py
+    python3 scripts/check_rust_licenses.py
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
@@ -57,7 +65,11 @@ build:
     #!/usr/bin/env bash
     set -euo pipefail
     rm -rf sidecar/dist sidecar/build
-    (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --noconfirm main.py)
+    # --hidden-import: `ops/_kernels.py` (Epic 19) imports `oblique_kernels`
+    # at module load, but nothing in main.py's import graph reaches
+    # `_kernels` yet (story 2 wires a real kernel-backed op) — PyInstaller's
+    # static analyser can't see it, so it's named explicitly.
+    (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py)
     pnpm tauri build
     # tauri-bundler's ad-hoc signing doesn't reseal correctly once
     # bundle.resources adds a nested executable + dylib tree (sidecar-dist/)

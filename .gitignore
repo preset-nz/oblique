@@ -13,6 +13,7 @@ dist-ssr
 *.local
 src-tauri/target
 sidecar/.venv
+sidecar/kernels/target
 
 # Generated at package time (Epic 14 friends build) — see justfile `package` recipe
 /THIRD-PARTY-LICENSES

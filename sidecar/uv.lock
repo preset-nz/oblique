@@ -134,6 +134,11 @@ wheels = [
 ]
 
 [[package]]
+name = "oblique-kernels"
+version = "0.1.0"
+source = { directory = "kernels" }
+
+[[package]]
 name = "onnxruntime"
 version = "1.23.2"
 source = { registry = "https://pypi.org/simple" }
@@ -420,6 +425,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "oblique-kernels" },
     { name = "onnxruntime" },
     { name = "pillow" },
 ]
@@ -435,6 +441,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.5.0" },
+    { name = "oblique-kernels", directory = "kernels" },
     { name = "onnxruntime", specifier = "==1.23.2" },
     { name = "pillow", specifier = ">=12.3.0" },
 ]

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.15,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "oblique-kernels"
+version = "0.1.0"
+description = "Native (PyO3) kernels for hot per-pixel loops in the Oblique sidecar."
+requires-python = ">=3.12"
+license = "MIT"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+
+# uv builds this from source on `uv sync` (it isn't published) — these keys
+# tell uv's build cache when to rebuild, so touching the Rust source or
+# manifest is enough, no manual `--reinstall-package`.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+]
