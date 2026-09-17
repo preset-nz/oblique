@@ -19,6 +19,8 @@ use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+mod hatch;
+
 /// The crate version (from `Cargo.toml`), importable from Python so the
 /// availability check can report which kernel build is loaded.
 #[pyfunction]
@@ -43,5 +45,6 @@ fn canary<'py>(
 fn oblique_kernels(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(canary, m)?)?;
+    hatch::register(m)?;
     Ok(())
 }

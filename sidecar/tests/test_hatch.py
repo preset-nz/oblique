@@ -2,20 +2,51 @@
 `dashes`; story 2 — the cell-based `crosses` and `stipple`). `PATTERNS`
 is deliberately a module-level tuple so story 2 extends the shared
 battery by appending to it rather than duplicating every test.
+
+Epic 19 story 2 adds the native-kernel oracle tests near the bottom of the
+file (`_coverage_numpy`/`_coverage_kernel` compared directly, and `hatch()`
+compared end to end via `OBLIQUE_KERNELS`) and the `hatch_backend` fixture,
+which the digest/equality tests above opt into so they run against both
+backends rather than whichever one is the process default.
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import time
 
 import numpy as np
 import pytest
 
-from ops import OPS
-from ops.hatch import _area, _bar_offsets, _hash01, hatch
+from ops import OPS, _kernels
+from ops.hatch import (
+    _area,
+    _bar_offsets,
+    _coverage_kernel,
+    _coverage_numpy,
+    _hash01,
+    _tone,
+    hatch,
+)
 
 PATTERNS = ("lines", "dashes", "crosses", "stipple")
+
+
+@pytest.fixture(params=("kernel", "numpy"))
+def hatch_backend(request, monkeypatch):
+    """Forces `hatch()`'s path selection (`ops._kernels.available()`) to
+    either backend, so a test parametrised over this fixture runs its body
+    against both — the "add a parametrisation that runs them on NumPy too"
+    the hatch-kernel.md story asks for on the story 1/7/8 digest and
+    equality tests, which otherwise only ever exercise whichever backend
+    happens to be the process default (the kernel, when built)."""
+    if request.param == "numpy":
+        monkeypatch.setenv("OBLIQUE_KERNELS", "0")
+    else:
+        monkeypatch.delenv("OBLIQUE_KERNELS", raising=False)
+    return request.param
+
 
 # Cell-based patterns (`crosses`/`stipple`) clamp their cell-centre tone
 # lookup to the image bounds (story 2 doc, "Lattice"), so cells within
@@ -49,7 +80,7 @@ _STORY_1_REGRESSION_DIGESTS = {
 
 
 @pytest.mark.parametrize("pattern", ("lines", "dashes"))
-def test_story_1_output_byte_identical_regression(pattern):
+def test_story_1_output_byte_identical_regression(pattern, hatch_backend):
     rng = np.random.default_rng(42)
     img = rng.integers(0, 256, size=(48, 64, 4), dtype=np.uint8)
 
@@ -101,7 +132,9 @@ def _story_7_input() -> np.ndarray:
 @pytest.mark.parametrize("pattern", PATTERNS)
 @pytest.mark.parametrize("layers", (1, 4))
 @pytest.mark.parametrize("jitter", (0.0, 0.5))
-def test_story_7_output_byte_identical_regression_matrix(pattern, layers, jitter):
+def test_story_7_output_byte_identical_regression_matrix(
+    pattern, layers, jitter, hatch_backend
+):
     img = _story_7_input()
 
     out = hatch(img, {"pattern": pattern, "layers": layers, "jitter": jitter})
@@ -111,7 +144,7 @@ def test_story_7_output_byte_identical_regression_matrix(pattern, layers, jitter
     assert digest == _STORY_7_REGRESSION_DIGESTS[key]
 
 
-def test_story_7_output_byte_identical_regression_crosses_cross_size():
+def test_story_7_output_byte_identical_regression_crosses_cross_size(hatch_backend):
     img = _story_7_input()
 
     out = hatch(img, {"pattern": "crosses", "cross_size": 2.0})
@@ -120,7 +153,9 @@ def test_story_7_output_byte_identical_regression_crosses_cross_size():
     assert digest == _STORY_7_REGRESSION_DIGESTS["crosses_cross_size2"]
 
 
-def test_story_7_output_byte_identical_regression_crosses_cross_size_aspect_jitter():
+def test_story_7_output_byte_identical_regression_crosses_cross_size_aspect_jitter(
+    hatch_backend,
+):
     img = _story_7_input()
 
     out = hatch(
@@ -140,7 +175,7 @@ def test_story_7_output_byte_identical_regression_crosses_cross_size_aspect_jitt
 
 
 @pytest.mark.parametrize("pattern", ("dashes", "stipple"))
-def test_story_7_output_byte_identical_regression_seed(pattern):
+def test_story_7_output_byte_identical_regression_seed(pattern, hatch_backend):
     img = _story_7_input()
 
     out = hatch(img, {"pattern": pattern, "seed": 7})
@@ -164,7 +199,9 @@ def test_story_7_output_byte_identical_regression_seed(pattern):
 
 @pytest.mark.parametrize("worker_count", (1, 8))
 @pytest.mark.parametrize("pattern", ("lines", "dashes"))
-def test_story_1_digest_stable_across_worker_count(monkeypatch, pattern, worker_count):
+def test_story_1_digest_stable_across_worker_count(
+    monkeypatch, pattern, worker_count, hatch_backend
+):
     monkeypatch.setattr("ops._bands.worker_count", lambda: worker_count)
     rng = np.random.default_rng(42)
     img = rng.integers(0, 256, size=(48, 64, 4), dtype=np.uint8)
@@ -180,7 +217,7 @@ def test_story_1_digest_stable_across_worker_count(monkeypatch, pattern, worker_
 @pytest.mark.parametrize("layers", (1, 4))
 @pytest.mark.parametrize("jitter", (0.0, 0.5))
 def test_story_7_digest_stable_across_worker_count(
-    monkeypatch, pattern, layers, jitter, worker_count
+    monkeypatch, pattern, layers, jitter, worker_count, hatch_backend
 ):
     monkeypatch.setattr("ops._bands.worker_count", lambda: worker_count)
     img = _story_7_input()
@@ -204,7 +241,9 @@ def test_story_7_digest_stable_across_worker_count(
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
-def test_row_bands_threaded_matches_single_threaded_tall_image(monkeypatch, pattern):
+def test_row_bands_threaded_matches_single_threaded_tall_image(
+    monkeypatch, pattern, hatch_backend
+):
     rng = np.random.default_rng(11)
     img = rng.integers(0, 256, size=(1031, 97, 4), dtype=np.uint8)
     params: dict[str, object] = {
@@ -229,7 +268,7 @@ def test_row_bands_threaded_matches_single_threaded_tall_image(monkeypatch, patt
 
 @pytest.mark.parametrize("height", (50, 127, 255, 256, 257, 1023))
 def test_row_bands_threaded_matches_single_threaded_various_heights(
-    monkeypatch, height
+    monkeypatch, height, hatch_backend
 ):
     """Odd heights (1023) and heights below `2 * min_rows` (50, 127, 255 —
     the last one pixel short of the doubling boundary at the default
@@ -1206,10 +1245,18 @@ def test_row_bands_at_least_2_5x_faster_than_single_threaded(monkeypatch):
     works", not a precise scaling number. Uses the real env var (not a
     `worker_count` monkeypatch) so the pool sizing matches what the sidecar
     process actually sees. Marked `perf`, skipped by default per
-    `pyproject.toml`'s `-m 'not perf'`; run explicitly with `-m perf`."""
+    `pyproject.toml`'s `-m 'not perf'`; run explicitly with `-m perf`.
+
+    Epic 19 story 2: `hatch()` now defaults to the native kernel, which is
+    whole-image and ignores `ops._bands`/`OBLIQUE_SIDECAR_THREADS`
+    entirely — this test's subject is story 8's *NumPy* row-band scaling,
+    so it forces `OBLIQUE_KERNELS=0` for both arms; without that, "single"
+    and "threaded" would both run the same kernel call and the ratio would
+    be a trivial ~1x, proving nothing."""
     img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
     params = {"pattern": "crosses", "layers": 4, "jitter": 0.5}
 
+    monkeypatch.setenv("OBLIQUE_KERNELS", "0")
     monkeypatch.setenv("OBLIQUE_SIDECAR_THREADS", "1")
     hatch(img, params)  # warm up
     start = time.perf_counter()
@@ -1226,4 +1273,341 @@ def test_row_bands_at_least_2_5x_faster_than_single_threaded(monkeypatch):
     assert ratio >= 2.5, (
         f"threaded {threaded_elapsed:.3f}s vs single-threaded "
         f"{single_elapsed:.3f}s on a 2048x2048 image -- only {ratio:.2f}x"
+    )
+
+
+# --- Epic 19 story 2: native kernel oracle -----------------------------------
+#
+# `hatch_coverage` (`sidecar/kernels/src/hatch.rs`) must be byte-identical
+# to `_coverage_numpy` on every config, not just the story 7/9 regression
+# digests above (which predate the kernel and only ever ran one backend at a
+# time until `hatch_backend` above). This section is the dedicated oracle
+# the story asks for: an independent 64-config matrix (not overlapping the
+# pinned-digest configs) on two odd-dimensioned images, `np.array_equal`
+# against the `uint8` output; a float32/float64 coverage subset comparing
+# `_coverage_numpy`/`_coverage_kernel` directly (catches ULP drift the uint8
+# rounding would hide); and the parameter extremes (`spacing` up to 96,
+# `cross_size`/`cross_aspect` up to 3.0/4.0, `weight`/`pen` down to their
+# minimums) — the regime where a subtle NEP 50 promotion mismatch is most
+# likely to surface as an actual differing pixel rather than being absorbed
+# by rounding, which is exactly how the `pen * w_close` premature-`f32`-cast
+# bug this section guards against was found.
+
+_ORACLE_SIZES = {
+    "701x613": (701, 613),
+    "256x256": (256, 256),
+}
+
+
+def _oracle_image(shape: tuple[int, int]) -> np.ndarray:
+    h, w = shape
+    return np.random.default_rng(3).integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+
+
+def _oracle_configs() -> list[dict[str, object]]:
+    configs = []
+    for pattern, layers, jitter, (spacing, angle), (
+        cross_size,
+        cross_aspect,
+    ) in itertools.product(
+        PATTERNS,
+        (1, 3),
+        (0.0, 0.7),
+        ((8.0, 45.0), (3.5, 17.0)),
+        ((1.0, 1.0), (2.5, 1.5)),
+    ):
+        configs.append(
+            {
+                "pattern": pattern,
+                "layers": layers,
+                "jitter": jitter,
+                "spacing": spacing,
+                "angle": angle,
+                "cross_size": cross_size,
+                "cross_aspect": cross_aspect,
+                "seed": 11,
+            }
+        )
+    return configs
+
+
+_ORACLE_CONFIGS = _oracle_configs()
+
+
+def _oracle_id(config: dict[str, object]) -> str:
+    return (
+        f"{config['pattern']}-l{config['layers']}-j{config['jitter']}"
+        f"-s{config['spacing']}-a{config['angle']}"
+        f"-cs{config['cross_size']}-ca{config['cross_aspect']}"
+    )
+
+
+@pytest.mark.parametrize("config", _ORACLE_CONFIGS, ids=_oracle_id)
+def test_kernel_oracle_output_matches_numpy(monkeypatch, config):
+    """The story's independent 64-config matrix (hatch-kernel.md,
+    "Acceptance"): every pattern x layers {1, 3} x jitter {0, 0.7} x
+    (spacing, angle) in {(8, 45), (3.5, 17)} x (cross_size, cross_aspect) in
+    {(1, 1), (2.5, 1.5)}, seed 11, on two odd-dimensioned images —
+    `hatch()` with the kernel must equal `hatch()` forced to NumPy,
+    `np.array_equal` on the `uint8` output."""
+    for shape in _ORACLE_SIZES.values():
+        img = _oracle_image(shape)
+
+        monkeypatch.delenv("OBLIQUE_KERNELS", raising=False)
+        kernel_out = hatch(img, dict(config))
+
+        monkeypatch.setenv("OBLIQUE_KERNELS", "0")
+        numpy_out = hatch(img, dict(config))
+
+        assert np.array_equal(kernel_out, numpy_out), (
+            f"uint8 mismatch for {config} at shape {shape}"
+        )
+
+
+@pytest.mark.parametrize("config", _ORACLE_CONFIGS[::7], ids=_oracle_id)
+def test_kernel_oracle_float_coverage_matches_numpy(config):
+    """The story's other half of the same acceptance line: compare the
+    `float32`/`float64` `coverage` arrays directly (`_coverage_numpy` vs
+    `_coverage_kernel`), not just the `uint8` output the ink/paper blend and
+    rounding could coincidentally agree on. A stride-7 subset of the same
+    64-config matrix, both oracle image sizes."""
+    for shape in _ORACLE_SIZES.values():
+        img = _oracle_image(shape)
+        t = _tone(img, {})
+        h, w = shape
+        args = dict(config)
+
+        numpy_cov = _coverage_numpy(t, h, w, weight=1.0, pen=1.0, **args)
+        kernel_cov = _coverage_kernel(t, h, w, weight=1.0, pen=1.0, **args)
+
+        assert numpy_cov.dtype == kernel_cov.dtype, (
+            f"dtype mismatch for {config} at shape {shape}: "
+            f"numpy={numpy_cov.dtype} kernel={kernel_cov.dtype}"
+        )
+        assert np.array_equal(numpy_cov, kernel_cov), (
+            f"coverage mismatch for {config} at shape {shape}"
+        )
+
+
+_EXTREME_CONFIGS = [
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 96.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 8.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 3.0,
+        "cross_aspect": 4.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 8.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 3.0,
+        "cross_aspect": 4.0,
+        "jitter": 0.0,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 96.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 3.0,
+        "cross_aspect": 4.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 2.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 3.0,
+        "cross_aspect": 4.0,
+        "jitter": 1.0,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 1,
+        "spacing": 8.0,
+        "weight": 0.05,
+        "pen": 0.01,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.0,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 8.0,
+        "weight": 0.05,
+        "pen": 0.01,
+        "cross_size": 3.0,
+        "cross_aspect": 4.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "lines",
+        "layers": 4,
+        "spacing": 96.0,
+        "weight": 0.05,
+        "pen": 0.01,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "dashes",
+        "layers": 3,
+        "spacing": 8.0,
+        "weight": 0.05,
+        "pen": 0.01,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+    {
+        "pattern": "stipple",
+        "layers": 3,
+        "spacing": 8.0,
+        "weight": 0.05,
+        "pen": 0.01,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "angle": 45.0,
+        "seed": 3,
+    },
+]
+
+
+@pytest.mark.parametrize("config", _EXTREME_CONFIGS, ids=_oracle_id)
+def test_kernel_oracle_param_extremes_match_numpy(config):
+    """The param spec's own extremes (`spacing` up to 96, `cross_size` up to
+    3.0, `cross_aspect` up to 4.0, `weight`/`pen` down to 0.05/0.01) —
+    regression coverage for the `pen * w_close` premature-`f32`-cast bug
+    (shipped note): the reference computes `pen * w_close` (and
+    `w_close - h0`) as pure-Python `f64` expressions before the single cast
+    to `f32` where the combined value first touches the array; casting
+    `pen`/`w_close` to `f32` individually first — the bug — only showed up
+    at small `pen`/`weight`, where the two roundings diverge from one."""
+    rng_img = np.random.default_rng(5).integers(
+        0, 256, size=(60, 70, 4), dtype=np.uint8
+    )
+    t = _tone(rng_img, {})
+    h, w = 60, 70
+
+    numpy_cov = _coverage_numpy(t, h, w, **config)
+    kernel_cov = _coverage_kernel(t, h, w, **config)
+
+    assert numpy_cov.dtype == kernel_cov.dtype
+    assert np.array_equal(numpy_cov, kernel_cov)
+
+
+# --- Epic 19 story 2: kernel perf budgets ------------------------------------
+
+
+@pytest.mark.perf
+def test_kernel_coverage_crosses_jitter_2048_under_0_1_seconds():
+    """Epic 19 acceptance / hatch-kernel.md's perf line: `crosses`, `layers
+    = 4`, `jitter = 0.5`, 2048^2, under 0.1s for the kernel's own coverage
+    computation (`_coverage_kernel`, not the full `hatch()` call — the
+    Python ink/paper blend that follows is unrelated, pre-existing work the
+    story's boundary keeps in Python and measured independently at ~76ms on
+    this machine, which the full-`hatch()` budget could never absorb
+    regardless of how fast the coverage computation is; see the shipped
+    note). Marked `perf`, skipped by default; run explicitly with `-m
+    perf`."""
+    if not _kernels.available():
+        pytest.skip("oblique_kernels not available")
+
+    img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
+    t = _tone(img, {})
+    h, w = 2048, 2048
+    args = dict(
+        pattern="crosses",
+        layers=4,
+        spacing=8.0,
+        angle=45.0,
+        weight=1.0,
+        pen=1.0,
+        cross_size=1.0,
+        cross_aspect=1.0,
+        jitter=0.5,
+        seed=0,
+    )
+
+    _coverage_kernel(t, h, w, **args)  # warm up
+    start = time.perf_counter()
+    _coverage_kernel(t, h, w, **args)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.1, (
+        f"crosses jitter=0.5 coverage took {elapsed:.3f}s on a 2048x2048 image"
+    )
+
+
+@pytest.mark.perf
+def test_kernel_coverage_lines_jitter_2048_under_0_05_seconds():
+    """Epic 19 hatch-kernel.md's other perf line: `lines`, `jitter = 0.5`,
+    2048^2, under 0.05s for `_coverage_kernel` alone. Marked `perf`,
+    skipped by default; run explicitly with `-m perf`."""
+    if not _kernels.available():
+        pytest.skip("oblique_kernels not available")
+
+    img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
+    t = _tone(img, {})
+    h, w = 2048, 2048
+    args = dict(
+        pattern="lines",
+        layers=4,
+        spacing=8.0,
+        angle=45.0,
+        weight=1.0,
+        pen=1.0,
+        cross_size=1.0,
+        cross_aspect=1.0,
+        jitter=0.5,
+        seed=0,
+    )
+
+    _coverage_kernel(t, h, w, **args)  # warm up
+    start = time.perf_counter()
+    _coverage_kernel(t, h, w, **args)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.05, (
+        f"lines jitter=0.5 coverage took {elapsed:.3f}s on a 2048x2048 image"
     )

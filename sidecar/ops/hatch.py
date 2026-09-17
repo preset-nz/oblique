@@ -175,6 +175,24 @@ default on a garbage string. `paper_is_alpha=False` (default) paints
 becomes transparent and the marks overprint the layers below — the same
 `white_is_alpha` shape as `cmyk_halftone`. `paper` does nothing while
 `paper_is_alpha` is on, so the panel greys it out then.
+
+**The native kernel** (epic 19, architecture decision 11a). `_coverage_numpy`
+above (`_band` + `map_rows`) is the reference and the fallback; when
+`oblique_kernels` is importable and `OBLIQUE_KERNELS != "0"`
+(`ops._kernels.available()`), `hatch()` instead calls
+`_coverage_kernel`, which resolves everything non-numeric (`_build_spec`:
+per-layer `cos_t`/`sin_t`, `crosses`' `_cross_geometry` output and
+`_bar_offsets` lists) and hands `t` plus that resolved spec to
+`oblique_kernels.hatch_coverage` (`sidecar/kernels/src/hatch.rs`) — a fused,
+row-parallel Rust loop over the identical per-pixel expressions, at the
+identical NumPy NEP 50 float32/float64 precision, as `_band`. The two paths
+must produce byte-identical `coverage` arrays (`np.array_equal`) on every
+config; `test_hatch.py`'s oracle test checks this directly, and the kernel
+docstring records one non-obvious consequence of matching NumPy's own
+promotion rules: `crosses` at `layers >= 2` computes (and returns) `coverage`
+as `float64`, not `float32`, because `_cross_geometry`'s odd-layer `sqrt2` is
+a real `np.float64` scalar rather than a Python float. `hatch.rs`'s module
+doc is the fuller account; this paragraph is the pointer to it.
 """
 
 from __future__ import annotations
@@ -184,6 +202,7 @@ from typing import Any
 import numpy as np
 
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, hex_to_rgb01, op
+from ops import _kernels
 from ops._bands import map_rows
 
 # Layer k's angle offset from the `angle` param, degrees, for the
@@ -878,21 +897,26 @@ def _stipple_ink(
     ],
     writes_alpha=True,
 )
-def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
-    h, w = img.shape[:2]
-    pattern = str(params.get("pattern", "lines"))
-    layers = max(1, min(4, int(params.get("layers", 2))))
-    spacing = max(1.0, float(params.get("spacing", 8.0)))
-    angle = float(params.get("angle", 45.0))
-    weight = float(params.get("weight", 1.0))
-    pen = max(0.0, min(1.0, float(params.get("pen", 1.0))))
+def _coverage_numpy(
+    t: np.ndarray,
+    h: int,
+    w: int,
+    pattern: str,
+    layers: int,
+    spacing: float,
+    angle: float,
+    weight: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+    jitter: float,
+    seed: int,
+) -> np.ndarray:
+    """The NumPy reference and fallback: `_band` (story 8) run over
+    `map_rows`'s row bands. Kept exactly as before the kernel path existed —
+    the oracle every kernel config is compared against (module docstring,
+    "The native kernel")."""
     pen_f = np.float32(pen)
-    cross_size = max(0.25, min(3.0, float(params.get("cross_size", 1.0))))
-    cross_aspect = max(1.0, min(4.0, float(params.get("cross_aspect", 1.0))))
-    jitter = max(0.0, min(1.0, float(params.get("jitter", 0.0))))
-    seed = int(params.get("seed", 0))
-
-    t = _tone(img, params)
     cell_based = pattern in ("crosses", "stipple")
 
     def _band(y0: int, y1: int) -> np.ndarray:
@@ -1030,7 +1054,178 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
 
         return band_coverage
 
-    coverage = map_rows(h, _band)
+    return map_rows(h, _band)
+
+
+def _build_spec(
+    pattern: str,
+    layers: int,
+    spacing: float,
+    angle: float,
+    weight: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+    jitter: float,
+    seed: int,
+) -> dict[str, Any]:
+    """The kernel boundary (module docstring, "The native kernel" and
+    `hatch-kernel.md`, "The boundary"): everything the Rust loop needs that
+    isn't itself per-pixel numeric work — per-layer `cos_t`/`sin_t` (computed
+    identically to `_coverage_numpy`'s `_band`), and for `crosses`,
+    `_cross_geometry`'s `reach`/`w_close`/`h0` and `_bar_offsets`' neighbour
+    lists (`pad` is the same `jitter * spacing / 2.0` `_crosses_ink_sweep`
+    computes, needed regardless of whether *this* config ends up taking the
+    sweep path — cheap, pure-Python, never per-pixel, so building it
+    unconditionally for `crosses` keeps this function's shape simple)."""
+    cell_based = pattern in ("crosses", "stipple")
+    layer_specs: list[dict[str, Any]] = []
+    for k in range(layers):
+        theta_deg = angle if cell_based else angle + _LAYER_ANGLE_OFFSETS[k]
+        theta = np.deg2rad(theta_deg)
+        cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
+        layer: dict[str, Any] = {
+            "cos_t": float(cos_t),
+            "sin_t": float(sin_t),
+            "reach": 0.0,
+            "w_close": 0.0,
+            "h0": 0.0,
+            "offsets1": [],
+            "offsets2": [],
+        }
+        if pattern == "crosses":
+            reach, w_close, h0, _p_dir, _r_dir = _cross_geometry(k, spacing)
+            f1 = cross_size * cross_aspect
+            f2 = cross_size
+            pad = jitter * spacing / 2.0
+            layer["reach"] = float(reach)
+            layer["w_close"] = float(w_close)
+            layer["h0"] = float(h0)
+            layer["offsets1"] = _bar_offsets(k, 1, f1, pen, spacing, pad=pad)
+            layer["offsets2"] = _bar_offsets(k, 2, f2, pen, spacing, pad=pad)
+        layer_specs.append(layer)
+
+    return {
+        "pattern": pattern,
+        "layers": layers,
+        "spacing": float(spacing),
+        "weight": float(weight),
+        "pen": float(pen),
+        "cross_size": float(cross_size),
+        "cross_aspect": float(cross_aspect),
+        "jitter": float(jitter),
+        "seed": int(seed),
+        "layer": layer_specs,
+    }
+
+
+def _coverage_kernel(
+    t: np.ndarray,
+    h: int,
+    w: int,
+    pattern: str,
+    layers: int,
+    spacing: float,
+    angle: float,
+    weight: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+    jitter: float,
+    seed: int,
+) -> np.ndarray:
+    """The native path: `_build_spec` resolves the boundary, then
+    `oblique_kernels.hatch_coverage` runs the fused Rust loop. Returns
+    `float32` for every pattern except `crosses` at `layers >= 2`, which the
+    reference itself computes in `float64` (module docstring, "The native
+    kernel") — `hatch()` doesn't care which, the blend below upconverts
+    either way."""
+    spec = _build_spec(
+        pattern,
+        layers,
+        spacing,
+        angle,
+        weight,
+        pen,
+        cross_size,
+        cross_aspect,
+        jitter,
+        seed,
+    )
+    kernels = _kernels.require()
+    return kernels.hatch_coverage(t, spec)
+
+
+def _coverage(
+    t: np.ndarray,
+    h: int,
+    w: int,
+    pattern: str,
+    layers: int,
+    spacing: float,
+    angle: float,
+    weight: float,
+    pen: float,
+    cross_size: float,
+    cross_aspect: float,
+    jitter: float,
+    seed: int,
+    *,
+    use_kernel: bool,
+) -> np.ndarray:
+    """Path selection (module docstring, "The native kernel"): kernel when
+    available and not disabled (`OBLIQUE_KERNELS=0`), NumPy otherwise. A
+    thin dispatcher so tests can force either path directly."""
+    args = (
+        t,
+        h,
+        w,
+        pattern,
+        layers,
+        spacing,
+        angle,
+        weight,
+        pen,
+        cross_size,
+        cross_aspect,
+        jitter,
+        seed,
+    )
+    if use_kernel:
+        return _coverage_kernel(*args)
+    return _coverage_numpy(*args)
+
+
+def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    h, w = img.shape[:2]
+    pattern = str(params.get("pattern", "lines"))
+    layers = max(1, min(4, int(params.get("layers", 2))))
+    spacing = max(1.0, float(params.get("spacing", 8.0)))
+    angle = float(params.get("angle", 45.0))
+    weight = float(params.get("weight", 1.0))
+    pen = max(0.0, min(1.0, float(params.get("pen", 1.0))))
+    cross_size = max(0.25, min(3.0, float(params.get("cross_size", 1.0))))
+    cross_aspect = max(1.0, min(4.0, float(params.get("cross_aspect", 1.0))))
+    jitter = max(0.0, min(1.0, float(params.get("jitter", 0.0))))
+    seed = int(params.get("seed", 0))
+
+    t = _tone(img, params)
+    coverage = _coverage(
+        t,
+        h,
+        w,
+        pattern,
+        layers,
+        spacing,
+        angle,
+        weight,
+        pen,
+        cross_size,
+        cross_aspect,
+        jitter,
+        seed,
+        use_kernel=_kernels.available(),
+    )
 
     ink_rgb = np.array(hex_to_rgb01(params.get("ink", "#000000"), (0.0, 0.0, 0.0)))
     paper_rgb = np.array(hex_to_rgb01(params.get("paper", "#ffffff"), (1.0, 1.0, 1.0)))
