@@ -61,7 +61,13 @@ the image actually spans (line index, wavelength cell, or cell-lattice
 `(cu, cv)` pair) and **gathered** per pixel by integer offset, rather than
 recomputed at every one of an image's pixels; `_hash01` itself is
 unchanged, still the pinned hash, and gathering only moves already-
-computed values, so output stays byte-identical. `lines` never
+computed values, so output stays byte-identical. Story 8 runs the whole
+layer loop over horizontal row bands on a thread pool
+(`ops/_bands.py::map_rows`): `t` is computed once, whole, before banding,
+and every lattice grid a band builds (wobble, dash phase, stipple hashes,
+the crosses sweep's cell grid) is rebuilt over that band's own row range —
+the values are unchanged because they are pure functions of the indices,
+so this is also byte-identical. `lines` never
 calls it on its own account, so it ignores `seed` at `jitter = 0`;
 once `jitter > 0` its wobble reads `seed` too (below), so `seed`
 carries no `disabled_when` of its own — it is always enabled in the
@@ -176,6 +182,7 @@ from typing import Any
 import numpy as np
 
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, hex_to_rgb01, op
+from ops._bands import map_rows
 
 # Layer k's angle offset from the `angle` param, degrees, for the
 # continuous-stroke patterns (`lines`/`dashes`). Two layers give a
@@ -884,126 +891,142 @@ def hatch(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     t = _tone(img, params)
     cell_based = pattern in ("crosses", "stipple")
 
-    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    def _band(y0: int, y1: int) -> np.ndarray:
+        """One horizontal band's layer loop (story 8): `ys, xs` cover only
+        this band's rows, `t_band` is this band's own slice of the whole,
+        read-only `t` for the per-pixel line/dash tone lookup — but the
+        cell-based paths (`_cell_lattice`, `_crosses_ink_sweep`, via
+        `_cell_centre_tone`) keep reading the *whole* `t` with the *whole*
+        `h`, because a rotated lattice cell centre near a band edge can map
+        back to a row outside this band. Every lattice grid built below
+        (wobble, dash phase, stipple hashes, the crosses sweep's cell grid)
+        is rebuilt over this band's own index range — same values, because
+        they are pure functions of the indices (module docstring)."""
+        ys, xs = np.mgrid[y0:y1, 0:w].astype(np.float32)
+        t_band = t[y0:y1]
 
-    coverage = np.zeros((h, w), dtype=np.float32)
-    for k in range(layers):
-        theta_deg = angle if cell_based else angle + _LAYER_ANGLE_OFFSETS[k]
-        theta = np.deg2rad(theta_deg)
-        cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
+        band_coverage = np.zeros((y1 - y0, w), dtype=np.float32)
+        for k in range(layers):
+            theta_deg = angle if cell_based else angle + _LAYER_ANGLE_OFFSETS[k]
+            theta = np.deg2rad(theta_deg)
+            cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
 
-        u = xs * cos_t + ys * sin_t
-        v = -xs * sin_t + ys * cos_t
+            u = xs * cos_t + ys * sin_t
+            v = -xs * sin_t + ys * cos_t
 
-        if pattern == "crosses":
-            if max(cross_size, cross_size * cross_aspect) > 1.0 or jitter > 0.0:
-                # The sweep gathers every neighbour's tone from its own
-                # per-layer grid, including this cell's own `(0, 0)`
-                # offset, so the own-cell tone `_cell_lattice` would look
-                # up here is unused — `_cell_indices` skips that lookup.
-                du, dv, cu, cv = _cell_indices(u, v, k, spacing)
-                ink_k = _crosses_ink_sweep(
-                    cu,
-                    cv,
-                    du,
-                    dv,
-                    k,
-                    spacing,
-                    pen,
-                    cross_size,
-                    cross_aspect,
-                    cos_t,
-                    sin_t,
-                    t,
-                    h,
-                    w,
-                    layers,
-                    weight,
-                    jitter,
-                    seed,
-                )
-            else:
+            if pattern == "crosses":
+                if max(cross_size, cross_size * cross_aspect) > 1.0 or jitter > 0.0:
+                    # The sweep gathers every neighbour's tone from its own
+                    # per-layer grid, including this cell's own `(0, 0)`
+                    # offset, so the own-cell tone `_cell_lattice` would look
+                    # up here is unused — `_cell_indices` skips that lookup.
+                    du, dv, cu, cv = _cell_indices(u, v, k, spacing)
+                    ink_k = _crosses_ink_sweep(
+                        cu,
+                        cv,
+                        du,
+                        dv,
+                        k,
+                        spacing,
+                        pen,
+                        cross_size,
+                        cross_aspect,
+                        cos_t,
+                        sin_t,
+                        t,
+                        h,
+                        w,
+                        layers,
+                        weight,
+                        jitter,
+                        seed,
+                    )
+                else:
+                    du, dv, cu, cv, t_cell = _cell_lattice(
+                        u, v, k, spacing, cos_t, sin_t, t, h, w
+                    )
+                    c_k = _c_k(t_cell, k, layers, weight)
+                    ink_k = _crosses_ink(
+                        du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
+                    )
+            elif pattern == "stipple":
                 du, dv, cu, cv, t_cell = _cell_lattice(
                     u, v, k, spacing, cos_t, sin_t, t, h, w
                 )
                 c_k = _c_k(t_cell, k, layers, weight)
-                ink_k = _crosses_ink(
-                    du, dv, c_k, k, spacing, pen, cross_size, cross_aspect
-                )
-        elif pattern == "stipple":
-            du, dv, cu, cv, t_cell = _cell_lattice(
-                u, v, k, spacing, cos_t, sin_t, t, h, w
-            )
-            c_k = _c_k(t_cell, k, layers, weight)
-            ink_k = _stipple_ink(du, dv, c_k, cu, cv, k, seed, spacing)
-        elif pattern == "dashes":
-            n0 = np.round(v / np.float32(spacing))
-            c_k = _c_k(t, k, layers, weight)
+                ink_k = _stipple_ink(du, dv, c_k, cu, cv, k, seed, spacing)
+            elif pattern == "dashes":
+                n0 = np.round(v / np.float32(spacing))
+                c_k = _c_k(t_band, k, layers, weight)
 
-            a = np.sqrt(c_k)
-            across_h = np.minimum(a, pen_f) * np.float32((spacing + 1.0) / 2.0)
-            period = np.float32(_DASH_PERIOD * spacing)
-            along_h = a * ((period + 1.0) / 2.0)
+                a = np.sqrt(c_k)
+                across_h = np.minimum(a, pen_f) * np.float32((spacing + 1.0) / 2.0)
+                period = np.float32(_DASH_PERIOD * spacing)
+                along_h = a * ((period + 1.0) / 2.0)
 
-            if jitter > 0.0:
-                disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
-                n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
-                    n0, u, spacing
-                )
-                wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
-                phase_grid = _phase_grid(m_lo, m_hi, k, seed)
-                ink_not = np.ones_like(t, dtype=np.float32)
-                for dn in (-1, 0, 1):
-                    m_i = n0_i + dn
-                    m = n0 + dn
-                    delta = _wobble_gather(
-                        wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                if jitter > 0.0:
+                    disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                    n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
+                        n0, u, spacing
                     )
-                    d_m = np.abs(v - (m * np.float32(spacing) + delta))
-                    ink_across = _area(d_m, across_h)
+                    wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
+                    phase_grid = _phase_grid(m_lo, m_hi, k, seed)
+                    ink_not = np.ones_like(u, dtype=np.float32)
+                    for dn in (-1, 0, 1):
+                        m_i = n0_i + dn
+                        m = n0 + dn
+                        delta = _wobble_gather(
+                            wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                        )
+                        d_m = np.abs(v - (m * np.float32(spacing) + delta))
+                        ink_across = _area(d_m, across_h)
 
-                    phi = phase_grid[m_i - m_lo]
+                        phi = phase_grid[m_i - m_lo]
+                        e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
+                        ink_along = _area(e, along_h)
+
+                        ink_not = ink_not * (1.0 - ink_across * ink_along)
+                    ink_k = 1.0 - ink_not
+                else:
+                    d = np.abs(v - n0 * np.float32(spacing))
+                    ink_k = _area(d, across_h)
+
+                    n0_i = n0.astype(np.int64)
+                    phase_lo = int(n0_i.min())
+                    phase_grid = _phase_grid(phase_lo, int(n0_i.max()), k, seed)
+                    phi = phase_grid[n0_i - np.int64(phase_lo)]
                     e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
-                    ink_along = _area(e, along_h)
-
-                    ink_not = ink_not * (1.0 - ink_across * ink_along)
-                ink_k = 1.0 - ink_not
+                    ink_k = ink_k * _area(e, along_h)
             else:
-                d = np.abs(v - n0 * np.float32(spacing))
-                ink_k = _area(d, across_h)
+                n0 = np.round(v / np.float32(spacing))
+                c_k = _c_k(t_band, k, layers, weight)
+                stroke_h = np.minimum(c_k, pen_f) * np.float32((spacing + 1.0) / 2.0)
 
-                n0_i = n0.astype(np.int64)
-                phase_lo = int(n0_i.min())
-                phase_grid = _phase_grid(phase_lo, int(n0_i.max()), k, seed)
-                phi = phase_grid[n0_i - np.int64(phase_lo)]
-                e = np.abs(np.mod(u + phi * period, period) - period / 2.0)
-                ink_k = ink_k * _area(e, along_h)
-        else:
-            n0 = np.round(v / np.float32(spacing))
-            c_k = _c_k(t, k, layers, weight)
-            stroke_h = np.minimum(c_k, pen_f) * np.float32((spacing + 1.0) / 2.0)
-
-            if jitter > 0.0:
-                disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
-                n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
-                    n0, u, spacing
-                )
-                wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
-                ink_not = np.ones_like(t, dtype=np.float32)
-                for dn in (-1, 0, 1):
-                    m_i = n0_i + dn
-                    m = n0 + dn
-                    delta = _wobble_gather(
-                        wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                if jitter > 0.0:
+                    disp = np.float32(jitter * spacing / 2.0) * _jitter_fade(c_k)
+                    n0_i, m_lo, m_hi, i_i, i_lo, i_hi, smooth = _wobble_setup(
+                        n0, u, spacing
                     )
-                    d_m = np.abs(v - (m * np.float32(spacing) + delta))
-                    ink_not = ink_not * (1.0 - _area(d_m, stroke_h))
-                ink_k = 1.0 - ink_not
-            else:
-                d = np.abs(v - n0 * np.float32(spacing))
-                ink_k = _area(d, stroke_h)
+                    wobble_grid, n_i = _wobble_grid(m_lo, m_hi, i_lo, i_hi, k, seed)
+                    ink_not = np.ones_like(u, dtype=np.float32)
+                    for dn in (-1, 0, 1):
+                        m_i = n0_i + dn
+                        m = n0 + dn
+                        delta = _wobble_gather(
+                            wobble_grid, n_i, m_lo, i_lo, m_i, i_i, smooth, disp
+                        )
+                        d_m = np.abs(v - (m * np.float32(spacing) + delta))
+                        ink_not = ink_not * (1.0 - _area(d_m, stroke_h))
+                    ink_k = 1.0 - ink_not
+                else:
+                    d = np.abs(v - n0 * np.float32(spacing))
+                    ink_k = _area(d, stroke_h)
 
-        coverage = 1.0 - (1.0 - coverage) * (1.0 - ink_k)
+            band_coverage = 1.0 - (1.0 - band_coverage) * (1.0 - ink_k)
+
+        return band_coverage
+
+    coverage = map_rows(h, _band)
 
     ink_rgb = np.array(hex_to_rgb01(params.get("ink", "#000000"), (0.0, 0.0, 0.0)))
     paper_rgb = np.array(hex_to_rgb01(params.get("paper", "#ffffff"), (1.0, 1.0, 1.0)))

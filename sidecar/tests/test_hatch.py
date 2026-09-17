@@ -149,6 +149,113 @@ def test_story_7_output_byte_identical_regression_seed(pattern):
     assert digest == _STORY_7_REGRESSION_DIGESTS[f"{pattern}_seed7"]
 
 
+# --- story 8 regression: row bands, same digests threaded and single-threaded -
+
+# Story 8 splits `hatch`'s layer loop across row-band threads
+# (`ops/_bands.py::map_rows`). `_STORY_1_REGRESSION_DIGESTS` and
+# `_STORY_7_REGRESSION_DIGESTS` above stay untouched; these tests replay
+# them under both `worker_count() == 1` (the old, single-band code path)
+# and a forced multi-threaded count, monkeypatching `ops._bands.worker_count`
+# directly rather than the env var, so the assertion doesn't depend on how
+# many cores the test machine has. Both 256x256 story inputs sit right at
+# the `min_rows=128` boundary (`256 < 2 * 128` is false), so a default,
+# unpatched run already bands in two — these tests pin that explicitly.
+
+
+@pytest.mark.parametrize("worker_count", (1, 8))
+@pytest.mark.parametrize("pattern", ("lines", "dashes"))
+def test_story_1_digest_stable_across_worker_count(monkeypatch, pattern, worker_count):
+    monkeypatch.setattr("ops._bands.worker_count", lambda: worker_count)
+    rng = np.random.default_rng(42)
+    img = rng.integers(0, 256, size=(48, 64, 4), dtype=np.uint8)
+
+    out = hatch(img, {"pattern": pattern, "layers": 3, "angle": 30, "seed": 7})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    assert digest == _STORY_1_REGRESSION_DIGESTS[pattern]
+
+
+@pytest.mark.parametrize("worker_count", (1, 8))
+@pytest.mark.parametrize("pattern", PATTERNS)
+@pytest.mark.parametrize("layers", (1, 4))
+@pytest.mark.parametrize("jitter", (0.0, 0.5))
+def test_story_7_digest_stable_across_worker_count(
+    monkeypatch, pattern, layers, jitter, worker_count
+):
+    monkeypatch.setattr("ops._bands.worker_count", lambda: worker_count)
+    img = _story_7_input()
+
+    out = hatch(img, {"pattern": pattern, "layers": layers, "jitter": jitter})
+
+    digest = hashlib.sha256(out.tobytes()).hexdigest()
+    key = f"{pattern}_layers{layers}_jitter{jitter}"
+    assert digest == _STORY_7_REGRESSION_DIGESTS[key]
+
+
+# The digest tables above are both 256x256 — right at `min_rows`'s doubling
+# boundary, so they barely engage banding (two bands at most) and wouldn't
+# catch a band that reads or writes outside its own rows. This is the real
+# guard (story 8 doc, "Acceptance"): a tall, odd-sized, non-square image
+# that spans several bands at `worker_count() == 8`, every pattern, jitter
+# on (so the wobble/per-cell-drift lattice grids are exercised), and
+# `crosses` additionally at `cross_size = 2` (so the neighbour sweep's own
+# per-layer cell grid is exercised) — compared byte-for-byte,
+# `np.array_equal`, against the same call forced to a single band.
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_row_bands_threaded_matches_single_threaded_tall_image(monkeypatch, pattern):
+    rng = np.random.default_rng(11)
+    img = rng.integers(0, 256, size=(1031, 97, 4), dtype=np.uint8)
+    params: dict[str, object] = {
+        "pattern": pattern,
+        "layers": 4,
+        "angle": 30,
+        "seed": 7,
+        "jitter": 0.5,
+        "spacing": 8.0,
+    }
+    if pattern == "crosses":
+        params["cross_size"] = 2.0
+
+    monkeypatch.setattr("ops._bands.worker_count", lambda: 1)
+    single = hatch(img, params)
+
+    monkeypatch.setattr("ops._bands.worker_count", lambda: 8)
+    threaded = hatch(img, params)
+
+    assert np.array_equal(single, threaded)
+
+
+@pytest.mark.parametrize("height", (50, 127, 255, 256, 257, 1023))
+def test_row_bands_threaded_matches_single_threaded_various_heights(
+    monkeypatch, height
+):
+    """Odd heights (1023) and heights below `2 * min_rows` (50, 127, 255 —
+    the last one pixel short of the doubling boundary at the default
+    `min_rows=128`) all take the direct, single-call path regardless of
+    `worker_count`; 256 and 257 sit right at and just past it. `crosses` at
+    `cross_size = 2` exercises the neighbour sweep, the more elaborate of
+    the two cell-based paths."""
+    rng = np.random.default_rng(23)
+    img = rng.integers(0, 256, size=(height, 61, 4), dtype=np.uint8)
+    params = {
+        "pattern": "crosses",
+        "layers": 4,
+        "jitter": 0.5,
+        "cross_size": 2.0,
+        "seed": 7,
+    }
+
+    monkeypatch.setattr("ops._bands.worker_count", lambda: 1)
+    single = hatch(img, params)
+
+    monkeypatch.setattr("ops._bands.worker_count", lambda: 8)
+    threaded = hatch(img, params)
+
+    assert np.array_equal(single, threaded)
+
+
 # --- shared battery ---------------------------------------------------------
 
 
@@ -1081,3 +1188,33 @@ def test_lines_jitter_2048_well_under_half_a_second():
     elapsed = time.perf_counter() - start
 
     assert elapsed < 0.5, f"lines jitter=0.5 took {elapsed:.3f}s on a 2048x2048 image"
+
+
+@pytest.mark.perf
+def test_row_bands_at_least_three_times_faster_than_single_threaded(monkeypatch):
+    """Perf smoke test (story 8 doc, "Acceptance") — `crosses`, `layers = 4`,
+    `jitter = 0.5`, 2048^2, at least 3x faster with the thread pool than
+    with `OBLIQUE_SIDECAR_THREADS=1`. Uses the real env var (not a
+    `worker_count` monkeypatch) so the pool sizing matches what the sidecar
+    process actually sees. Marked `perf`, skipped by default per
+    `pyproject.toml`'s `-m 'not perf'`; run explicitly with `-m perf`."""
+    img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
+    params = {"pattern": "crosses", "layers": 4, "jitter": 0.5}
+
+    monkeypatch.setenv("OBLIQUE_SIDECAR_THREADS", "1")
+    hatch(img, params)  # warm up
+    start = time.perf_counter()
+    hatch(img, params)
+    single_elapsed = time.perf_counter() - start
+    monkeypatch.delenv("OBLIQUE_SIDECAR_THREADS")
+
+    hatch(img, params)  # warm up the thread pool
+    start = time.perf_counter()
+    hatch(img, params)
+    threaded_elapsed = time.perf_counter() - start
+
+    ratio = single_elapsed / threaded_elapsed
+    assert ratio >= 3.0, (
+        f"threaded {threaded_elapsed:.3f}s vs single-threaded "
+        f"{single_elapsed:.3f}s on a 2048x2048 image -- only {ratio:.2f}x"
+    )
