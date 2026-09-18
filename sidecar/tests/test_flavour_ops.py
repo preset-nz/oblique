@@ -17,7 +17,7 @@ from ops.desaturate import desaturate
 from ops.dilate import dilate
 from ops.edge_noise import edge_noise
 from ops.erode import erode
-from ops.film_burn import film_burn
+from ops.film_burn import _smoothstep, film_burn
 from ops.hatch import hatch
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
@@ -1376,6 +1376,31 @@ def test_film_burn_char_colour_appears_in_the_scorch_band():
     changed_rgb = out[changed][:, :3].astype(np.float64)
     mean_dist = float(np.linalg.norm(changed_rgb - target[None, :], axis=1).mean())
     assert mean_dist < orig_dist
+
+
+def test_film_burn_zone_weights_are_a_partition_of_unity():
+    """The four zone weights must sum to exactly 1 everywhere, which is
+    what makes the composite a genuine blend rather than a `where`
+    cascade with seams. It holds only because the three smoothstep bands
+    are laid out edge-to-edge (`0..c`, `c..2c`, `2c..3c`) so each one
+    saturates before the next begins — overlap the bands and this
+    silently stops being true, hence the guard."""
+    rng = np.random.default_rng(11)
+
+    for char_w in (1e-3, 0.05, 0.25):
+        burn = rng.uniform(-0.5, 1.5, size=(64, 64))
+
+        on = _smoothstep(0.0, char_w, burn)
+        scorched = _smoothstep(char_w, 2.0 * char_w, burn)
+        holed = _smoothstep(2.0 * char_w, 3.0 * char_w, burn)
+
+        total = (
+            (1.0 - on)  # intact
+            + on * (1.0 - scorched)  # blister
+            + scorched * (1.0 - holed)  # scorch
+            + holed  # burn-through
+        )
+        np.testing.assert_allclose(total, 1.0, atol=1e-12)
 
 
 def test_film_burn_fully_transparent_input_does_not_crash():
