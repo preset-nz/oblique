@@ -50,9 +50,21 @@ function fakeBitmap(): ImageBitmap {
 
 /** Records every drawImage call's destination rect + the paint-state active at the time. */
 function fakeCtx(): Composite2DContext & {
-  calls: { destW: number; destH: number; alpha: number; op: GlobalCompositeOperation }[];
+  calls: {
+    src: unknown;
+    destW: number;
+    destH: number;
+    alpha: number;
+    op: GlobalCompositeOperation;
+  }[];
 } {
-  const calls: { destW: number; destH: number; alpha: number; op: GlobalCompositeOperation }[] = [];
+  const calls: {
+    src: unknown;
+    destW: number;
+    destH: number;
+    alpha: number;
+    op: GlobalCompositeOperation;
+  }[] = [];
   const ctx = {
     calls,
     globalAlpha: 1,
@@ -61,7 +73,13 @@ function fakeCtx(): Composite2DContext & {
     drawImage: vi.fn((...args: unknown[]) => {
       const destW = args[args.length - 2] as number;
       const destH = args[args.length - 1] as number;
-      calls.push({ destW, destH, alpha: ctx.globalAlpha, op: ctx.globalCompositeOperation });
+      calls.push({
+        src: args[0],
+        destW,
+        destH,
+        alpha: ctx.globalAlpha,
+        op: ctx.globalCompositeOperation,
+      });
     }),
     save: vi.fn(),
     restore: vi.fn(),
@@ -148,6 +166,84 @@ describe('pickBestAvailable', () => {
 
   it('returns undefined when nothing is cached at or below the requested level', () => {
     expect(pickBestAvailable('n1', 'working')).toBeUndefined();
+  });
+
+  it('prefers a fresh DRAFT over a stale WORKING — the mid-scrub canvas', () => {
+    const working = fakeBitmap();
+    const draft = fakeBitmap();
+    cache.set('n1', 'working', working); // cooked before the drag started
+    cache.set('n1', 'draft', draft); // cooked 80ms into the drag
+    const staleWorking = (_id: string, level: string) => level === 'working';
+
+    expect(pickBestAvailable('n1', 'working', cache.get, staleWorking)).toEqual({
+      bitmap: draft,
+      level: 'draft',
+    });
+  });
+
+  it('with everything stale, takes the most recently written — not the highest res', () => {
+    const working = fakeBitmap();
+    const draft = fakeBitmap();
+    cache.set('n1', 'working', working);
+    cache.set('n1', 'draft', draft); // newer: mid-drag draft cook
+    const allStale = () => true;
+
+    // The next scrub tick re-dirties DRAFT too; falling back to the
+    // (higher-res, older) WORKING here would flicker the canvas back to the
+    // pre-drag image between draft cooks.
+    expect(pickBestAvailable('n1', 'working', cache.get, allStale)).toEqual({
+      bitmap: draft,
+      level: 'draft',
+    });
+  });
+
+  it('keeps a fresh WORKING ahead of a DRAFT that landed after it (slow op, overtaken cook)', () => {
+    const working = fakeBitmap();
+    const draft = fakeBitmap();
+    cache.set('n1', 'working', working);
+    cache.set('n1', 'draft', draft); // newer by write order, but nothing is dirty
+    expect(pickBestAvailable('n1', 'working', cache.get, () => false)).toEqual({
+      bitmap: working,
+      level: 'working',
+    });
+  });
+
+  it('defaults to never-stale, so export (its own bitmap map, no dirty flags) is unaffected', () => {
+    const baked = fakeBitmap();
+    const exportLookup = (_id: string, level: string) => (level === 'baked' ? baked : undefined);
+    expect(pickBestAvailable('n1', 'baked', exportLookup as never)).toEqual({
+      bitmap: baked,
+      level: 'baked',
+    });
+  });
+});
+
+describe('compositeScene staleness (architecture.md §Compositor step 3)', () => {
+  it('draws the fresh DRAFT bitmap for a node dirty at WORKING (canvas updates mid-scrub)', () => {
+    const ctx = fakeCtx();
+    const node = makeNode('n1', { dirty: { draft: false, working: true } });
+    const working = fakeBitmap();
+    const draft = fakeBitmap();
+    cache.set('n1', 'working', working);
+    cache.set('n1', 'draft', draft);
+
+    compositeScene(ctx, makeScene([node]), 'working');
+
+    // Dest size always follows the composite's own level, never the bitmap's
+    // — the draft stand-in still draws at WORKING size (200x100 / 2).
+    expect(ctx.calls).toEqual([expect.objectContaining({ src: draft, destW: 100, destH: 50 })]);
+  });
+
+  it('draws the WORKING bitmap once nothing is dirty (the settled canvas)', () => {
+    const ctx = fakeCtx();
+    const node = makeNode('n1', { dirty: { draft: false, working: false } });
+    const working = fakeBitmap();
+    cache.set('n1', 'draft', fakeBitmap());
+    cache.set('n1', 'working', working);
+
+    compositeScene(ctx, makeScene([node]), 'working');
+
+    expect(ctx.calls).toEqual([expect.objectContaining({ src: working })]);
   });
 });
 

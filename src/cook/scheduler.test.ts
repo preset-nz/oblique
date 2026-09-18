@@ -126,6 +126,29 @@ describe('CookScheduler', () => {
     scheduler.stop();
   });
 
+  it('keeps cooking DRAFT every 80ms through a sustained scrub (throttle, not debounce)', async () => {
+    const executor = vi.fn<Executor>(async () => {});
+    const scheduler = new CookScheduler(executor);
+    scheduler.start();
+
+    // A scrub-drag fires onChange on every pointermove — far faster than the
+    // 80ms window. A re-arming timer would never fire until the drag stopped,
+    // leaving the canvas frozen on the pre-drag WORKING bitmap for the whole
+    // gesture (the "low-res while scrubbing" half of the cook loop).
+    for (let i = 0; i < 30; i++) {
+      setNodes([makeNode('a', { opacity: 1 - i * 0.01, dirty: { draft: true, working: true } })]);
+      await vi.advanceTimersByTimeAsync(8);
+    }
+
+    // 240ms of continuous mutation = three 80ms windows, three draft cooks.
+    const draftCalls = executor.mock.calls.filter(([, level]) => level === 'draft');
+    expect(draftCalls).toHaveLength(3);
+    // ...and WORKING still held off until the drag stops.
+    expect(executor).not.toHaveBeenCalledWith('a', 'working');
+
+    scheduler.stop();
+  });
+
   it('resets the idle timer on continued mutation (scrubbing keeps WORKING at bay)', async () => {
     const executor = vi.fn(async () => {});
     const scheduler = new CookScheduler(executor);

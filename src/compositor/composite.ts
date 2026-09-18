@@ -67,22 +67,79 @@ export interface BestCache {
 export type CacheLookup = (nodeId: string, level: Resolution) => ImageBitmap | undefined;
 
 /**
+ * "Is the bitmap cached at this node/level out of date with respect to the
+ * node's current params?" — the node's own dirty flag, read at the
+ * composite call site. Injected so the pure function stays testable and so
+ * export (which composites nodes whose dirty flags are meaningless to it)
+ * can opt out.
+ */
+export type StaleLookup = (nodeId: string, level: Resolution) => boolean;
+
+/** Write order of a cached bitmap; higher is newer (see scene/cache.ts `getSeq`). */
+export type SeqLookup = (nodeId: string, level: Resolution) => number | undefined;
+
+/**
  * Best available cache for a node at or below `level` — requested level,
  * else next-lower available, cascading down to draft, else `undefined`
  * (draws nothing rather than blocking; architecture.md §Compositor step 3).
+ *
+ * Freshness beats resolution (architecture.md §Compositor step 3's staleness
+ * clause). Without it a mid-scrub canvas is frozen: the node is dirty at
+ * WORKING the moment a param moves, its WORKING bitmap goes stale, and the
+ * 1/8-res DRAFT cooks that land every 80ms are never shown because the
+ * cascade only ever walks *downward* from the requested level and stops at
+ * the first hit. So:
+ *
+ * 1. Walk best-to-worst from `level`, return the first **non-stale** hit —
+ *    with nothing dirty this is exactly the old cascade, and it keeps a
+ *    freshly-cooked WORKING ahead of a DRAFT that happened to land after it
+ *    (slow op, draft cook overtaken).
+ * 2. All candidates stale (mid-scrub: draft re-dirtied a tick after it
+ *    cooked): return the **most recently written** one. Highest-res would
+ *    be wrong here — it's the pre-drag WORKING bitmap, and preferring it
+ *    flickers the canvas back to the old image between draft cooks.
  */
 export function pickBestAvailable(
   nodeId: string,
   level: Resolution,
   getCache: CacheLookup = cache.get,
+  isStale: StaleLookup = () => false,
+  getSeq: SeqLookup = cache.getSeq,
 ): BestCache | undefined {
   const startIndex = LEVEL_ORDER.indexOf(level);
+  let newestStale: BestCache | undefined;
+  let newestStaleSeq = -1;
+
   for (let i = startIndex; i < LEVEL_ORDER.length; i++) {
     const candidateLevel = LEVEL_ORDER[i];
     const bitmap = getCache(nodeId, candidateLevel);
-    if (bitmap) return { bitmap, level: candidateLevel };
+    if (!bitmap) continue;
+    if (!isStale(nodeId, candidateLevel)) return { bitmap, level: candidateLevel };
+
+    // `?? -1` keeps an unknown seq (export's own bitmap map has none)
+    // behind anything with a real one, and preserves level order among
+    // several unknowns — the first, highest-res candidate wins the tie.
+    const seq = getSeq(nodeId, candidateLevel) ?? -1;
+    if (seq > newestStaleSeq) {
+      newestStaleSeq = seq;
+      newestStale = { bitmap, level: candidateLevel };
+    }
   }
-  return undefined;
+  return newestStale;
+}
+
+/**
+ * The compositor's staleness source: a node's own dirty flags. BAKED is
+ * never stale — it's only ever written by a lock and only ever cleared by
+ * an unlock (architecture.md §Scene state), so it carries no dirty flag to
+ * read.
+ */
+export function staleLookupFor(scene: Scene): StaleLookup {
+  const nodeById = new Map(scene.nodes.map((n) => [n.id, n]));
+  return (nodeId, level) => {
+    if (level === 'baked') return false;
+    return nodeById.get(nodeId)?.dirty[level] ?? false;
+  };
 }
 
 /** Diagonal-stripe placeholder for a pixel node whose source file couldn't be re-decoded on load. */
@@ -198,6 +255,7 @@ function drawSpanContent(
   level: Resolution,
   scene: Scene,
   getCache: CacheLookup,
+  isStale: StaleLookup,
 ): void {
   for (const node of content) {
     if (!node.visible || node.output !== 'image') continue;
@@ -221,7 +279,7 @@ function drawSpanContent(
     // lands). destW/destH stay sized to the composite's `level` so a locked
     // node's drawn size never mismatches its siblings.
     const requestLevel: Resolution = node.state === 'locked' ? 'baked' : level;
-    const best = pickBestAvailable(node.id, requestLevel, getCache);
+    const best = pickBestAvailable(node.id, requestLevel, getCache, isStale);
     if (!best) continue; // still cooking (or not yet imported) — draws nothing, per spec
 
     withNodeTransform(ctx, node, destW, destH, level, () => {
@@ -307,19 +365,20 @@ function drawMaskedSpan(
   level: Resolution,
   scene: Scene,
   getCache: CacheLookup,
+  isStale: StaleLookup,
   createScratch: CreateScratch,
 ): void {
   if (content.length === 0) return; // mask at the stack bottom — nothing to clip
 
   if (!maskNode.visible) {
-    drawSpanContent(ctx, content, level, scene, getCache);
+    drawSpanContent(ctx, content, level, scene, getCache, isStale);
     return;
   }
 
   // Same locked-prefers-baked posture as `drawSpanContent` — a locked mask
   // node's clip should read its frozen full-res raster too.
   const maskRequestLevel: Resolution = maskNode.state === 'locked' ? 'baked' : level;
-  const maskBest = pickBestAvailable(maskNode.id, maskRequestLevel, getCache);
+  const maskBest = pickBestAvailable(maskNode.id, maskRequestLevel, getCache, isStale);
   if (!maskBest) return; // mask still cooking — draw nothing rather than show it unclipped
 
   const [docW, docH] = scene.documentSize;
@@ -335,7 +394,7 @@ function drawMaskedSpan(
   scratch.ctx.globalCompositeOperation = 'source-over';
   scratch.ctx.drawImage(ctx.canvas, 0, 0, scratchW, scratchH);
 
-  drawSpanContent(scratch.ctx, content, level, scene, getCache);
+  drawSpanContent(scratch.ctx, content, level, scene, getCache, isStale);
 
   const [maskDestW, maskDestH] = destSizeFor(maskNode, level, scene.documentSize);
   withNodeTransform(scratch.ctx, maskNode, maskDestW, maskDestH, level, () => {
@@ -364,14 +423,15 @@ function drawSpan(
   level: Resolution,
   scene: Scene,
   getCache: CacheLookup,
+  isStale: StaleLookup,
   createScratch: CreateScratch,
 ): void {
   const last = span[span.length - 1];
   if (last && last.output === 'mask') {
-    drawMaskedSpan(ctx, span.slice(0, -1), last, level, scene, getCache, createScratch);
+    drawMaskedSpan(ctx, span.slice(0, -1), last, level, scene, getCache, isStale, createScratch);
     return;
   }
-  drawSpanContent(ctx, span, level, scene, getCache);
+  drawSpanContent(ctx, span, level, scene, getCache, isStale);
 }
 
 let compositeCallCount = 0;
@@ -432,8 +492,13 @@ export function compositeScene(
     ctx.fillRect(0, 0, docW * factor, docH * factor);
   }
 
+  // Built once per composite, not per span: a node's dirty flags are what
+  // tell `pickBestAvailable` that a cached bitmap has been outrun by the
+  // params it was cooked from.
+  const isStale = staleLookupFor(scene);
+
   for (const span of splitIntoSpans(scene.nodes)) {
-    drawSpan(ctx, span, level, scene, getCache, createScratch);
+    drawSpan(ctx, span, level, scene, getCache, isStale, createScratch);
   }
 
   ctx.globalAlpha = 1;

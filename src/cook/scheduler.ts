@@ -4,7 +4,7 @@ import { useSceneStore } from '@/scene/store';
 import { useSidecarStatusStore } from '@/sidecar/client';
 import { type CookLevel, cookNode, cookNodeFullRes, resetCookErrorBurst } from './cook';
 
-const DRAFT_DEBOUNCE_MS = 80;
+const DRAFT_THROTTLE_MS = 80;
 const WORKING_IDLE_MS = 400;
 const CONCURRENCY = 2;
 
@@ -33,7 +33,8 @@ interface JobState {
  * Watches the scene store and keeps caches fresh. Rules (design/architecture.md
  * §Cook scheduler, cook-pipeline.md):
  *
- * - Dirty appears -> 80ms debounce -> enqueue DRAFT cooks for draft-dirty nodes.
+ * - Dirty appears -> 80ms throttle -> enqueue DRAFT cooks for draft-dirty nodes,
+ *   and again every 80ms for as long as mutations keep arriving (scrubbing).
  * - No store mutation for 400ms -> enqueue WORKING cooks for working-dirty nodes.
  * - Per node x level: at most one in-flight and one pending; a newer request
  *   supersedes the pending one (dedup, not a new queue entry).
@@ -90,7 +91,7 @@ export class CookScheduler {
       // timer callbacks read dirty state fresh at fire time, so dirty set by
       // markDirty right after a real edit (project load) is still picked up.
       if (!sceneChangedIgnoringDirty(prev.scene, state.scene)) return;
-      this.armDraftDebounce();
+      this.armDraftThrottle();
       this.armWorkingIdle();
     });
 
@@ -145,8 +146,24 @@ export class CookScheduler {
     this.workingTimer = null;
   }
 
-  private armDraftDebounce(): void {
-    if (this.draftTimer) clearTimeout(this.draftTimer);
+  /**
+   * DRAFT is throttled, not debounced: an already-armed timer is left
+   * alone rather than pushed out by the next mutation. A scrub-drag fires
+   * `onChange` on every pointermove (~8ms apart), so a re-arming timer
+   * never reaches its 80ms deadline until the drag *stops* — the canvas
+   * stayed frozen on the pre-drag WORKING bitmap for the whole gesture,
+   * which is the "low-res while scrubbing" half of architecture.md's cook
+   * loop never actually happening (Georg, 2026-09-19). Not re-arming gives
+   * a steady 80ms draft cadence under sustained mutation; the timer
+   * callback reads dirty state fresh at fire time, so each cook uses the
+   * latest params, and the per-node in-flight/pending dedup keeps a slow
+   * cook from stacking up requests.
+   *
+   * WORKING stays a true debounce — it's explicitly the "user has stopped"
+   * signal (`armWorkingIdle`).
+   */
+  private armDraftThrottle(): void {
+    if (this.draftTimer) return;
     this.draftTimer = setTimeout(() => {
       this.draftTimer = null;
       for (const node of useSceneStore.getState().scene.nodes) {
@@ -157,7 +174,7 @@ export class CookScheduler {
         if (node.state === 'locked') continue;
         if (node.dirty.draft) this.enqueue(node.id, 'draft');
       }
-    }, DRAFT_DEBOUNCE_MS);
+    }, DRAFT_THROTTLE_MS);
   }
 
   private armWorkingIdle(): void {
