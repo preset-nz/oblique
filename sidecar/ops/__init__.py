@@ -279,6 +279,7 @@ def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
 
 # Imported for registration side effect only — each module calls `@op(...)`
 # at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
+from ops import bloom as _bloom  # noqa: E402, F401
 from ops import cmyk_halftone as _cmyk_halftone  # noqa: E402, F401
 from ops import colour_crush as _colour_crush  # noqa: E402, F401
 from ops import colourise as _colourise  # noqa: E402, F401

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS
+from ops.bloom import bloom
 from ops.cmyk_halftone import _screen_channel, _separate, cmyk_halftone
 from ops.colour_crush import colour_crush
 from ops.colourise import colourise
@@ -47,6 +48,7 @@ ALL_OPS = [
     (edge_noise, {"amount": 0.4, "scale": 12.0, "seed": 7}),
     (hatch, {"pattern": "dashes", "layers": 3, "spacing": 5.0, "seed": 7}),
     (smear, {"direction": "h", "mode": "forward", "position": 0.5}),
+    (bloom, {"threshold": 0.7, "radius": 4.0, "intensity": 0.8, "blend": "screen"}),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to
@@ -138,6 +140,7 @@ def test_registry_entry_runs_the_op_it_names(name):
         "recolour",
         "hatch",
         "smear",
+        "bloom",
     ],
 )
 def test_registered_in_ops_registry(name):
@@ -1013,3 +1016,125 @@ def test_smear_fully_transparent_input_does_not_crash():
             )
             assert out2.shape == img.shape
             assert out2.dtype == np.uint8
+
+
+# --- bloom (2026-09-18) ------------------------------------------------
+
+
+def test_bloom_declares_writes_alpha():
+    assert OPS["bloom"].writes_alpha is True
+
+
+@pytest.mark.parametrize("blend", ["screen", "add"])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"threshold": 0.7, "radius": 4.0, "intensity": 0.8},
+        {"threshold": 0.3, "radius": 24.0, "intensity": 2.0},
+        {"threshold": 0.95, "radius": 1.0, "intensity": 0.01},
+    ],
+)
+def test_bloom_spill_false_alpha_byte_identical(blend, params):
+    # Replaces exactly the `ALPHA_PRESERVING_OPS` battery coverage that
+    # declaring `writes_alpha=True` forfeits — the single most important
+    # test in this op, per a random-alpha image (not just 0/255), swept
+    # across both blend modes and a spread of thresholds/radii/intensities.
+    rng = np.random.default_rng(11)
+    img = _random_rgba(rng, h=20, w=28)
+
+    out = bloom(img, {**params, "blend": blend, "spill": False})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_bloom_below_threshold_is_unchanged():
+    img = np.full((12, 12, 4), 128, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = bloom(img, {"threshold": 0.7, "radius": 4.0, "intensity": 0.8})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_bloom_single_bright_pixel_spreads_light_to_neighbours():
+    img = np.zeros((16, 16, 4), dtype=np.uint8)
+    img[..., 3] = 255
+    img[8, 8, :3] = 255
+
+    out = bloom(
+        img, {"threshold": 0.7, "radius": 2.0, "intensity": 0.8, "blend": "screen"}
+    )
+
+    assert out[8, 7, 0] > 0
+    assert out[7, 8, 0] > 0
+
+
+def test_bloom_intensity_zero_is_exact_noop():
+    rng = np.random.default_rng(3)
+    img = _random_rgba(rng)
+
+    out = bloom(img, {"threshold": 0.5, "radius": 8.0, "intensity": 0.0})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_bloom_radius_zero_is_exact_noop():
+    rng = np.random.default_rng(4)
+    img = _random_rgba(rng)
+
+    out = bloom(img, {"threshold": 0.5, "radius": 0.0, "intensity": 0.8})
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_bloom_screen_never_exceeds_255_and_never_darkens():
+    rng = np.random.default_rng(5)
+    img = _random_rgba(rng, h=20, w=20)
+    img[..., 3] = 255  # fully opaque, so the whole frame is "in silhouette"
+
+    out = bloom(
+        img, {"threshold": 0.4, "radius": 6.0, "intensity": 1.5, "blend": "screen"}
+    )
+
+    assert np.all(out[..., :3] <= 255)
+    assert np.all(out[..., :3].astype(np.int16) >= img[..., :3].astype(np.int16))
+
+
+def test_bloom_add_clips_rather_than_wraps():
+    img = np.full((10, 10, 4), 250, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = bloom(
+        img, {"threshold": 0.7, "radius": 4.0, "intensity": 2.0, "blend": "add"}
+    )
+
+    # If this wrapped modulo 256 instead of clipping, a near-white input
+    # blown out hard would come back as a low value, not stay at 255.
+    assert np.all(out[..., :3] == 255)
+
+
+def test_bloom_spill_true_fully_opaque_image_leaves_alpha_at_255():
+    rng = np.random.default_rng(6)
+    img = _random_rgba(rng, h=16, w=16)
+    img[..., 3] = 255
+
+    out = bloom(img, {"threshold": 0.3, "radius": 6.0, "intensity": 1.2, "spill": True})
+
+    np.testing.assert_array_equal(out[..., 3], np.full((16, 16), 255, dtype=np.uint8))
+
+
+def test_bloom_spill_true_writes_alpha_outside_silhouette_spill_false_does_not():
+    # Left half bright and opaque, right half fully transparent — a wide
+    # enough radius pushes the blurred glow into the transparent half.
+    img = np.zeros((32, 32, 4), dtype=np.uint8)
+    img[:, :16, :3] = 255
+    img[:, :16, 3] = 255
+
+    params = {"threshold": 0.7, "radius": 4.0, "intensity": 0.8, "spill": True}
+    out_spill = bloom(img, params)
+    out_no_spill = bloom(img, {**params, "spill": False})
+
+    # A few px into the transparent half, spill has written alpha...
+    assert out_spill[16, 18, 3] > 0
+    # ...while spill=False left that region byte-identical to the input.
+    np.testing.assert_array_equal(out_no_spill[:, 16:, :], img[:, 16:, :])

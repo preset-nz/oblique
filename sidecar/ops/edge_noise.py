@@ -52,39 +52,7 @@ import numpy as np
 from PIL import Image
 
 from ops import P, op
-
-
-def _box_blur_1d(arr: np.ndarray, axis: int, radius: int) -> np.ndarray:
-    """Edge-padded box blur along one axis, `radius` px each side."""
-    if radius <= 0:
-        return arr
-    pad = [(0, 0)] * arr.ndim
-    pad[axis] = (radius, radius)
-    padded = np.pad(arr, pad, mode="edge")
-    n = 2 * radius + 1
-    cumsum = np.cumsum(padded, axis=axis)
-    zeros_shape = list(cumsum.shape)
-    zeros_shape[axis] = 1
-    cumsum = np.concatenate(
-        [np.zeros(zeros_shape, dtype=cumsum.dtype), cumsum], axis=axis
-    )
-    size = arr.shape[axis]
-    sl_hi = [slice(None)] * arr.ndim
-    sl_hi[axis] = slice(n, n + size)
-    sl_lo = [slice(None)] * arr.ndim
-    sl_lo[axis] = slice(0, size)
-    return (cumsum[tuple(sl_hi)] - cumsum[tuple(sl_lo)]) / n
-
-
-def _soften(arr: np.ndarray, radius: float) -> np.ndarray:
-    """Cheap 3-pass box blur (approximates a Gaussian) at `radius` px,
-    applied separably. Plain NumPy — no `scipy` in the sidecar."""
-    r = max(1, int(round(radius)))
-    out = arr
-    for _ in range(3):
-        out = _box_blur_1d(out, axis=0, radius=r)
-        out = _box_blur_1d(out, axis=1, radius=r)
-    return out
+from ops._blur import soften as _soften
 
 
 def _noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.ndarray:
