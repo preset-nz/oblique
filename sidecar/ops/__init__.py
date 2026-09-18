@@ -294,5 +294,6 @@ from ops import invert as _invert  # noqa: E402, F401
 from ops import levels as _levels  # noqa: E402, F401
 from ops import pixelate as _pixelate  # noqa: E402, F401
 from ops import recolour as _recolour  # noqa: E402, F401
+from ops import smear as _smear  # noqa: E402, F401
 from ops import threshold as _threshold  # noqa: E402, F401
 from ops import xerox as _xerox  # noqa: E402, F401

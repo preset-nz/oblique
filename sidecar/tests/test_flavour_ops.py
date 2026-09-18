@@ -20,6 +20,7 @@ from ops.hatch import hatch
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
 from ops.recolour import recolour
+from ops.smear import smear
 from ops.xerox import xerox
 
 ALL_OPS = [
@@ -45,6 +46,7 @@ ALL_OPS = [
     (erode, {"radius": 3.0}),
     (edge_noise, {"amount": 0.4, "scale": 12.0, "seed": 7}),
     (hatch, {"pattern": "dashes", "layers": 3, "spacing": 5.0, "seed": 7}),
+    (smear, {"direction": "h", "mode": "forward", "position": 0.5}),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to
@@ -135,6 +137,7 @@ def test_registry_entry_runs_the_op_it_names(name):
         "colourise",
         "recolour",
         "hatch",
+        "smear",
     ],
 )
 def test_registered_in_ops_registry(name):
@@ -794,3 +797,219 @@ def test_cmyk_halftone_white_is_alpha_ignored_in_over_mode():
 
 def test_cmyk_halftone_declares_writes_alpha():
     assert OPS["cmyk_halftone"].writes_alpha is True
+
+
+# --- smear (2026-09-18) -----------------------------------------------------
+
+
+def _striped_h(h: int = 8, w: int = 10) -> np.ndarray:
+    """Each column x carries a distinct red value x*10, fully opaque —
+    lets a test read off exactly which column ended up where."""
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[..., 0] = np.arange(w) * 10
+    img[..., 3] = 255
+    return img
+
+
+def _striped_v(h: int = 10, w: int = 8) -> np.ndarray:
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[..., 0] = np.arange(h)[:, None] * 10
+    img[..., 3] = 255
+    return img
+
+
+def test_smear_declares_writes_alpha():
+    assert OPS["smear"].writes_alpha is True
+
+
+def test_smear_forward_writes_from_line_onward_leaves_before_untouched():
+    img = _striped_h()
+    idx = 4  # position 0.5 over axis_len 10 -> round(0.5*9) = 4 (banker's round -> 4)
+
+    out = smear(img, {"direction": "h", "mode": "forward", "position": 0.5})
+
+    line = img[:, idx, :]
+    np.testing.assert_array_equal(
+        out[:, idx:, :], np.broadcast_to(line[:, None, :], out[:, idx:, :].shape)
+    )
+    np.testing.assert_array_equal(out[:, :idx, :], img[:, :idx, :])
+
+
+def test_smear_backward_writes_up_to_line_leaves_after_untouched():
+    img = _striped_h()
+    idx = 4
+
+    out = smear(img, {"direction": "h", "mode": "backward", "position": 0.5})
+
+    line = img[:, idx, :]
+    np.testing.assert_array_equal(
+        out[:, : idx + 1, :],
+        np.broadcast_to(line[:, None, :], out[:, : idx + 1, :].shape),
+    )
+    np.testing.assert_array_equal(out[:, idx + 1 :, :], img[:, idx + 1 :, :])
+
+
+def test_smear_both_replaces_the_entire_frame():
+    img = _striped_h()
+    idx = 4
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 0.5})
+
+    line = img[:, idx, :]
+    np.testing.assert_array_equal(out, np.broadcast_to(line[:, None, :], out.shape))
+
+
+def test_smear_direction_h_samples_a_column():
+    img = _striped_h()
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 0.0})
+
+    assert np.all(out[..., 0] == img[0, 0, 0])
+
+
+def test_smear_direction_v_samples_a_row():
+    img = _striped_v()
+
+    out = smear(img, {"direction": "v", "mode": "both", "position": 1.0})
+
+    assert np.all(out[..., 0] == img[-1, 0, 0])
+
+
+def test_smear_position_zero_hits_first_line_no_index_error():
+    img = _striped_h()
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 0.0})
+
+    assert np.all(out[..., 0] == img[0, 0, 0])
+
+
+def test_smear_position_one_hits_last_line_no_index_error():
+    img = _striped_h()
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 1.0})
+
+    assert np.all(out[..., 0] == img[0, -1, 0])
+
+
+def test_smear_clip_to_alpha_writes_nothing_where_source_alpha_was_zero():
+    img = _striped_h()
+    img[:, :5, 3] = 0  # left half transparent, right half opaque
+
+    # Sample the last column (opaque), so the only thing keeping the left
+    # half untouched is the destination-side half of the gate.
+    out = smear(
+        img, {"direction": "h", "mode": "both", "position": 1.0, "clip_to_alpha": True}
+    )
+
+    # Untouched where the source had no alpha: byte-identical to input,
+    # colour included.
+    np.testing.assert_array_equal(out[:, :5, :], img[:, :5, :])
+    # Alpha itself is never touched by clip_to_alpha, even where it wrote.
+    np.testing.assert_array_equal(out[:, 5:, 3], img[:, 5:, 3])
+    # But colour *did* get overwritten with the sampled line where alpha
+    # was > 0.
+    assert np.all(out[:, 5:, 0] == img[0, -1, 0])
+
+
+def test_smear_clip_to_alpha_skips_a_transparent_sample_pixel():
+    """The other half of the two-sided gate: RGB behind zero alpha is
+    undefined, so a transparent sampled pixel must not paint a band into
+    an opaque destination."""
+    img = _striped_h()
+    img[:, :5, 3] = 0  # left half transparent, right half opaque
+
+    # Sample column 0 — inside the transparent half, so it carries no
+    # meaningful colour even though the right half is a valid destination.
+    out = smear(
+        img, {"direction": "h", "mode": "both", "position": 0.0, "clip_to_alpha": True}
+    )
+
+    np.testing.assert_array_equal(out, img)
+
+
+def test_smear_clip_to_alpha_false_writes_sampled_alpha_everywhere_in_region():
+    img = _striped_h()
+    img[:, :, 3] = 0  # fully transparent source
+
+    out = smear(
+        img,
+        {"direction": "h", "mode": "both", "position": 3 / 9, "clip_to_alpha": False},
+    )
+
+    # The sampled column's alpha (0, since the whole source is transparent)
+    # travels with its colour everywhere the smear writes.
+    np.testing.assert_array_equal(out[..., 3], np.zeros_like(out[..., 3]))
+
+
+def test_smear_alpha_travels_with_colour_into_transparent_territory():
+    # This is the headline `writes_alpha=True` contract, and the exact
+    # pathology `pixelate.py` warns about if it silently regressed: the
+    # sampled line's alpha must extend the silhouette, not just its
+    # colour. Left half starts transparent; sampling an opaque column and
+    # smearing it "both" must make the whole frame opaque.
+    img = _striped_h()
+    img[:, :5, 3] = 0
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 1.0})
+
+    assert np.all(out[..., 3] == 255)
+
+
+def test_smear_alpha_travels_with_colour_erasing_into_source():
+    # Mirror: sampling a transparent column and smearing it over an
+    # opaque source must erase alpha where it writes, not just leave the
+    # opaque colour with stale full alpha behind it.
+    img = _striped_h()
+    img[:, :5, 3] = 0  # column 0 (the sample at position 0.0) is transparent
+
+    out = smear(img, {"direction": "h", "mode": "both", "position": 0.0})
+
+    assert np.all(out[..., 3] == 0)
+
+
+def test_smear_direction_v_forward_region_is_not_transposed():
+    # Every other region-correctness test above uses `direction="h"`;
+    # `mode="both"` (used by the v-direction smoke tests) covers the whole
+    # frame regardless of axis, so it can't catch a transposed region
+    # tuple in the `v` branch. This uses `forward` at a mid-position,
+    # where only the correct (row-sliced, full-width) region passes.
+    img = _striped_v()
+    idx = 4  # position 0.5 over axis_len 10 -> round(0.5 * 9) = 4
+
+    out = smear(img, {"direction": "v", "mode": "forward", "position": 0.5})
+
+    row = img[idx, :, :]
+    np.testing.assert_array_equal(
+        out[idx:, :, :], np.broadcast_to(row[None, :, :], out[idx:, :, :].shape)
+    )
+    np.testing.assert_array_equal(out[:idx, :, :], img[:idx, :, :])
+
+
+def test_smear_fully_transparent_input_does_not_crash():
+    img = np.zeros((6, 8, 4), dtype=np.uint8)
+
+    for direction in ("h", "v"):
+        for mode in ("forward", "both", "backward"):
+            out = smear(
+                img,
+                {
+                    "direction": direction,
+                    "mode": mode,
+                    "position": 0.5,
+                    "clip_to_alpha": True,
+                },
+            )
+            assert out.shape == img.shape
+            assert out.dtype == np.uint8
+
+            out2 = smear(
+                img,
+                {
+                    "direction": direction,
+                    "mode": mode,
+                    "position": 0.5,
+                    "clip_to_alpha": False,
+                },
+            )
+            assert out2.shape == img.shape
+            assert out2.dtype == np.uint8
