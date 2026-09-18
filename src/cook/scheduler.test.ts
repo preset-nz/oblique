@@ -69,7 +69,7 @@ describe('CookScheduler', () => {
     vi.useRealTimers();
   });
 
-  it('debounces 80ms before enqueuing a DRAFT cook for a dirty node', async () => {
+  it('waits 80ms before enqueuing the first DRAFT cook for a dirty node', async () => {
     const executor = vi.fn(async () => {});
     const scheduler = new CookScheduler(executor);
     scheduler.start();
