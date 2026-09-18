@@ -287,6 +287,7 @@ from ops import desaturate as _desaturate  # noqa: E402, F401
 from ops import dilate as _dilate  # noqa: E402, F401
 from ops import edge_noise as _edge_noise  # noqa: E402, F401
 from ops import erode as _erode  # noqa: E402, F401
+from ops import film_burn as _film_burn  # noqa: E402, F401
 from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
 from ops import grain as _grain  # noqa: E402, F401
 from ops import hatch as _hatch  # noqa: E402, F401

@@ -17,6 +17,7 @@ from ops.desaturate import desaturate
 from ops.dilate import dilate
 from ops.edge_noise import edge_noise
 from ops.erode import erode
+from ops.film_burn import film_burn
 from ops.hatch import hatch
 from ops.ink_starved import ink_starved
 from ops.pixelate import pixelate
@@ -49,6 +50,20 @@ ALL_OPS = [
     (hatch, {"pattern": "dashes", "layers": 3, "spacing": 5.0, "seed": 7}),
     (smear, {"direction": "h", "mode": "forward", "position": 0.5}),
     (bloom, {"threshold": 0.7, "radius": 4.0, "intensity": 0.8, "blend": "screen"}),
+    (
+        film_burn,
+        {
+            "progress": 0.5,
+            "count": 2,
+            "irregularity": 0.4,
+            "scale": 16.0,
+            "bubble": 0.5,
+            "char": 0.4,
+            "char_colour": "#2a1608",
+            "hole": "white",
+            "seed": 7,
+        },
+    ),
 ]
 
 # `test_alpha_untouched` is the only battery test that doesn't apply to
@@ -141,6 +156,7 @@ def test_registry_entry_runs_the_op_it_names(name):
         "hatch",
         "smear",
         "bloom",
+        "film_burn",
     ],
 )
 def test_registered_in_ops_registry(name):
@@ -1138,3 +1154,237 @@ def test_bloom_spill_true_writes_alpha_outside_silhouette_spill_false_does_not()
     assert out_spill[16, 18, 3] > 0
     # ...while spill=False left that region byte-identical to the input.
     np.testing.assert_array_equal(out_no_spill[:, 16:, :], img[:, 16:, :])
+
+
+# --- film_burn (2026-09-18) ---------------------------------------------
+
+
+def test_film_burn_declares_writes_alpha():
+    assert OPS["film_burn"].writes_alpha is True
+
+
+def test_film_burn_progress_zero_is_exact_noop():
+    rng = np.random.default_rng(20)
+    img = _random_rgba(rng, h=24, w=24)
+
+    out = film_burn(img, {"progress": 0.0, "seed": 3})
+
+    np.testing.assert_array_equal(out, img)
+
+
+@pytest.mark.parametrize("count", [1, 2, 4])
+def test_film_burn_progress_one_consumes_the_entire_frame(count):
+    # irregularity=0 removes the noise term, so REACH's worst-case margin
+    # (see the module docstring) holds with float-exact equality: every
+    # pixel clears the burn-through band's far edge regardless of hot-spot
+    # placement or count.
+    img = np.full((20, 28, 4), 128, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = film_burn(
+        img,
+        {
+            "progress": 1.0,
+            "count": count,
+            "irregularity": 0.0,
+            "char": 0.4,
+            "hole": "transparent",
+            "seed": 5,
+        },
+    )
+
+    # Every pixel is fully in burn-through: RGB blown white, alpha at 0.
+    np.testing.assert_array_equal(
+        out[..., :3], np.full((20, 28, 3), 255, dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(out[..., 3], np.zeros((20, 28), dtype=np.uint8))
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"progress": 0.5, "bubble": 0.0, "count": 1, "seed": 4},
+        {"progress": 0.9, "bubble": 0.0, "count": 3, "irregularity": 0.8, "seed": 9},
+        {"progress": 0.2, "bubble": 0.0, "count": 2, "char": 0.1, "seed": 1},
+    ],
+)
+def test_film_burn_hole_white_bubble_zero_alpha_byte_identical(params):
+    # Replaces exactly the `ALPHA_PRESERVING_OPS` battery coverage that
+    # declaring `writes_alpha=True` forfeits. `bubble=0` excludes the
+    # warp, which legitimately moves alpha under `hole="white"` too.
+    rng = np.random.default_rng(21)
+    img = _random_rgba(rng, h=20, w=20)
+
+    out = film_burn(img, {**params, "hole": "white"})
+
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+
+
+def test_film_burn_hole_transparent_drives_alpha_to_zero_in_the_burnt_core():
+    img = np.full((24, 24, 4), 200, dtype=np.uint8)
+    img[..., 3] = 255
+
+    out = film_burn(
+        img,
+        {
+            "progress": 1.0,
+            "count": 1,
+            "irregularity": 0.0,
+            "hole": "transparent",
+            "seed": 2,
+        },
+    )
+
+    np.testing.assert_array_equal(out[..., 3], np.zeros((24, 24), dtype=np.uint8))
+
+
+def test_film_burn_blister_warp_moves_content_away_from_the_hot_spot():
+    # Pin the warp's sign: the required visual is "content moves away from
+    # the hot spot, as a blister stretches what's sitting on it" — checked
+    # via the intensity-weighted centroid of a small bright marker placed a
+    # known distance from the (seed-determined) single hot spot.
+    from ops.film_burn import _REACH_EPS
+
+    seed = 11
+    h = w = 80
+    rng = np.random.default_rng(seed)
+    spot = rng.uniform(0.0, 1.0, size=(1, 2))
+    hot_y = spot[0, 0] * (h - 1)
+    hot_x = spot[0, 1] * (w - 1)
+
+    marker_y = int(np.clip(round(hot_y), 12, h - 13))
+    marker_x = int(np.clip(round(hot_x) + 25, 12, w - 13))
+
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[..., 3] = 255
+    img[marker_y - 1 : marker_y + 2, marker_x - 1 : marker_x + 2, :3] = 255
+
+    # A same-field, marker-free background run. Both blister zones (the
+    # only zone that warps) *and* the blister/scorch recolour of a black
+    # background are entirely position-driven, not content-driven, so
+    # they are identical between the two runs everywhere the marker's own
+    # warped footprint doesn't reach — subtracting them isolates exactly
+    # where the marker's content ended up, with no recolour-of-the-
+    # background confound on the centroid.
+    bg = np.zeros((h, w, 4), dtype=np.uint8)
+    bg[..., 3] = 255
+
+    char = 0.4
+    irregularity = 0.0
+    char_w = max(1e-3, char * 0.25)
+    diagonal = float(np.hypot(h, w))
+    dist = float(np.hypot(marker_y - hot_y, marker_x - hot_x))
+    d01 = dist / diagonal
+    target_burn = char_w * 0.5  # mid-blister-band, well clear of scorch
+    reach = 1.0 + 3.0 * char_w + 0.5 * irregularity + _REACH_EPS
+    progress = float(np.clip((target_burn + d01) / reach, 0.01, 0.99))
+
+    params = {
+        "progress": progress,
+        "count": 1,
+        "irregularity": irregularity,
+        "scale": 24.0,
+        "bubble": 1.0,
+        "char": char,
+        "char_colour": "#2a1608",
+        "hole": "white",
+        "seed": seed,
+    }
+    out_marker = film_burn(img, params)
+    out_bg = film_burn(bg, params)
+
+    diff = out_marker[..., :3].astype(np.float64) - out_bg[..., :3].astype(np.float64)
+    weight = np.clip(diff, 0.0, None).sum(axis=-1)
+    assert weight.sum() > 0.0, "expected the marker's warped footprint to be visible"
+
+    ys, xs = np.mgrid[0:h, 0:w]
+    total = float(weight.sum())
+    centroid_y = float((ys * weight).sum() / total)
+    centroid_x = float((xs * weight).sum() / total)
+    after = float(np.hypot(centroid_y - hot_y, centroid_x - hot_x))
+
+    assert after > dist
+
+
+def test_film_burn_same_seed_identical_different_seed_differs():
+    rng = np.random.default_rng(22)
+    img = _random_rgba(rng, h=24, w=24)
+    params = {"progress": 0.5, "count": 2, "seed": 7}
+
+    out1 = film_burn(img, params)
+    out2 = film_burn(img, params)
+    out_diff_seed = film_burn(img, {**params, "seed": 99})
+
+    np.testing.assert_array_equal(out1, out2)
+    assert not np.array_equal(out1, out_diff_seed)
+
+
+def test_film_burn_count_four_burns_more_area_than_count_one_at_equal_progress():
+    img = np.full((40, 40, 4), 150, dtype=np.uint8)
+    img[..., 3] = 255
+
+    params = {"progress": 0.3, "irregularity": 0.4, "bubble": 0.0, "seed": 6}
+    out_one = film_burn(img, {**params, "count": 1})
+    out_four = film_burn(img, {**params, "count": 4})
+
+    diff_one = np.abs(out_one.astype(np.int16) - img.astype(np.int16)).sum()
+    diff_four = np.abs(out_four.astype(np.int16) - img.astype(np.int16)).sum()
+    assert diff_four > diff_one
+
+
+def test_film_burn_char_colour_appears_in_the_scorch_band():
+    # irregularity=0 and bubble=0 keep the annulus clean (no noise wobble,
+    # no warp) so the scorch ring is exactly the pixels between char_w and
+    # 2*char_w in field units.
+    from ops.film_burn import _REACH_EPS
+
+    h = w = 80
+    seed = 3
+    img = np.full((h, w, 4), 200, dtype=np.uint8)
+    img[..., 3] = 255
+
+    char = 0.4
+    char_w = max(1e-3, char * 0.25)
+    reach = 1.0 + 3.0 * char_w + 0.5 * 0.0 + _REACH_EPS
+    # progress that lands the field's median burn value in the middle of
+    # the scorch band for a single, centred-ish hot spot at this seed.
+    progress = float((1.5 * char_w) / reach) + 0.05
+
+    char_colour = "#2a1608"
+    out = film_burn(
+        img,
+        {
+            "progress": progress,
+            "count": 1,
+            "irregularity": 0.0,
+            "bubble": 0.0,
+            "char": char,
+            "char_colour": char_colour,
+            "hole": "white",
+            "seed": seed,
+        },
+    )
+
+    target = np.array([0x2A, 0x16, 0x08], dtype=np.float64)
+    orig_dist = float(np.linalg.norm(img[0, 0, :3].astype(np.float64) - target))
+
+    changed = np.any(out[..., :3] != img[..., :3], axis=-1) & np.any(
+        out[..., :3] != 255, axis=-1
+    )
+    assert np.any(changed), "expected at least one pixel to fall in the scorch band"
+
+    changed_rgb = out[changed][:, :3].astype(np.float64)
+    mean_dist = float(np.linalg.norm(changed_rgb - target[None, :], axis=1).mean())
+    assert mean_dist < orig_dist
+
+
+def test_film_burn_fully_transparent_input_does_not_crash():
+    img = np.zeros((16, 16, 4), dtype=np.uint8)
+
+    out = film_burn(
+        img,
+        {"progress": 0.7, "count": 3, "bubble": 0.6, "hole": "transparent", "seed": 8},
+    )
+
+    assert out.shape == img.shape
+    assert out.dtype == np.uint8

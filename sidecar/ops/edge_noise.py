@@ -49,63 +49,11 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 from ops import P, op
 from ops._blur import soften as _soften
-
-
-def _noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.ndarray:
-    """Seeded value-noise field at feature size `scale`, upsampled to
-    `(h, w)` per `profile` — see the module docstring for the five
-    variants. Values are bounded to roughly [-1, 1]."""
-    rng = np.random.default_rng(seed)
-    field_scale = scale * 3.0 if profile == "straight" else scale
-    small_h = max(1, int(round(h / field_scale)))
-    small_w = max(1, int(round(w / field_scale)))
-    noise_small = rng.uniform(-1.0, 1.0, size=(small_h, small_w)).astype(np.float32)
-    noise_img = Image.fromarray(noise_small, mode="F")
-
-    if profile in ("rect", "straight"):
-        return np.asarray(
-            noise_img.resize((w, h), resample=Image.NEAREST), dtype=np.float64
-        )
-
-    if profile == "linear":
-        # Connect the dots: straight runs between noise points, corners at
-        # each cell — polygonal tears rather than a bezier wander.
-        return np.asarray(
-            noise_img.resize((w, h), resample=Image.BILINEAR), dtype=np.float64
-        )
-
-    noise_full = np.asarray(
-        noise_img.resize((w, h), resample=Image.BICUBIC), dtype=np.float64
-    )
-    if profile == "saw":
-        # Ridge/triangle wave: folds the smooth [-1, 1] wander into sharp
-        # teeth, still bounded to [-1, 1].
-        noise_full = 1.0 - 2.0 * np.abs(noise_full)
-    return noise_full
-
-
-def _bilinear_sample(arr: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndarray:
-    """Bilinearly sample 2D float `arr` at fractional coordinates `ys`,
-    `xs` (same shape as `arr`), clamped to the canvas edges."""
-    h, w = arr.shape
-    ys = np.clip(ys, 0.0, h - 1.0)
-    xs = np.clip(xs, 0.0, w - 1.0)
-
-    y0 = np.floor(ys).astype(np.int64)
-    x0 = np.floor(xs).astype(np.int64)
-    y1 = np.minimum(y0 + 1, h - 1)
-    x1 = np.minimum(x0 + 1, w - 1)
-
-    fy = ys - y0
-    fx = xs - x0
-
-    top = arr[y0, x0] * (1.0 - fx) + arr[y0, x1] * fx
-    bottom = arr[y1, x0] * (1.0 - fx) + arr[y1, x1] * fx
-    return top * (1.0 - fy) + bottom * fy
+from ops._noise import noise_field as _noise_field
+from ops._warp import bilinear_sample as _bilinear_sample
 
 
 @op(
