@@ -6,7 +6,7 @@ pre-commit:
   commands:
     biome:
       glob: "*.{ts,tsx,json,css}"
-      run: ./node_modules/.bin/biome check {staged_files}
+      run: ./node_modules/.bin/biome check --no-errors-on-unmatched {staged_files}
     ruff:
       glob: "*.py"
       run: uv run --project sidecar ruff check {staged_files}
