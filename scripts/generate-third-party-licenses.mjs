@@ -4,7 +4,7 @@
  * for what actually ships inside the friends-build zip (Epic 14).
  *
  * Scope: npm production dependencies (bundled into the frontend JS) +
- * Python runtime dependencies (numpy, pillow — bundled into the frozen
+ * Python runtime dependencies (numpy, pillow, onnxruntime — bundled into the frozen
  * sidecar) + PyInstaller itself (its compiled bootloader is embedded in
  * the frozen sidecar executable, under its own bootloader exception —
  * see guidance/projects/oblique/design/licensing.md) + the
@@ -19,7 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
-const PYTHON_RUNTIME = new Set(['numpy', 'pillow']);
+const PYTHON_RUNTIME = new Set(['numpy', 'pillow', 'onnxruntime']);
 const PYTHON_EMBEDDED_TOOLING = new Set(['pyinstaller']);
 
 function npmPackages() {
