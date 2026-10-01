@@ -23,7 +23,7 @@ import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel'
 import { ColourSelectStatusPanel } from './colourSelect/ColourSelectStatusPanel';
 import { ColourSelectController } from './colourSelect/controller';
 import { useColourSelectStore } from './colourSelect/state';
-import { topmostNodeAt } from './hitTest';
+import { nodeWorldBounds, type Rect, snapTargets, topmostNodeAt } from './hitTest';
 import { EllipseMarquee } from './marquees/EllipseMarquee';
 import { LassoMarquee } from './marquees/LassoMarquee';
 import { MarqueeToolbar } from './marquees/MarqueeToolbar';
@@ -50,6 +50,8 @@ import { resolveOutlineSeed } from './smartSelect/outlinePrompt';
 import { SmartSelectOverlay } from './smartSelect/SmartSelectOverlay';
 import { SmartSelectStatusPanel } from './smartSelect/SmartSelectStatusPanel';
 import { useSmartSelectStore } from './smartSelect/state';
+import { type SnapTargets, snapMove, snapToleranceDoc } from './snap';
+import { useSnapStore } from './snapState';
 import { TransformBox } from './TransformBox';
 import { TextBounds } from './text/TextBounds';
 import './text/textEditTriggers';
@@ -61,7 +63,7 @@ import { PathEditor } from './vector/PathEditor';
 import { PenTool } from './vector/PenTool';
 import { deleteAnchor } from './vector/pathEdit';
 import { MIN_ANCHORS_TO_CLOSE, usePenStateStore } from './vector/penState';
-import { panBy, screenToDoc, useViewTransformStore } from './viewTransform';
+import { panBy, screenToDoc, useViewTransformStore, type ViewTransform } from './viewTransform';
 
 /** Screen-space drag threshold that tells a smart-select click (a point) apart from a drag (a box) — segment-to-vector.md's "drag >= 4px = box". */
 const SMART_SELECT_DRAG_SCREEN_PX = 4;
@@ -101,6 +103,41 @@ function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
+/** Pink-400 — distinct from the sky-blue transform box (snapping.md). */
+const SNAP_GUIDE_COLOUR = '#f472b6';
+
+/**
+ * The snapped axes' guide lines, drawn across the whole viewport inside the
+ * document-space overlay group: the viewport corners come back to document
+ * space through `viewTransform`, and the stroke is `1 / scale` so it stays 1
+ * screen px at any zoom.
+ */
+function SnapGuideLines({
+  guides,
+  view,
+  w,
+  h,
+}: {
+  guides: { x?: number; y?: number };
+  view: ViewTransform;
+  w: number;
+  h: number;
+}) {
+  const topLeft = screenToDoc(view, { x: 0, y: 0 });
+  const bottomRight = screenToDoc(view, { x: w, y: h });
+  const strokeWidth = 1 / view.scale;
+  return (
+    <g data-snap-guides stroke={SNAP_GUIDE_COLOUR} strokeWidth={strokeWidth}>
+      {guides.x !== undefined && (
+        <line x1={guides.x} y1={topLeft.y} x2={guides.x} y2={bottomRight.y} />
+      )}
+      {guides.y !== undefined && (
+        <line x1={topLeft.x} y1={guides.y} x2={bottomRight.x} y2={guides.y} />
+      )}
+    </g>
+  );
+}
+
 export function Viewport() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -130,6 +167,11 @@ export function Viewport() {
   // Armed colour-param eyedropper (eyedropper.md): crosshair cursor while a pick is pending.
   const eyedropperArmed = useEyedropperStore((s) => s.armed !== null);
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
+
+  // Pink snap guides while a move-drag is snapped (snapping.md), cleared on pointer-up.
+  const snapGuides = useSnapStore((s) => s.guides);
+  const viewportW = useViewTransformStore((s) => s.viewportW);
+  const viewportH = useViewTransformStore((s) => s.viewportH);
 
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const setMarquee = useMarqueeStateStore((s) => s.setMarquee);
@@ -310,6 +352,12 @@ export function Viewport() {
       const isEditableTarget =
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      // Cmd/Ctrl pressed or released mid-move-drag re-evaluates the snap at the
+      // last pointer position, so the snap lets go (or returns) immediately
+      // rather than on the next pointermove (snapping.md).
+      if (dragNodeId && (e.key === 'Meta' || e.key === 'Control')) {
+        updateMoveDrag(dragLastDoc, e.metaKey || e.ctrlKey);
+      }
       if (e.code === 'Space') {
         if (!isEditableTarget) spaceHeld = true;
         return;
@@ -442,11 +490,51 @@ export function Viewport() {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceHeld = false;
+      if (dragNodeId && (e.key === 'Meta' || e.key === 'Control')) {
+        updateMoveDrag(dragLastDoc, e.metaKey || e.ctrlKey);
+      }
     };
 
     let dragNodeId: string | null = null;
     let dragStartTransform = IDENTITY_TRANSFORM_2D;
     let dragStartDoc: Point = { x: 0, y: 0 };
+    // Snapping (snapping.md): targets and the dragged node's world bounds are
+    // computed once at drag start; `dragLastDoc` is the latest pointer position
+    // (document space) so a Cmd press/release can re-run the move without one.
+    let dragTargets: SnapTargets | null = null;
+    let dragStartBox: Rect | null = null;
+    let dragLastDoc: Point = { x: 0, y: 0 };
+
+    /**
+     * One move-drag step: the un-snapped proposed transform, then — unless
+     * snapping is off or suspended (Cmd) — the start bounds offset by the same
+     * delta are snapped and the correction added. Computed from the un-snapped
+     * position every time, so a snap never sticks. Publishes the guides.
+     */
+    const updateMoveDrag = (docPt: Point, suspendSnap: boolean) => {
+      if (!dragNodeId) return;
+      dragLastDoc = docPt;
+      let next = applyMove(dragStartTransform, {
+        x: docPt.x - dragStartDoc.x,
+        y: docPt.y - dragStartDoc.y,
+      });
+      let guides: { x?: number; y?: number } | null = null;
+      if (!suspendSnap && useSnapStore.getState().enabled && dragTargets && dragStartBox) {
+        const box = {
+          ...dragStartBox,
+          x: dragStartBox.x + (next.x - dragStartTransform.x),
+          y: dragStartBox.y + (next.y - dragStartTransform.y),
+        };
+        const tol = snapToleranceDoc(useViewTransformStore.getState().view.scale);
+        const snap = snapMove(box, dragTargets, tol);
+        next = { ...next, x: next.x + snap.dx, y: next.y + snap.dy };
+        if (snap.guideX !== undefined || snap.guideY !== undefined) {
+          guides = { x: snap.guideX, y: snap.guideY };
+        }
+      }
+      setNodeTransform(dragNodeId, next);
+      useSnapStore.getState().setGuides(guides);
+    };
 
     // Plain left-drag pan for the pan tool. Screen-space delta tracking,
     // same shape as usePanZoom's own space/middle-button pan — deliberately
@@ -646,6 +734,10 @@ export function Viewport() {
       dragNodeId = hit.id;
       dragStartTransform = hit.transform2d ?? IDENTITY_TRANSFORM_2D;
       dragStartDoc = docPt;
+      dragLastDoc = docPt;
+      const scene = useSceneStore.getState().scene;
+      dragTargets = snapTargets(scene, hit.id);
+      dragStartBox = nodeWorldBounds(scene, hit);
       beginTransaction();
     };
 
@@ -722,12 +814,7 @@ export function Viewport() {
       }
 
       if (!dragNodeId) return;
-      const docPt = toDoc(e.clientX, e.clientY);
-      const next = applyMove(dragStartTransform, {
-        x: docPt.x - dragStartDoc.x,
-        y: docPt.y - dragStartDoc.y,
-      });
-      setNodeTransform(dragNodeId, next);
+      updateMoveDrag(toDoc(e.clientX, e.clientY), e.metaKey || e.ctrlKey);
     };
 
     const endDrag = (e: PointerEvent) => {
@@ -809,6 +896,9 @@ export function Viewport() {
       if (!dragNodeId) return;
       canvas.releasePointerCapture(e.pointerId);
       dragNodeId = null;
+      dragTargets = null;
+      dragStartBox = null;
+      useSnapStore.getState().setGuides(null);
       endTransaction();
     };
 
@@ -1115,6 +1205,9 @@ export function Viewport() {
               polygons={marquee?.kind === 'polygons' ? marquee.polygons : []}
               viewScale={view.scale}
             />
+          )}
+          {snapGuides && (
+            <SnapGuideLines guides={snapGuides} view={view} w={viewportW} h={viewportH} />
           )}
         </g>
       </svg>

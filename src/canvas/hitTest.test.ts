@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearAll, ensureGeometry } from '@/scene/textGeometryCache';
 import type { PixelNode, Scene, TextNode } from '@/scene/types';
-import { topmostNodeAt } from './hitTest';
+import { nodeWorldBounds, snapTargets, topmostNodeAt } from './hitTest';
 
 vi.mock('@/fonts/fontsIpc', () => ({
   textOutlines: vi.fn(async () => ({
@@ -142,5 +142,68 @@ describe('topmostNodeAt — text nodes', () => {
     await ensureGeometry(node);
     const s = scene([node, pixelNode('below')]);
     expect(topmostNodeAt(s, { x: 10, y: 10 })?.id).toBe('below');
+  });
+});
+
+describe('nodeWorldBounds', () => {
+  it('is the sourceSize rect at the translated position for a plain pixel node', () => {
+    const n = pixelNode('a', {
+      sourceSize: [60, 40],
+      transform2d: { x: 30, y: 10, scaleX: 1, scaleY: 1, rotation: 0 },
+    });
+    expect(nodeWorldBounds(scene([n]), n)).toEqual({ x: 30, y: 10, w: 60, h: 40 });
+  });
+
+  it('scales about the raster centre', () => {
+    const n = pixelNode('a', {
+      sourceSize: [100, 100],
+      transform2d: { x: 0, y: 0, scaleX: 2, scaleY: 0.5, rotation: 0 },
+    });
+    const b = nodeWorldBounds(scene([n]), n);
+    expect(b?.x).toBeCloseTo(-50);
+    expect(b?.y).toBeCloseTo(25);
+    expect(b?.w).toBeCloseTo(200);
+    expect(b?.h).toBeCloseTo(50);
+  });
+
+  it('is the AABB of the rotated footprint', () => {
+    const n = pixelNode('a', {
+      sourceSize: [100, 100],
+      transform2d: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: Math.PI / 4 },
+    });
+    const b = nodeWorldBounds(scene([n]), n);
+    const half = (100 * Math.SQRT2) / 2;
+    expect(b?.x).toBeCloseTo(50 - half);
+    expect(b?.y).toBeCloseTo(50 - half);
+    expect(b?.w).toBeCloseTo(2 * half);
+    expect(b?.h).toBeCloseTo(2 * half);
+  });
+});
+
+describe('snapTargets', () => {
+  it('holds the document edges and centres when no other node exists', () => {
+    const a = pixelNode('a');
+    expect(snapTargets(scene([a]), 'a')).toEqual({ xs: [0, 100, 200], ys: [0, 100, 200] });
+  });
+
+  it('adds left/centre/right and top/middle/bottom of every other visible image node', () => {
+    const a = pixelNode('a');
+    const b = pixelNode('b', {
+      sourceSize: [40, 20],
+      transform2d: { x: 10, y: 60, scaleX: 1, scaleY: 1, rotation: 0 },
+    });
+    const t = snapTargets(scene([a, b]), 'a');
+    expect(t.xs).toEqual([0, 100, 200, 10, 30, 50]);
+    expect(t.ys).toEqual([0, 100, 200, 60, 70, 80]);
+  });
+
+  it('ignores hidden nodes and mask-output nodes', () => {
+    const a = pixelNode('a');
+    const hidden = pixelNode('hidden', { visible: false, sourceSize: [10, 10] });
+    const mask = pixelNode('mask', { output: 'mask', sourceSize: [10, 10] });
+    expect(snapTargets(scene([a, hidden, mask]), 'a')).toEqual({
+      xs: [0, 100, 200],
+      ys: [0, 100, 200],
+    });
   });
 });

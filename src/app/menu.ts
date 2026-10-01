@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
@@ -25,7 +26,8 @@ import { commitActiveTextEdit } from '@/scene/textEditState';
  * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
  * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
  * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
- * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md) and the Layer menu's
+ * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md), View → Snap to Layers
+ * (Cmd+;, snapping.md — a check item, see its handler below) and the Layer menu's
  * Cmd+]/Cmd+[ (+Shift, drag-reorder.md) exclusively — `shortcuts.ts`'s keydown
  * branches for those keys were removed rather than kept as dead/duplicate
  * paths (this is the mainstream, expected behaviour, but wasn't
@@ -68,7 +70,7 @@ function moveSelectedLayer(move: LayerMove): void {
   useSceneStore.getState().reorderNode(selection.nodeId, to);
 }
 
-const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
+const MENU_EVENTS: Record<string, (payload: unknown) => void | Promise<void>> = {
   'menu://app/settings': () => openSettingsDialog(),
   'menu://file/new': () => newProject(),
   'menu://file/open': () => openProjectDialog(),
@@ -103,6 +105,11 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://view/zoom-out': () => useViewTransformStore.getState().zoomOut(),
   'menu://view/fit': () => useViewTransformStore.getState().fitToWindow(),
   'menu://view/actual-size': () => useViewTransformStore.getState().reset100(),
+  // View -> Snap to Layers (snapping.md, Cmd+;). A native check item: muda
+  // toggles it on click and menu.rs sends the NEW checked state as the payload,
+  // so the menu stays the source of truth and the store only mirrors it (no
+  // invoke back to Rust to set the tick; both default to on).
+  'menu://view/snap-to-layers': (payload) => useSnapStore.getState().setEnabled(payload === true),
   // Layer menu (drag-reorder.md): Cmd+] / Cmd+[ and the Shift variants.
   'menu://layer/forward': () => moveSelectedLayer('forward'),
   'menu://layer/backward': () => moveSelectedLayer('backward'),
@@ -128,7 +135,7 @@ export function installMenu(): () => void {
 
   for (const [event, handler] of Object.entries(MENU_EVENTS)) {
     win
-      .listen(event, () => void handler())
+      .listen(event, (e) => void handler(e.payload))
       .then((fn) => {
         if (disposed) {
           fn();

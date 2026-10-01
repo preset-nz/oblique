@@ -2,7 +2,8 @@
 //! 2026-07-04): App submenu (About/Services/Hide/Quit — standard macOS
 //! chrome), File (New/Open/Import/Save/Save As/Export PNG), Edit (Undo/Redo
 //! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
-//! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md),
+//! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md;
+//! Snap to Layers check item — snapping.md),
 //! Layer (Bring Forward/Send Backward/Bring to Front/Send to Back —
 //! drag-reorder.md), Type.
 //!
@@ -35,7 +36,7 @@
 //! could not be exercised headlessly in this environment — verify with a
 //! real click/keypress test (see report).
 
-use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Bug-report contact shown in the native About panel (macOS supports
@@ -57,6 +58,8 @@ const EVT_VIEW_ZOOM_IN: &str = "menu://view/zoom-in";
 const EVT_VIEW_ZOOM_OUT: &str = "menu://view/zoom-out";
 const EVT_VIEW_FIT: &str = "menu://view/fit";
 const EVT_VIEW_ACTUAL_SIZE: &str = "menu://view/actual-size";
+/// Payload: `bool`, the item's new checked state (see the `view-snap-layers` arm below).
+const EVT_VIEW_SNAP_LAYERS: &str = "menu://view/snap-to-layers";
 const EVT_LAYER_FORWARD: &str = "menu://layer/forward";
 const EVT_LAYER_BACKWARD: &str = "menu://layer/backward";
 const EVT_LAYER_FRONT: &str = "menu://layer/front";
@@ -175,6 +178,17 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let view_fit = MenuItem::with_id(app, "view-fit", "Fit in Window", true, Some("CmdOrCtrl+0"))?;
     let view_actual =
         MenuItem::with_id(app, "view-actual", "Actual Size", true, Some("CmdOrCtrl+1"))?;
+    // Snap to Layers (snapping.md): a check item, default on. muda toggles a
+    // CheckMenuItem natively on click *before* emitting the menu event, so the
+    // menu is the source of truth and the event below carries the new state.
+    let view_snap_layers = CheckMenuItem::with_id(
+        app,
+        "view-snap-layers",
+        "Snap to Layers",
+        true,
+        true,
+        Some("CmdOrCtrl+;"),
+    )?;
 
     let view_submenu = Submenu::with_items(
         app,
@@ -186,6 +200,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &view_fit,
             &view_actual,
+            &PredefinedMenuItem::separator(app)?,
+            &view_snap_layers,
         ],
     )?;
 
@@ -270,7 +286,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     )?;
     app.set_menu(menu)?;
 
-    app.on_menu_event(|app_handle, event| {
+    app.on_menu_event(move |app_handle, event| {
         let evt = match event.id().0.as_str() {
             "app-settings" => EVT_APP_SETTINGS,
             "file-new" => EVT_FILE_NEW,
@@ -286,6 +302,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "view-zoom-out" => EVT_VIEW_ZOOM_OUT,
             "view-fit" => EVT_VIEW_FIT,
             "view-actual" => EVT_VIEW_ACTUAL_SIZE,
+            "view-snap-layers" => {
+                // Already toggled by muda; the webview mirrors this state.
+                let checked = view_snap_layers.is_checked().unwrap_or(true);
+                let _ = app_handle.emit(EVT_VIEW_SNAP_LAYERS, checked);
+                return;
+            }
             "layer-forward" => EVT_LAYER_FORWARD,
             "layer-backward" => EVT_LAYER_BACKWARD,
             "layer-front" => EVT_LAYER_FRONT,
