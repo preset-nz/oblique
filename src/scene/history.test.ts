@@ -235,6 +235,36 @@ describe('transaction coalescing', () => {
   });
 });
 
+describe('composition note (composition-note.md)', () => {
+  it('a typing session inside one transaction is one undo step', async () => {
+    history.beginTransaction();
+    useSceneStore.getState().setNote('a');
+    useSceneStore.getState().setNote('ab');
+    useSceneStore.getState().setNote('abc');
+    history.endTransaction();
+
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.note).toBeUndefined();
+    expect(history.canUndo()).toBe(false);
+
+    await history.redo(fakeDeps());
+    expect(useSceneStore.getState().scene.note).toBe('abc');
+  });
+
+  it('the note survives undo/redo of an unrelated edit', async () => {
+    useSceneStore.getState().setNote('keep me');
+    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
+
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
+    expect(useSceneStore.getState().scene.note).toBe('keep me');
+
+    await history.redo(fakeDeps());
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+    expect(useSceneStore.getState().scene.note).toBe('keep me');
+  });
+});
+
 describe('dirty-diff correctness on restore', () => {
   it('marks a node dirty when its modifiers changed between old and restored', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });

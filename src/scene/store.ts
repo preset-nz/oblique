@@ -239,6 +239,13 @@ interface SceneState {
    */
   setBackgroundImage: (sourcePath: string, sourceSize: [number, number]) => void;
 
+  /**
+   * Sets the composition note (composition-note.md). An empty string removes
+   * the `note` key so saved files stay clean. Compositing-irrelevant — no
+   * dirty flag on any node — but a real, undoable, saveable scene edit.
+   */
+  setNote: (note: string) => void;
+
   addModifier: (nodeId: string, type: string, defaults: Modifier['params']) => string;
   removeModifier: (nodeId: string, modId: string) => void;
   reorderModifier: (nodeId: string, modId: string, toIndex: number) => void;
@@ -809,6 +816,14 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     set((s) => ({
       scene: { ...s.scene, background: { type: 'image', sourcePath, sourceSize } },
     }));
+  },
+
+  setNote: (note) => {
+    set((s) => {
+      if (note === (s.scene.note ?? '')) return s;
+      const { note: _previous, ...rest } = s.scene;
+      return { scene: note === '' ? rest : { ...rest, note } };
+    });
   },
 
   addModifier: (nodeId, type, defaults) => {

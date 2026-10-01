@@ -24,6 +24,9 @@ export function sceneChangedIgnoringDirty(a: Scene, b: Scene): boolean {
   ) {
     return true;
   }
+  // The composition note is a real, undoable edit (composition-note.md);
+  // absent and empty are the same thing.
+  if ((a.note ?? '') !== (b.note ?? '')) return true;
   // Mask edits are real edits (selection-to-mask.md): same-id maskRefs
   // entries with different geometry/feather must register here or
   // history/scheduler treat them as cook churn.
@@ -61,4 +64,19 @@ export function dirtyRose(a: Scene, b: Scene): boolean {
     if ((node.dirty.draft && !was.draft) || (node.dirty.working && !was.working)) return true;
   }
   return false;
+}
+
+/**
+ * The composition note (composition-note.md) never affects pixels; skip the
+ * recomposite when it's the only top-level scene field that changed, so
+ * typing in the Notes tab doesn't repaint the canvas on every keystroke.
+ */
+export function onlyNoteChanged(a: Scene, b: Scene): boolean {
+  if (a.note === b.note) return false;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if (key === 'note') continue;
+    if (a[key as keyof Scene] !== b[key as keyof Scene]) return false;
+  }
+  return true;
 }

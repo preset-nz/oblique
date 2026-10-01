@@ -311,6 +311,33 @@ describe('serialise/parse round trip', () => {
   });
 });
 
+describe('composition note round-trip (composition-note.md)', () => {
+  it('serialise -> parse round-trips the note verbatim', () => {
+    const scene = { ...sampleScene(), note: 'for the zine cover\nline two' };
+    expect(parseProject(serialiseProject(scene)).note).toBe('for the zine cover\nline two');
+  });
+
+  it('a note-less scene serialises with no note key; an older file loads with none', () => {
+    expect(serialiseProject(sampleScene())).not.toContain('"note"');
+    expect(parseProject(serialiseProject(sampleScene())).note).toBeUndefined();
+  });
+
+  it('the loader keeps unknown extra scene keys rather than rejecting them', () => {
+    const text = JSON.stringify({
+      format: 'oblique-project',
+      version: 2,
+      scene: { ...sampleScene(), somethingNewer: { x: 1 } },
+    });
+    expect(parseProject(text)).toMatchObject({ somethingNewer: { x: 1 } });
+  });
+
+  it('setting a note marks the project unsaved', () => {
+    useProjectMetaStore.getState().markSaved();
+    useSceneStore.getState().setNote('hello');
+    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
+  });
+});
+
 describe('document background image round-trip (background-image.md)', () => {
   const imageBackground = {
     type: 'image',

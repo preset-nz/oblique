@@ -14,6 +14,7 @@ import {
   useMarqueeStateStore,
 } from '@/scene/marquee';
 import { usePathEditStateStore } from '@/scene/pathEditState';
+import { onlyNoteChanged } from '@/scene/sceneDiff';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from '@/scene/textEditState';
@@ -1031,7 +1032,7 @@ export function Viewport() {
     // object reference — compositing-only, no dirty flag (dirty rule 4), but
     // still needs a recomposite.
     const unsubscribeScene = useSceneStore.subscribe((state, prev) => {
-      if (state.scene !== prev.scene) schedule(true);
+      if (state.scene !== prev.scene && !onlyNoteChanged(state.scene, prev.scene)) schedule(true);
     });
     // Any cook writing a fresh bitmap bumps cacheVersion.
     const unsubscribeCache = useCacheVersionStore.subscribe(() => schedule(true));

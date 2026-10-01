@@ -235,4 +235,11 @@ export interface Scene {
    * no blend mode, no lock state, no visibility toggle beyond set/none.
    */
   background?: SceneBackground;
+  /**
+   * Free-text composition note (composition-note.md): what the piece is for.
+   * Optional so older `.oblique` files load verbatim — absence means empty,
+   * and an empty note is never written (`setNote('')` removes the key).
+   * Per-document, not per-node; compositing-irrelevant (never dirties).
+   */
+  note?: string;
 }

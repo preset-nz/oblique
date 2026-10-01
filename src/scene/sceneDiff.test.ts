@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sceneChangedIgnoringDirty } from './sceneDiff';
+import { onlyNoteChanged, sceneChangedIgnoringDirty } from './sceneDiff';
 import type { Scene, SceneBackground, VectorMaskRef } from './types';
 
 function scene(overrides: Partial<Scene> = {}): Scene {
@@ -59,5 +59,45 @@ describe('sceneChangedIgnoringDirty — background', () => {
     const mk = () =>
       scene({ background: { type: 'image', sourcePath: '/bg.png', sourceSize: [10, 10] } });
     expect(sceneChangedIgnoringDirty(mk(), mk())).toBe(false);
+  });
+});
+
+describe('sceneChangedIgnoringDirty — note (composition-note.md)', () => {
+  it('a changed note is a real edit', () => {
+    expect(sceneChangedIgnoringDirty(scene({ note: 'a' }), scene({ note: 'ab' }))).toBe(true);
+  });
+
+  it('adding or removing a note is a real edit', () => {
+    expect(sceneChangedIgnoringDirty(scene(), scene({ note: 'hello' }))).toBe(true);
+    expect(sceneChangedIgnoringDirty(scene({ note: 'hello' }), scene())).toBe(true);
+  });
+
+  it('absent and empty notes are equivalent', () => {
+    expect(sceneChangedIgnoringDirty(scene(), scene({ note: '' }))).toBe(false);
+  });
+
+  it('identical notes register no change', () => {
+    expect(sceneChangedIgnoringDirty(scene({ note: 'same' }), scene({ note: 'same' }))).toBe(false);
+  });
+});
+
+describe('onlyNoteChanged', () => {
+  const base = {
+    id: 's',
+    nodes: [],
+    cameras: [],
+    defaultCameraId: null,
+    resolution: 'working',
+    documentSize: [10, 10],
+  } as unknown as Scene;
+
+  it('is true when only the note differs', () => {
+    expect(onlyNoteChanged({ ...base, note: 'a' }, { ...base, note: 'b' })).toBe(true);
+    expect(onlyNoteChanged({ ...base, note: 'a' }, base)).toBe(true);
+  });
+
+  it('is false when the note is unchanged or anything else changed too', () => {
+    expect(onlyNoteChanged(base, { ...base })).toBe(false);
+    expect(onlyNoteChanged({ ...base, note: 'a' }, { ...base, note: 'b', nodes: [] })).toBe(false);
   });
 });

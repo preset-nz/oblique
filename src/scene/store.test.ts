@@ -612,6 +612,36 @@ describe('setBackgroundColor (background-colour.md)', () => {
   });
 });
 
+describe('setNote (composition-note.md)', () => {
+  it('sets scene.note', () => {
+    useSceneStore.getState().setNote('for the zine cover');
+    expect(useSceneStore.getState().scene.note).toBe('for the zine cover');
+  });
+
+  it('an empty string removes the key entirely', () => {
+    useSceneStore.getState().setNote('something');
+    useSceneStore.getState().setNote('');
+    expect('note' in useSceneStore.getState().scene).toBe(false);
+  });
+
+  it('setting an empty note on a note-less scene leaves the scene object untouched', () => {
+    const before = useSceneStore.getState().scene;
+    useSceneStore.getState().setNote('');
+    expect(useSceneStore.getState().scene).toBe(before);
+  });
+
+  it('is compositing-irrelevant — no dirty flag on any node', () => {
+    const clean = { draft: false, working: false } as const;
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: ['a', 'b'].map((id) => pixelNode(id, { dirty: { ...clean } })) },
+    }));
+    useSceneStore.getState().setNote('hello');
+    for (const node of useSceneStore.getState().scene.nodes) {
+      expect(node.dirty).toEqual(clean);
+    }
+  });
+});
+
 describe('addModifier', () => {
   it('appends a modifier with the given type and defaults', () => {
     useSceneStore.setState((s) => ({
