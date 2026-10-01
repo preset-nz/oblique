@@ -300,15 +300,14 @@ export function Viewport() {
 
     let spaceHeld = false;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        spaceHeld = true;
-        return;
-      }
-
       const target = e.target;
       const isEditableTarget =
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (e.code === 'Space') {
+        if (!isEditableTarget) spaceHeld = true;
+        return;
+      }
 
       // Escape clears node selection from any tool (de-select, tool-state.md),
       // the active marquee (marquees.md), and cancels an in-progress pen

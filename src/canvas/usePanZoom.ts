@@ -28,6 +28,9 @@ export function usePanZoom(canvasRef: RefObject<HTMLCanvasElement | null>) {
     if (!canvas) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Never steal Space from a text field — the text editor, layer rename
+      // and inspector inputs all need it (Epic 20 dogfood, 2026-10-01).
+      if (isEditableTarget(e.target)) return;
       if (e.code === 'Space' && !e.repeat) {
         spaceHeldRef.current = true;
         e.preventDefault();
@@ -116,4 +119,11 @@ export function usePanZoom(canvasRef: RefObject<HTMLCanvasElement | null>) {
       canvas.removeEventListener('wheel', handleWheel);
     };
   }, [canvasRef]);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+  );
 }
