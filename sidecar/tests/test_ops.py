@@ -24,6 +24,10 @@ ALL_OPS = [
     (invert, {}),
     (grain, {"amount": 0.3, "size": 2, "seed": 7}),
     (cmyk_halftone, {"dot_size": 3.0, "misregistration": 1.0, "seed": 7}),
+    (
+        cmyk_halftone,
+        {"dot_size": 3.0, "white_is_alpha": True, "spill": True, "seed": 7},
+    ),
 ]
 
 
@@ -385,11 +389,14 @@ def test_hex_to_rgb01_falls_back_and_never_raises(value):
 
 def test_no_other_registered_op_emits_disabled_when():
     # `hatch` is disabled_when's first user (story 5 doc). Every other op's
-    # list_ops payload must stay byte-identical.
+    # list_ops payload must stay byte-identical. `cmyk_halftone.spill` is
+    # the one other annotated param (2026-10-01).
     for name, entry in OPS.items():
         if name == "hatch":
             continue
         for param in entry.to_dict()["params"]:
+            if (name, param["name"]) == ("cmyk_halftone", "spill"):
+                continue
             assert "disabledWhen" not in param, (
                 f"{name}.{param['name']} unexpectedly carries disabledWhen"
             )

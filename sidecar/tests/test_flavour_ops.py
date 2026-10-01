@@ -26,6 +26,10 @@ from ops.smear import smear
 from ops.xerox import xerox
 
 ALL_OPS = [
+    (
+        cmyk_halftone,
+        {"dot_size": 3.0, "white_is_alpha": True, "spill": True, "seed": 7},
+    ),
     (colour_crush, {"bits": 3, "dither": False}),
     (xerox, {"generations": 3, "skew": 0.3, "seed": 7}),
     (ink_starved, {"direction": "h", "starvation": 0.4, "banding": 0.2, "seed": 7}),
@@ -816,6 +820,205 @@ def test_cmyk_halftone_white_is_alpha_ignored_in_over_mode():
 
 def test_cmyk_halftone_declares_writes_alpha():
     assert OPS["cmyk_halftone"].writes_alpha is True
+
+
+# --- cmyk_halftone.spill (2026-10-01) ---------------------------------------
+#
+# `spill` makes the layer's silhouette the *tone the dots are sampled from*
+# instead of a cookie cutter. See `guidance/projects/oblique/features/
+# ops-backlog.md` ("cmyk_halftone.spill").
+
+
+def _pre_spill_cmyk_halftone(img: np.ndarray, params: dict) -> np.ndarray:
+    """The op exactly as it stood before `spill` existed (frozen copy), built
+    from the module's `_separate`/`_screen_channel` called the old way. The
+    regression oracle for 'spill off is byte-identical in every mode'."""
+    from ops import hex_to_rgb01
+
+    defaults = {"c": "#00ffff", "m": "#ff00ff", "y": "#ffff00", "k": "#000000"}
+    angles = {"c": 15.0, "m": 75.0, "y": 0.0, "k": 45.0}
+    pitch = max(1.0, float(params.get("dot_size", 6.0)))
+    misreg = float(params.get("misregistration", 0.0))
+    seed = int(params.get("seed", 0))
+    mode = str(params.get("mode", "paper"))
+    white_is_alpha = bool(params.get("white_is_alpha", False)) and mode == "paper"
+
+    rgb = img[..., :3].astype(np.float64) / 255.0
+    plates = _separate(rgb)
+    absorb = {
+        ch: 1.0
+        - np.array(hex_to_rgb01(params.get(f"ink_{ch}", defaults[ch]), (0.0, 0.0, 0.0)))
+        for ch in ("c", "m", "y", "k")
+    }
+    rng = np.random.default_rng(seed)
+    base = rgb if mode == "over" else np.ones_like(rgb)
+    out_rgb = base.copy()
+    coverage = np.zeros(rgb.shape[:2], dtype=np.float64)
+    for ch in ("c", "m", "y", "k"):
+        angle = float(params.get(f"angle_{ch}", angles[ch]))
+        jitter = rng.uniform(-1.0, 1.0, size=2) * misreg
+        ink = _screen_channel(plates[ch], pitch, angle, (jitter[0], jitter[1]))
+        out_rgb *= 1.0 - ink[..., None] * absorb[ch]
+        coverage = 1.0 - (1.0 - coverage) * (1.0 - ink)
+
+    out = img.copy()
+    if white_is_alpha:
+        safe_coverage = np.maximum(coverage, 1e-6)
+        ink_rgb = (out_rgb - (1.0 - coverage[..., None])) / safe_coverage[..., None]
+        ink_rgb = np.where(coverage[..., None] < 1e-6, 1.0, ink_rgb)
+        ink_rgb = np.clip(ink_rgb, 0.0, 1.0)
+        out[..., :3] = np.clip(ink_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+        in_alpha = img[..., 3].astype(np.float64) / 255.0
+        out_alpha = in_alpha * coverage
+        out[..., 3] = np.clip(np.round(out_alpha * 255.0), 0.0, 255.0).astype(np.uint8)
+    else:
+        out[..., :3] = np.clip(out_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+    return out
+
+
+@pytest.mark.parametrize("mode", ["paper", "over"])
+@pytest.mark.parametrize("white_is_alpha", [False, True])
+@pytest.mark.parametrize("seed", [0, 5])
+def test_cmyk_halftone_spill_off_is_byte_identical_to_pre_spill_op(
+    mode, white_is_alpha, seed
+):
+    rng = np.random.default_rng(seed + 1200)
+    img = _random_rgba(rng, h=28, w=30)
+    params = {
+        "dot_size": 5.0,
+        "misregistration": 1.5,
+        "seed": seed,
+        "mode": mode,
+        "white_is_alpha": white_is_alpha,
+    }
+    expected = _pre_spill_cmyk_halftone(img, params)
+
+    np.testing.assert_array_equal(cmyk_halftone(img, params), expected)
+    np.testing.assert_array_equal(
+        cmyk_halftone(img, {**params, "spill": False}), expected
+    )
+
+
+@pytest.mark.parametrize("mode", ["paper", "over"])
+def test_cmyk_halftone_spill_without_white_is_alpha_or_in_over_mode_is_inert(mode):
+    rng = np.random.default_rng(1300)
+    img = _random_rgba(rng, h=24, w=24)
+    params = {"dot_size": 4.0, "mode": mode, "white_is_alpha": mode == "over"}
+
+    np.testing.assert_array_equal(
+        cmyk_halftone(img, {**params, "spill": True}),
+        cmyk_halftone(img, params),
+    )
+    if mode == "paper":
+        # paper mode but white_is_alpha off: also inert.
+        params["white_is_alpha"] = False
+        np.testing.assert_array_equal(
+            cmyk_halftone(img, {**params, "spill": True}),
+            cmyk_halftone(img, params),
+        )
+
+
+def _black_disc_on_transparent(size: int = 96, radius: float = 24.0) -> np.ndarray:
+    ys, xs = np.mgrid[0:size, 0:size]
+    centre = (size - 1) / 2.0
+    inside = np.hypot(xs - centre, ys - centre) <= radius
+    img = np.zeros((size, size, 4), dtype=np.uint8)  # transparent black
+    img[inside] = (0, 0, 0, 255)
+    return img
+
+
+_DISC_PITCH = 8.0
+_DISC_RADIUS = 24.0
+
+
+def test_cmyk_halftone_spill_dots_overhang_the_silhouette_within_one_pitch():
+    img = _black_disc_on_transparent(radius=_DISC_RADIUS)
+    size = img.shape[0]
+    ys, xs = np.mgrid[0:size, 0:size]
+    dist = np.hypot(xs - (size - 1) / 2.0, ys - (size - 1) / 2.0)
+    outside = img[..., 3] == 0
+
+    out = cmyk_halftone(
+        img, {"dot_size": _DISC_PITCH, "white_is_alpha": True, "spill": True}
+    )
+
+    # Dots complete themselves past the silhouette...
+    assert (out[..., 3][outside] > 0).any()
+    # ...but nowhere beyond radius + one dot pitch.
+    assert (out[..., 3][dist > _DISC_RADIUS + _DISC_PITCH] == 0).all()
+
+
+def test_cmyk_halftone_without_spill_nothing_outside_the_disc():
+    img = _black_disc_on_transparent(radius=_DISC_RADIUS)
+    outside = img[..., 3] == 0
+
+    out = cmyk_halftone(img, {"dot_size": _DISC_PITCH, "white_is_alpha": True})
+
+    assert (out[..., 3][outside] == 0).all()
+    assert (out[..., 3][~outside] > 0).any()
+
+
+def test_cmyk_halftone_spill_alpha_is_not_multiplied_by_input_alpha():
+    img = _black_disc_on_transparent(radius=_DISC_RADIUS)
+    # Half-transparent black disc: without spill alpha tops out near 128;
+    # with spill the dot coverage is the alpha, so solid cores reach ~255.
+    half = img.copy()
+    half[..., 3] = np.where(img[..., 3] > 0, 128, 0)
+    params = {"dot_size": _DISC_PITCH, "white_is_alpha": True}
+
+    off = cmyk_halftone(half, params)
+    on = cmyk_halftone(half, {**params, "spill": True})
+
+    assert off[..., 3].max() <= 128
+    assert on[..., 3].max() > 200
+
+
+def test_cmyk_halftone_spill_fully_transparent_input_stays_fully_transparent():
+    # Transparent pixels with the canvas-readback RGB (black) *and* with
+    # garbage RGB must both mean paper: no ink anywhere.
+    rng = np.random.default_rng(1400)
+    for img in (
+        np.zeros((40, 40, 4), dtype=np.uint8),
+        np.concatenate(
+            [
+                rng.integers(0, 256, size=(40, 40, 3), dtype=np.uint8),
+                np.zeros((40, 40, 1), dtype=np.uint8),
+            ],
+            axis=-1,
+        ),
+    ):
+        out = cmyk_halftone(
+            img, {"dot_size": 5.0, "white_is_alpha": True, "spill": True}
+        )
+        assert (out[..., 3] == 0).all()
+
+
+def test_cmyk_halftone_spill_is_deterministic():
+    img = _black_disc_on_transparent(size=64, radius=16.0)
+    params = {
+        "dot_size": 5.0,
+        "misregistration": 2.0,
+        "seed": 9,
+        "white_is_alpha": True,
+        "spill": True,
+    }
+
+    np.testing.assert_array_equal(
+        cmyk_halftone(img, params), cmyk_halftone(img, params)
+    )
+
+
+def test_cmyk_halftone_spill_param_is_a_bool_default_off_after_white_is_alpha():
+    names = [p.name for p in OPS["cmyk_halftone"].params]
+    spec = OPS["cmyk_halftone"].params[names.index("spill")]
+
+    assert names.index("spill") == names.index("white_is_alpha") + 1
+    assert spec.type == "bool"
+    assert spec.default is False
+    assert spec.to_dict()["disabledWhen"] == {
+        "path": "white_is_alpha",
+        "equals": False,
+    }
 
 
 # --- smear (2026-09-18) -----------------------------------------------------

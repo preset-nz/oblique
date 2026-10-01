@@ -61,8 +61,15 @@ def _screen_channel(
     pitch: float,
     angle_deg: float,
     offset: tuple[float, float],
+    skip_empty: bool = False,
 ) -> np.ndarray:
-    """Ink mask [0,1] for one channel: dots on a rotated grid of `pitch` px."""
+    """Ink mask [0,1] for one channel: dots on a rotated grid of `pitch` px.
+
+    `skip_empty` drops the dot of any cell whose sampled coverage is exactly
+    zero. Off by default (the long-standing look: a zero-coverage cell still
+    leaves a one-pixel speck at its centre, which `spill` can't tolerate —
+    it writes coverage as alpha, so specks would pepper all of the
+    transparent area around the layer)."""
     h, w = coverage.shape
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float64)
     xs += offset[0]
@@ -90,7 +97,10 @@ def _screen_channel(
     dist = np.hypot((u - cu) * pitch, (v - cv) * pitch)
     # 1 px smoothstep edge: ink 1 inside radius-0.5, 0 outside radius+0.5.
     t = np.clip((radius - dist + 0.5), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
+    ink = t * t * (3.0 - 2.0 * t)
+    if skip_empty:
+        ink = np.where(cell_coverage > 0.0, ink, 0.0)
+    return ink
 
 
 @op(
@@ -100,7 +110,10 @@ def _screen_channel(
         "Screen-printed CMYK dot raster: classic screen angles, optional "
         "seeded misregistration, and swappable ink colours for spot-ink "
         "and riso looks. `white_is_alpha` makes the paper transparent (in "
-        "mode='paper' only) so the dots overprint the layers below."
+        "mode='paper' only) so the dots overprint the layers below. `spill` "
+        "(with white_is_alpha, paper mode) samples the dots from the layer's "
+        "tone over paper instead of cutting them to its silhouette, so dots "
+        "complete themselves past the edge."
     ),
     params=[
         # Dogfood fix (Epic 04 stack-rows): the original max=32.0 was a
@@ -137,6 +150,16 @@ def _screen_channel(
         P("seed", "int", min=0, max=2**31 - 1, default=0, step=1),
         P("mode", "enum", default="paper", choices=("paper", "over")),
         P("white_is_alpha", "bool", default=False),
+        # Only effective with `white_is_alpha` in paper mode. The panel's
+        # `disabled_when` takes a single condition, so it greys out on
+        # `white_is_alpha` only; the paper-mode half is enforced in the cook
+        # (with mode='over' it is silently ignored).
+        P(
+            "spill",
+            "bool",
+            default=False,
+            disabled_when={"path": "white_is_alpha", "equals": False},
+        ),
     ],
     writes_alpha=True,
 )
@@ -147,7 +170,14 @@ def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     mode = str(params.get("mode", "paper"))
     white_is_alpha = bool(params.get("white_is_alpha", False)) and mode == "paper"
 
+    spill = white_is_alpha and bool(params.get("spill", False))
+
     rgb = img[..., :3].astype(np.float64) / 255.0
+    if spill:
+        # Transparent means paper, not "black from canvas readback": flatten
+        # over paper white so no-alpha pixels carry no ink.
+        in_a = img[..., 3:4].astype(np.float64) / 255.0
+        rgb = rgb * in_a + (1.0 - in_a)
     plates = _separate(rgb)
 
     # Subtractive ink model: absorption is 1 - the ink's own RGB. Computed
@@ -176,7 +206,9 @@ def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         # Jitter is drawn per channel even at 0 so the seed stream (and thus
         # every channel's offset) is stable when misregistration is scrubbed.
         jitter = rng.uniform(-1.0, 1.0, size=2) * misreg
-        ink = _screen_channel(plates[channel], pitch, angle, (jitter[0], jitter[1]))
+        ink = _screen_channel(
+            plates[channel], pitch, angle, (jitter[0], jitter[1]), skip_empty=spill
+        )
         out_rgb *= 1.0 - ink[..., None] * absorb[channel]
         coverage = 1.0 - (1.0 - coverage) * (1.0 - ink)
 
@@ -194,8 +226,13 @@ def cmyk_halftone(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         ink_rgb = np.clip(ink_rgb, 0.0, 1.0)
 
         out[..., :3] = np.clip(ink_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
-        in_alpha = img[..., 3].astype(np.float64) / 255.0
-        out_alpha = in_alpha * coverage
+        if spill:
+            # The silhouette is the tone the dots are sampled from, not a
+            # cookie cutter: alpha is coverage alone.
+            out_alpha = coverage
+        else:
+            in_alpha = img[..., 3].astype(np.float64) / 255.0
+            out_alpha = in_alpha * coverage
         out[..., 3] = np.clip(np.round(out_alpha * 255.0), 0.0, 255.0).astype(np.uint8)
     else:
         out[..., :3] = np.clip(out_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
