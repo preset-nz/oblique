@@ -51,6 +51,7 @@ const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
 const EVT_EDIT_UNDO: &str = "menu://edit/undo";
 const EVT_EDIT_REDO: &str = "menu://edit/redo";
 const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
+const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
 
 /// Builds and installs the app menu bar, wiring menu-item activation to
 /// webview events. Called once from `run`'s `.setup()`.
@@ -149,8 +150,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
 
-    // Type menu (Epic 20): Replace Font… (story 6) lives here; Convert to Outlines
-    // (story 7) joins it. No accelerator.
+    // Type menu (Epic 20): Replace Font… (story 6, no accelerator) and Convert to
+    // Outlines (story 7, InDesign's Shift+Cmd+O).
     let type_replace_font = MenuItem::with_id(
         app,
         "type-replace-font",
@@ -158,7 +159,19 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let type_submenu = Submenu::with_items(app, "Type", true, &[&type_replace_font])?;
+    let type_convert_outlines = MenuItem::with_id(
+        app,
+        "type-convert-outlines",
+        "Convert to Outlines",
+        true,
+        Some("Shift+CmdOrCtrl+O"),
+    )?;
+    let type_submenu = Submenu::with_items(
+        app,
+        "Type",
+        true,
+        &[&type_replace_font, &type_convert_outlines],
+    )?;
 
     let menu = Menu::with_items(
         app,
@@ -178,6 +191,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "edit-undo" => EVT_EDIT_UNDO,
             "edit-redo" => EVT_EDIT_REDO,
             "type-replace-font" => EVT_TYPE_REPLACE_FONT,
+            "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
             _ => return,
         };
         let _ = app_handle.emit(evt, ());

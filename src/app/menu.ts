@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
@@ -64,6 +65,11 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://type/replace-font': () => {
     commitActiveTextEdit();
     openReplaceFontDialog();
+  },
+  // Same again: the conversion is its own undo step, so an open edit commits first.
+  'menu://type/convert-outlines': () => {
+    commitActiveTextEdit();
+    return convertSelectedTextToOutlines();
   },
 };
 

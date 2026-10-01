@@ -122,6 +122,19 @@ interface SceneState {
   setTextProps: (nodeId: string, patch: TextPropPatch) => void;
 
   /**
+   * Convert to Outlines (convert-to-outlines.md): replaces a text node, at the
+   * same stack index, with a `VectorNode` carrying `paths` (document space,
+   * supplied by the caller so the store stays free of IPC) and `fillRule:
+   * 'nonzero'`. The new node has a NEW id; `output`, `modifiers` (same ids, so
+   * their `maskId`s stay valid), `visible`, `blendMode`, `opacity`, `label` and
+   * `transform2d` carry over. Every `maskRefs` entry pointing at the text is
+   * repointed to the new id and its consumers are dirtied. One `set()`, so
+   * history records one step. Returns the new id, or `null` (state untouched)
+   * for a missing, non-text or locked node.
+   */
+  convertTextToOutlines: (nodeId: string, paths: VectorPath[]) => string | null;
+
+  /**
    * Replaces a vector node's `paths` wholesale (path-editing.md) — one
    * coarse action for the whole story's editing surface: drag an anchor or
    * handle, cycle an anchor's mode, insert an anchor on a segment, delete an
@@ -506,6 +519,48 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
       return { scene: { ...s.scene, nodes } };
     });
+  },
+
+  convertTextToOutlines: (nodeId, paths) => {
+    const before = get().scene;
+    const index = before.nodes.findIndex((n) => n.id === nodeId);
+    const target = before.nodes[index];
+    if (target?.type !== 'text' || target.state === 'locked') return null;
+
+    const newId = crypto.randomUUID();
+    set((s) => {
+      const text = target;
+      const vector: VectorNode = {
+        id: newId,
+        label: text.label,
+        type: 'vector',
+        state: 'active',
+        output: text.output,
+        cameraId: text.cameraId ?? null,
+        modifiers: text.modifiers,
+        visible: text.visible,
+        blendMode: text.blendMode,
+        opacity: text.opacity,
+        ...(text.transform2d ? { transform2d: text.transform2d } : {}),
+        dirty: dirtyBoth(),
+        paths,
+        fillRule: 'nonzero',
+      };
+      const replaced = s.scene.nodes.map((n, i) => (i === index ? vector : n));
+
+      let maskRefs = s.scene.maskRefs;
+      if (maskRefs && Object.values(maskRefs).some((ref) => ref.nodeId === nodeId)) {
+        maskRefs = Object.fromEntries(
+          Object.entries(maskRefs).map(([id, ref]) => [
+            id,
+            ref.nodeId === nodeId ? { ...ref, nodeId: newId } : ref,
+          ]),
+        );
+      }
+      const nodes = dirtyMaskRefConsumers(replaced, maskRefs, newId);
+      return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
+    });
+    return newId;
   },
 
   setVectorPaths: (nodeId, paths) => {
