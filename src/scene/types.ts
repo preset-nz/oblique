@@ -31,17 +31,21 @@ export interface Modifier {
  * reuse free: many `VectorMaskRef` entries (one per modifier that wants its
  * own feather/invert) can point at the same `nodeId`.
  *
- * Vector masks are DOCUMENT-PINNED (Georg's call, 2026-07-06 dogfood): the
- * mask reads where the shape sits in the document, always. The rasteriser
- * maps document space into the consumer's local buffer through the
- * consumer's CURRENT transform2d
- * at cook time (cook.ts passes it), so moving the consumer re-rasterises
- * the mask in its new frame — a deliberate, narrow exception to the
- * "transform2d never recooks" rule (dirty rule 4), scoped to nodes whose
- * modifiers carry a vector mask (`store.ts`'s `setNodeTransform`). If
- * attach-time transforms on the reference itself are ever wanted
- * (node-graph territory), that's a new field and a new story — not
- * snapshot semantics by the back door.
+ * Vector masks are DOCUMENT-PINNED by default (Georg's call, 2026-07-06
+ * dogfood): the mask reads where the shape sits in the document. The
+ * rasteriser maps document space into the consumer's local buffer through
+ * the consumer's CURRENT transform2d at cook time (cook.ts passes it), so
+ * moving the consumer re-rasterises the mask in its new frame — a
+ * deliberate, narrow exception to the "transform2d never recooks" rule
+ * (dirty rule 4), scoped to nodes with a document-pinned mask
+ * (`store.ts`'s `setNodeTransform`).
+ *
+ * `space: 'node'` is the second mode (features/05-selection/
+ * mask-follows-node.md): the shape is bound to the consumer's frame as it
+ * was at attach time. `attachTransform` is a snapshot DECLARED on the
+ * reference (never inferred from history), the rasteriser inverts it
+ * instead of the consumer's current transform, so moving the consumer
+ * carries the mask with the pixels and never recooks.
  */
 export interface VectorMaskRef {
   id: string;
@@ -49,6 +53,14 @@ export interface VectorMaskRef {
   featherPx: number;
   expand: number;
   invert: boolean;
+  /**
+   * Frame the mask geometry is read in. `'document'` (absent = the original
+   * behaviour): the shape sits where it is on the page. `'node'`: bound to
+   * the consumer's frame at attach time via `attachTransform`.
+   */
+  space?: 'document' | 'node';
+  /** The consumer's `transform2d` snapshot taken when this ref was created or switched to `'node'`. Present iff `space === 'node'`. */
+  attachTransform?: Transform2D;
 }
 
 /**

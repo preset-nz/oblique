@@ -1,6 +1,6 @@
 import { readFile } from '@tauri-apps/plugin-fs';
 import * as cache from '@/scene/cache';
-import { resolvedMaskInput } from '@/scene/maskInputs';
+import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
@@ -162,8 +162,8 @@ function resolvedMaskInputIn(maskId: string | undefined, scene: Scene): unknown 
   );
 }
 
-function hasVectorMask(node: SceneNode, scene: Scene): boolean {
-  return node.modifiers.some((m) => m.maskId && scene.maskRefs?.[m.maskId]);
+function hasDocumentPinnedMaskIn(node: SceneNode, scene: Scene): boolean {
+  return hasDocumentPinnedMask(node.modifiers, (id) => scene.maskRefs?.[id]);
 }
 
 function textInputs(n: TextNode): unknown {
@@ -188,10 +188,12 @@ function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB:
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
   // Document-pinned vector masks rasterise through the consumer's CURRENT
   // transform2d (store.ts setNodeTransform's rule-4 exception), so for a
-  // vector-masked node the transform IS a cook input — an undo that only
-  // moves such a node must recook it or the mask paints in the old frame.
+  // node with such a mask the transform IS a cook input — an undo that only
+  // moves it must recook it or the mask paints in the old frame. Node-pinned
+  // refs (mask-follows-node.md) read their own attachTransform instead, so
+  // they don't count.
   if (
-    (hasVectorMask(a, sceneA) || hasVectorMask(b, sceneB)) &&
+    (hasDocumentPinnedMaskIn(a, sceneA) || hasDocumentPinnedMaskIn(b, sceneB)) &&
     JSON.stringify(a.transform2d) !== JSON.stringify(b.transform2d)
   ) {
     return true;

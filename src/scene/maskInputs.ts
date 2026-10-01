@@ -1,4 +1,10 @@
-import { isTextNode, isVectorNode, type SceneNode, type VectorMaskRef } from '@/scene/types';
+import {
+  isTextNode,
+  isVectorNode,
+  type Modifier,
+  type SceneNode,
+  type VectorMaskRef,
+} from '@/scene/types';
 
 /**
  * What a modifier's `maskId` resolves to, as cook inputs: the
@@ -42,4 +48,23 @@ export function resolvedMaskInput(
           }
         : null;
   return { ref, geometry };
+}
+
+/**
+ * Whether any of `modifiers` carries a resolvable DOCUMENT-pinned mask
+ * (`space` absent or `'document'`, mask-follows-node.md). Only such masks
+ * rasterise through the consumer's CURRENT transform2d, so only they make the
+ * consumer's transform a cook input — the one predicate behind
+ * `setNodeTransform`'s dirty exception, cook.ts's race-guard key and
+ * history.ts's `cookAffectingChanged`. A consumer whose masks are all
+ * node-pinned goes back to "transform never recooks".
+ */
+export function hasDocumentPinnedMask(
+  modifiers: Modifier[],
+  getRef: (maskId: string) => VectorMaskRef | undefined,
+): boolean {
+  return modifiers.some((m) => {
+    const ref = m.maskId ? getRef(m.maskId) : undefined;
+    return ref !== undefined && ref.space !== 'node';
+  });
 }

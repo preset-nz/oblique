@@ -2,7 +2,7 @@ import { toast } from 'sonner';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
-import { resolvedMaskInput } from '@/scene/maskInputs';
+import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
 import { rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
@@ -178,7 +178,7 @@ export interface CookDeps {
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
-    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'space' | 'attachTransform'>,
     vectorTransform2d: Transform2D,
     documentSize: [number, number],
     consumerTransform2d: Transform2D,
@@ -387,7 +387,7 @@ export interface FullResCookDeps {
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
-    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+    ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'space' | 'attachTransform'>,
     vectorTransform2d: Transform2D,
     documentSize: [number, number],
     consumerTransform2d: Transform2D,
@@ -509,7 +509,7 @@ export async function cookNodeFullRes(
 /**
  * Everything a node's modifier masks rasterise from that lives OUTSIDE its
  * `modifiers` array: each resolved ref + target geometry, and — when any
- * mask resolves — the node's own transform2d (document-pinned masks
+ * DOCUMENT-pinned mask resolves — the node's own transform2d (such masks
  * rasterise through the consumer's current frame). Mirrors history.ts's
  * `cookAffectingChanged` mask clauses.
  */
@@ -521,7 +521,13 @@ function maskInputsKey(
     resolvedMaskInput(m.maskId, deps.getVectorMaskRef, deps.getNode),
   );
   if (refs.every((r) => r === null)) return '';
-  return JSON.stringify({ refs, transform2d: node.transform2d });
+  // Only document-pinned refs read the consumer's current transform2d
+  // (mask-follows-node.md): a node-pinned mask rasterises through its own
+  // attachTransform, so moving the consumer must not look like a change.
+  const transform2d = hasDocumentPinnedMask(node.modifiers, deps.getVectorMaskRef)
+    ? node.transform2d
+    : undefined;
+  return JSON.stringify({ refs, transform2d });
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { AnchorPoint, Transform2D, VectorPath } from '@/scene/types';
-import type { Point } from '../transform2d';
+import type { MaskDisplayDelta } from '../maskDisplayTransform';
+import { localToWorld, type NodeExtent, type Point, worldToLocal } from '../transform2d';
 
 /**
  * Pure helpers for mapping a `VectorNode`'s path geometry (always stored in
@@ -43,4 +44,22 @@ export function mapVectorPaths(paths: VectorPath[], fn: (p: Point) => Point): Ve
 export function localDistanceThreshold(docThreshold: number, t: Transform2D): number {
   const maxScale = Math.max(Math.abs(t.scaleX), Math.abs(t.scaleY), 1e-6);
   return docThreshold / maxScale;
+}
+
+/**
+ * The two point maps `PathEditor.tsx` draws and edits through: stored path
+ * space -> where the shape shows on the page (`toWorld`: the vector node's
+ * own `transform2d`, then the node-pinned-mask display `delta`,
+ * mask-follows-node.md) and back (`toLocal`, for pointer positions before
+ * anything is written to `node.paths`). Exact inverses of each other.
+ */
+export function vectorPointMaps(
+  transform2d: Transform2D,
+  extent: NodeExtent,
+  delta: MaskDisplayDelta,
+): { toWorld: (p: Point) => Point; toLocal: (p: Point) => Point } {
+  return {
+    toWorld: (p) => delta.toDisplay(localToWorld(p, transform2d, extent)),
+    toLocal: (p) => worldToLocal(delta.fromDisplay(p), transform2d, extent),
+  };
 }

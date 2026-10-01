@@ -1178,3 +1178,171 @@ describe('JSON round-trip', () => {
     expect(() => structuredClone(JSON.parse(JSON.stringify(scene)))).not.toThrow();
   });
 });
+
+describe('mask follows node (mask-follows-node.md)', () => {
+  const clean = { draft: false, working: false } as const;
+  const attach = { x: 10, y: 20, scaleX: 1, scaleY: 1, rotation: 0 };
+  const base = { featherPx: 4, expand: 0, invert: false };
+
+  function setup(consumerOverrides: Partial<PixelNode> = {}) {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          vectorNode('v1'),
+          pixelNode('a', {
+            modifiers: [modifier('m1'), modifier('m2')],
+            dirty: { ...clean },
+            ...consumerOverrides,
+          }),
+        ],
+      },
+    }));
+  }
+
+  function clearAll() {
+    for (const id of ['v1', 'a']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+  }
+
+  const consumer = () =>
+    useSceneStore.getState().scene.nodes.find((n) => n.id === 'a') as PixelNode;
+  const moveRight = { x: 100, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+
+  it('moving a consumer whose masks are all node-pinned dirties nothing', () => {
+    setup();
+    useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v1', { ...base, space: 'node', attachTransform: attach });
+    clearAll();
+
+    useSceneStore.getState().setNodeTransform('a', moveRight);
+
+    expect(consumer().transform2d).toEqual(moveRight);
+    expect(consumer().dirty).toEqual(clean);
+  });
+
+  it('a consumer with one document-pinned and one node-pinned mask still recooks on move', () => {
+    setup();
+    const s = useSceneStore.getState();
+    s.setModifierVectorMask('a', 'm1', 'v1', { ...base, space: 'node', attachTransform: attach });
+    s.setModifierVectorMask('a', 'm2', 'v1', base);
+    clearAll();
+
+    useSceneStore.getState().setNodeTransform('a', moveRight);
+
+    expect(consumer().dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('a ref with no `space` (old project files) behaves as document-pinned', () => {
+    setup();
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', base);
+    clearAll();
+
+    useSceneStore.getState().setNodeTransform('a', moveRight);
+
+    expect(consumer().dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('moving the referenced shape still dirties a node-pinned consumer', () => {
+    setup();
+    useSceneStore
+      .getState()
+      .setModifierVectorMask('a', 'm1', 'v1', { ...base, space: 'node', attachTransform: attach });
+    clearAll();
+
+    useSceneStore.getState().setNodeTransform('v1', moveRight);
+
+    expect(consumer().dirty).toEqual({ draft: true, working: true });
+  });
+
+  describe('setMaskSpace', () => {
+    it("'node' snapshots the consumer's current transform and dirties it", () => {
+      setup({ transform2d: attach });
+      const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', base);
+      clearAll();
+
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'node');
+
+      const ref = useSceneStore.getState().scene.maskRefs?.[maskId];
+      expect(ref).toMatchObject({ ...base, space: 'node', attachTransform: attach });
+      expect(ref?.attachTransform).not.toBe(consumer().transform2d);
+      expect(consumer().dirty).toEqual({ draft: true, working: true });
+    });
+
+    it('snapshots identity for a consumer with no transform2d', () => {
+      setup();
+      const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', base);
+
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'node');
+
+      expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.attachTransform).toEqual({
+        x: 0,
+        y: 0,
+        scaleX: 1,
+        scaleY: 1,
+        rotation: 0,
+      });
+    });
+
+    it('on then off round-trips to the original ref (minus the two fields)', () => {
+      setup({ transform2d: attach });
+      const maskId = useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', base);
+      const original = useSceneStore.getState().scene.maskRefs?.[maskId];
+
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'node');
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'document');
+
+      const after = useSceneStore.getState().scene.maskRefs?.[maskId];
+      expect(after).toEqual(original);
+      expect('space' in (after ?? {})).toBe(false);
+      expect('attachTransform' in (after ?? {})).toBe(false);
+    });
+
+    it('is a no-op (nothing dirtied) when already in that space, unmasked, or locked', () => {
+      setup();
+      useSceneStore.getState().setModifierVectorMask('a', 'm1', 'v1', base);
+      clearAll();
+
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'document'); // already document
+      useSceneStore.getState().setMaskSpace('a', 'm2', 'node'); // m2 has no mask
+      expect(consumer().dirty).toEqual(clean);
+
+      useSceneStore.setState((s) => ({
+        scene: {
+          ...s.scene,
+          nodes: s.scene.nodes.map((n) => (n.id === 'a' ? { ...n, state: 'locked' as const } : n)),
+        },
+      }));
+      useSceneStore.getState().setMaskSpace('a', 'm1', 'node');
+      const maskId = consumer().modifiers[0].maskId as string;
+      expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBeUndefined();
+      expect(consumer().dirty).toEqual(clean);
+    });
+  });
+
+  describe('applyMarqueeAsVectorMask default', () => {
+    const marquee = { kind: 'rect' as const, rect: { x: 0, y: 0, w: 10, h: 10 } };
+
+    it("creates a node-pinned ref snapshotting the consumer's transform", () => {
+      setup({ transform2d: attach });
+      const result = useSceneStore
+        .getState()
+        .applyMarqueeAsVectorMask('a', 'm1', marquee, { featherPx: 0, expand: 0, invert: false });
+      const ref = useSceneStore.getState().scene.maskRefs?.[result?.maskId as string];
+      expect(ref).toMatchObject({ space: 'node', attachTransform: attach });
+    });
+
+    it('snapshots identity when the consumer has no transform2d', () => {
+      setup();
+      const result = useSceneStore
+        .getState()
+        .applyMarqueeAsVectorMask('a', 'm1', marquee, { featherPx: 0, expand: 0, invert: false });
+      const ref = useSceneStore.getState().scene.maskRefs?.[result?.maskId as string];
+      expect(ref?.space).toBe('node');
+      expect(ref?.attachTransform).toEqual({ x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+    });
+  });
+});

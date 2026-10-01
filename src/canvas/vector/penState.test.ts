@@ -267,3 +267,53 @@ describe('pen state store — finishOnEnter', () => {
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
   });
 });
+
+describe('pen state store — appending to a node-pinned mask shape (mask-follows-node.md)', () => {
+  it("maps anchors back through the inverse editing delta so the new path shows under the pointer, stored in the shape's own space", () => {
+    drawTriangleAndFinish();
+    const shapeId = useSceneStore.getState().scene.nodes[0].id;
+    const attach = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          ...s.scene.nodes,
+          {
+            id: 'consumer',
+            label: 'Photo',
+            type: 'pixel',
+            state: 'active',
+            output: 'image',
+            cameraId: null,
+            modifiers: [{ id: 'm1', type: 'invert', enabled: true, params: {} }],
+            visible: true,
+            blendMode: 'normal',
+            opacity: 1,
+            dirty: { draft: false, working: false },
+            sourcePath: '/x.png',
+            sourceSize: [100, 100],
+          },
+        ],
+      },
+    }));
+    useSceneStore.getState().setModifierVectorMask('consumer', 'm1', shapeId, {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+      space: 'node',
+      attachTransform: attach,
+    });
+    // The consumer moves 100 px right AFTER attach: the mask now reads 100 px right of its stored paths.
+    useSceneStore
+      .getState()
+      .setNodeTransform('consumer', { x: 100, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+    useSelectionStore.getState().selectNode(shapeId);
+
+    drawTriangleAndFinish(150); // pointer positions: x = 150, 160, 155 (where the mask is DISPLAYED)
+
+    const node = useSceneStore.getState().scene.nodes.find((n) => n.id === shapeId);
+    if (!node || !isVectorNode(node)) throw new Error('expected the shape');
+    const xs = node.paths[1].anchors.map((a) => a.point.x);
+    expect(xs.map((x) => Math.round(x))).toEqual([50, 60, 55]); // stored = pointer - 100
+  });
+});

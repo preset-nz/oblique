@@ -342,6 +342,32 @@ describe('cookNode — masks', () => {
     expect(deps.clearDirty).not.toHaveBeenCalled();
   });
 
+  it('race guard: a consumer move mid-cook does NOT block clearing dirty for a node-pinned mask (mask-follows-node.md)', async () => {
+    const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
+    const nodePinned = {
+      ...ref,
+      space: 'node' as const,
+      attachTransform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+    };
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => nodePinned),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
+      ),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        nodeRef.current = {
+          ...nodeRef.current,
+          transform2d: { x: 5, y: 5, scaleX: 1, scaleY: 1, rotation: 0 },
+        };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
   it('race guard: an unrelated dirty flip on a masked consumer still clears dirty', async () => {
     const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
     const deps = makeDeps(nodeRef, {

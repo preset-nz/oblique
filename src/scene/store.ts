@@ -6,6 +6,7 @@ import {
   marqueeToVectorPaths,
   useMarqueeStateStore,
 } from './marquee';
+import { hasDocumentPinnedMask } from './maskInputs';
 import {
   type BlendMode,
   IDENTITY_TRANSFORM_2D,
@@ -253,6 +254,15 @@ interface SceneState {
   ) => string;
   /** Detach and delete a modifier's vector mask. */
   removeModifierMask: (nodeId: string, modId: string) => void;
+  /**
+   * "Follows layer" (mask-follows-node.md): switches a modifier's mask ref
+   * between `'node'` (snapshots the consumer's CURRENT transform2d into
+   * `attachTransform`) and `'document'` (clears both fields). One `set`, so one
+   * history step, and the consumer is dirtied once. No-op (nothing dirtied)
+   * when the modifier has no resolvable mask, the ref is already in `space`,
+   * or the consumer is locked.
+   */
+  setMaskSpace: (nodeId: string, modId: string, space: 'document' | 'node') => void;
 
   /**
    * "Mask from selection" (marquees-as-vectors.md): converts a marquee into
@@ -416,7 +426,17 @@ function copyNode(
     if (ref) {
       // Same `nodeId`: both modifiers mask against one shape; feather/expand/invert stay per-ref.
       const newMaskId = crypto.randomUUID();
-      nextRefs = { ...nextRefs, [newMaskId]: { ...ref, id: newMaskId } };
+      // `attachTransform` (node-pinned refs) is copied verbatim — the copy's
+      // local frame is the original's, so its mask travels with it — but as
+      // a fresh object so the two refs never share one.
+      nextRefs = {
+        ...nextRefs,
+        [newMaskId]: {
+          ...ref,
+          id: newMaskId,
+          ...(ref.attachTransform ? { attachTransform: { ...ref.attachTransform } } : {}),
+        },
+      };
       copy.maskId = newMaskId;
     }
     return copy; // a dangling maskId is dropped, as pruneMaskState does
@@ -725,9 +745,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   setNodeTransform: (id, transform2d) => {
     // Compositing-only mutation — no dirty flag per dirty rule 4 (see
     // Transform2D's doc comment in scene/types.ts) — with TWO narrow,
-    // deliberate exceptions for document-pinned vector masks (VectorMaskRef's
-    // doc comment): (a) the moved node carries a vector-masked modifier —
-    // its mask must re-rasterise in its new frame; (b) the moved node IS a
+    // deliberate exceptions for vector masks (VectorMaskRef's doc comment):
+    // (a) the moved node carries a DOCUMENT-pinned mask — it must
+    // re-rasterise in its new frame (node-pinned masks, mask-follows-node.md,
+    // read their own attachTransform and travel with the pixels: no recook);
+    // (b) the moved node IS a
     // vector node some maskRefs entry points at — every consumer's mask
     // must re-rasterise at the shape's new composited position (same
     // cross-node dirty as setVectorPaths).
@@ -743,8 +765,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
       const nodes = s.scene.nodes.map((n) => {
         if (n.id === id) {
-          const hasVectorMask = n.modifiers.some((m) => m.maskId && maskRefs[m.maskId]);
-          return hasVectorMask ? { ...n, transform2d, dirty: dirtyBoth() } : { ...n, transform2d };
+          const hasDocPinnedMask = hasDocumentPinnedMask(n.modifiers, (mid) => maskRefs[mid]);
+          return hasDocPinnedMask
+            ? { ...n, transform2d, dirty: dirtyBoth() }
+            : { ...n, transform2d };
         }
         const consumesMovedShape = n.modifiers.some(
           (m) => m.maskId && refsAtMovedNode.has(m.maskId),
@@ -909,6 +933,34 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     });
   },
 
+  setMaskSpace: (nodeId, modId, space) => {
+    set((s) => {
+      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+      const consumer = s.scene.nodes.find((n) => n.id === nodeId);
+      const maskId = consumer?.modifiers.find((m) => m.id === modId)?.maskId;
+      const ref = maskId ? s.scene.maskRefs?.[maskId] : undefined;
+      if (!consumer || !maskId || !ref) return s;
+      if ((ref.space ?? 'document') === space) return s;
+
+      const { space: _space, attachTransform: _attach, ...base } = ref;
+      const next: VectorMaskRef =
+        space === 'node'
+          ? {
+              ...base,
+              space: 'node',
+              attachTransform: { ...(consumer.transform2d ?? IDENTITY_TRANSFORM_2D) },
+            }
+          : base;
+      return {
+        scene: {
+          ...s.scene,
+          maskRefs: { ...s.scene.maskRefs, [maskId]: next },
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, dirty: dirtyBoth() })),
+        },
+      };
+    });
+  },
+
   applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
     if (isLocked(get().scene.nodes, nodeId)) return undefined;
 
@@ -946,10 +998,15 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       output: 'image',
     });
 
+    // Node-pinned by default (mask-follows-node.md): a selection made on the
+    // image belongs to the image, so snapshot the consumer's transform now.
+    const consumerTransform = get().scene.nodes.find((n) => n.id === nodeId)?.transform2d;
     const maskId = get().setModifierVectorMask(nodeId, modId, vectorNodeId, {
       featherPx: params.featherPx,
       expand: params.expand,
       invert: params.invert,
+      space: 'node',
+      attachTransform: { ...(consumerTransform ?? IDENTITY_TRANSFORM_2D) },
     });
 
     if (previousVectorNodeId && previousVectorNodeId !== vectorNodeId) {

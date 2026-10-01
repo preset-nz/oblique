@@ -640,3 +640,67 @@ describe('a text node as a modifier-mask target', () => {
     expect((nodeById(consumerId) as PixelNode).modifiers[0].maskId).toBe(maskId);
   });
 });
+
+describe('mask follows node (mask-follows-node.md)', () => {
+  const base = { featherPx: 0, expand: 0, invert: false };
+  const attach = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+  const moved = { x: 40, y: -5, scaleX: 1, scaleY: 1, rotation: 0 };
+
+  function maskedConsumer() {
+    const consumer = pixelNode('p', {
+      modifiers: [{ id: 'mod-1', type: 'blur', enabled: true, params: {} }],
+    });
+    useSceneStore.setState({ scene: emptyScene([consumer, vectorNode('v')]) });
+    sources.set('p', fakeBitmap());
+    sources.set('v', fakeBitmap());
+  }
+
+  it('toggling Follows layer on then off is two undo steps', async () => {
+    maskedConsumer();
+    useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', base);
+    history.clear();
+
+    useSceneStore.getState().setMaskSpace('p', 'mod-1', 'node');
+    useSceneStore.getState().setMaskSpace('p', 'mod-1', 'document');
+    const maskId = useSceneStore.getState().scene.nodes[0].modifiers[0].maskId as string;
+
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBe('node');
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBeUndefined();
+    await history.undo(fakeDeps()); // nothing left
+    expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBeUndefined();
+  });
+
+  it('undoing a space switch dirties the consumer (the ref is a cook input)', async () => {
+    maskedConsumer();
+    useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', base);
+    history.clear();
+    useSceneStore.getState().setMaskSpace('p', 'mod-1', 'node');
+    useSceneStore.getState().clearDirty('p', 'draft');
+    useSceneStore.getState().clearDirty('p', 'working');
+
+    await history.undo(fakeDeps());
+
+    expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('a transform-only undo leaves a node-pinned consumer clean', async () => {
+    maskedConsumer();
+    useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', {
+      ...base,
+      space: 'node',
+      attachTransform: attach,
+    });
+    history.clear();
+    useSceneStore.getState().setNodeTransform('p', moved);
+    useSceneStore.getState().clearDirty('p', 'draft');
+    useSceneStore.getState().clearDirty('p', 'working');
+
+    await history.undo(fakeDeps());
+
+    const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
+    expect(restored?.transform2d).toBeUndefined();
+    expect(restored?.dirty).toEqual({ draft: false, working: false });
+  });
+});

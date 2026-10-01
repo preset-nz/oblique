@@ -218,6 +218,35 @@ describe('store.duplicateNode', () => {
     expect((nodes().find((n) => n.id === 'a') as PixelNode).modifiers[0].maskId).toBe('r1');
   });
 
+  it('carries a node-pinned ref verbatim (space + attachTransform) as an independent object (mask-follows-node.md)', () => {
+    const attachTransform = { x: 5, y: 6, scaleX: 1.5, scaleY: 1.5, rotation: 0.4 };
+    const ref: VectorMaskRef = {
+      id: 'r1',
+      nodeId: 'sel',
+      featherPx: 3,
+      expand: 1,
+      invert: false,
+      space: 'node',
+      attachTransform,
+    };
+    setNodes(
+      [
+        pixelNode('a', { modifiers: [modifier('m1', { maskId: 'r1' })] }),
+        vectorNode('sel', { label: 'Selection (rect)', visible: false }),
+      ],
+      { r1: ref },
+    );
+    const newId = useSceneStore.getState().duplicateNode('a');
+
+    const copy = nodes().find((n) => n.id === newId) as PixelNode;
+    const copied = maskRefs()?.[copy.modifiers[0].maskId as string];
+    expect(copied?.space).toBe('node');
+    expect(copied?.attachTransform).toEqual(attachTransform);
+    expect(copied?.attachTransform).not.toBe(maskRefs()?.r1.attachTransform);
+    // The copy is offset, but its mask still reads from the same attach frame — it travels with the copy.
+    expect(copy.transform2d?.x).toBe(DUPLICATE_OFFSET_PX);
+  });
+
   it('drops a dangling maskId on the copy', () => {
     setNodes([pixelNode('a', { modifiers: [modifier('m1', { maskId: 'gone' })] })]);
     const newId = useSceneStore.getState().duplicateNode('a');

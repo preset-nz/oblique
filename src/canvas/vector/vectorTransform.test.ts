@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Transform2D, VectorPath } from '@/scene/types';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
+import { maskDisplayTransform } from '../maskDisplayTransform';
 import { localToWorld, type NodeExtent, worldToLocal } from '../transform2d';
-import { localDistanceThreshold, mapAnchor, mapVectorPaths } from './vectorTransform';
+import {
+  localDistanceThreshold,
+  mapAnchor,
+  mapVectorPaths,
+  vectorPointMaps,
+} from './vectorTransform';
 
 const extent: NodeExtent = { w: 200, h: 100 };
 
@@ -91,5 +97,52 @@ describe('localDistanceThreshold', () => {
   it('never divides by (near-)zero scale', () => {
     const t: Transform2D = { ...IDENTITY_TRANSFORM_2D, scaleX: 0, scaleY: 0 };
     expect(Number.isFinite(localDistanceThreshold(6, t))).toBe(true);
+  });
+});
+
+describe('vectorPointMaps — node-pinned mask delta (mask-follows-node.md)', () => {
+  const attach: Transform2D = { x: 10, y: 5, scaleX: 1, scaleY: 1, rotation: 0 };
+  const consumerNow: Transform2D = {
+    x: 90,
+    y: 40,
+    scaleX: 1.5,
+    scaleY: 1.5,
+    rotation: Math.PI / 6,
+  };
+  const delta = maskDisplayTransform(
+    { space: 'node', attachTransform: attach },
+    { transform2d: consumerNow, extent },
+  );
+
+  it('with an identity delta equals the plain vector-transform mapping', () => {
+    const plain = vectorPointMaps(movedScaled, extent, maskDisplayTransform({}, { extent }));
+    const p = { x: 33, y: 12 };
+    expect(plain.toWorld(p)).toEqual(localToWorld(p, movedScaled, extent));
+    expect(plain.toLocal(p)).toEqual(worldToLocal(p, movedScaled, extent));
+  });
+
+  it('a pointer position maps to stored path space and the anchor shows back under the pointer', () => {
+    const { toWorld, toLocal } = vectorPointMaps(IDENTITY_TRANSFORM_2D, extent, delta);
+    const pointer = { x: 120, y: 75 };
+    const stored = toLocal(pointer);
+    const back = toWorld(stored);
+    expect(back.x).toBeCloseTo(pointer.x, 9);
+    expect(back.y).toBeCloseTo(pointer.y, 9);
+    // The stored point is NOT the pointer: the consumer has moved since attach.
+    expect(Math.hypot(stored.x - pointer.x, stored.y - pointer.y)).toBeGreaterThan(10);
+  });
+
+  it('dragging an anchor writes document-space geometry: moveAnchor by a stored-space delta lands under the pointer', () => {
+    const { toWorld, toLocal } = vectorPointMaps(IDENTITY_TRANSFORM_2D, extent, delta);
+    const anchor = { point: { x: 40, y: 30 } };
+    const startPointer = toWorld(anchor.point);
+    const endPointer = { x: startPointer.x + 25, y: startPointer.y - 9 };
+    // PathEditor's anchor drag: delta = toLocal(end) - toLocal(start), added to the stored anchor.
+    const a = toLocal(startPointer);
+    const b = toLocal(endPointer);
+    const dragged = { x: anchor.point.x + (b.x - a.x), y: anchor.point.y + (b.y - a.y) };
+    const shown = toWorld(dragged);
+    expect(shown.x).toBeCloseTo(endPointer.x, 9);
+    expect(shown.y).toBeCloseTo(endPointer.y, 9);
   });
 });

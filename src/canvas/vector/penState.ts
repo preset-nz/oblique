@@ -3,8 +3,10 @@ import { usePathEditStateStore } from '@/scene/pathEditState';
 import type { Selection } from '@/scene/selection';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
-import type { AnchorPoint, Point2D, SceneNode, VectorNode, VectorPath } from '@/scene/types';
+import type { AnchorPoint, Point2D, Scene, SceneNode, VectorNode, VectorPath } from '@/scene/types';
 import { isVectorNode } from '@/scene/types';
+import { editingDeltaFor } from '../maskDisplayTransform';
+import { mapVectorPaths } from './vectorTransform';
 
 /**
  * The in-progress pen path (features/06-vector-nodes/pen-tool.md). Ephemeral
@@ -77,11 +79,28 @@ interface PenStateStore {
   finishOnEnter: () => void;
 }
 
+/**
+ * Anchors are placed at pointer positions (document space, where the shape is
+ * DISPLAYED). Appending to a node-pinned mask's shape whose consumer has moved
+ * (mask-follows-node.md): map them back through the inverse of the editing
+ * delta so what's stored stays the shape's own document-space geometry and the
+ * new path lands where it was drawn. Identity delta (every other case) returns
+ * the anchors untouched.
+ */
+function anchorsForStorage(anchors: AnchorPoint[], targetId: string, scene: Scene): AnchorPoint[] {
+  const delta = editingDeltaFor(targetId, scene);
+  if (delta.identity) return anchors;
+  return mapVectorPaths([{ anchors, closed: false }], delta.fromDisplay)[0].anchors;
+}
+
 function commit(anchors: AnchorPoint[], closed: boolean): void {
-  const newPath: VectorPath = { anchors, closed };
   const { selection } = useSelectionStore.getState();
   const { scene, setVectorPaths } = useSceneStore.getState();
   const target = resolveAppendTarget(selection, scene.nodes);
+  const newPath: VectorPath = {
+    anchors: target ? anchorsForStorage(anchors, target.id, scene) : anchors,
+    closed,
+  };
 
   if (target) {
     const pathIndex = target.paths.length;

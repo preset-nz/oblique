@@ -4,7 +4,8 @@ import { useSceneStore } from '@/scene/store';
 import type { AnchorPoint, Point2D, VectorNode, VectorPath } from '@/scene/types';
 import { IDENTITY_TRANSFORM_2D } from '@/scene/types';
 import { buildPath2D, pathCommandsFor } from '@/scene/vectorRasterize';
-import { localToWorld, type NodeExtent, type Point, worldToLocal } from '../transform2d';
+import { editingDeltaFor } from '../maskDisplayTransform';
+import type { NodeExtent, Point } from '../transform2d';
 import {
   type AnchorMode,
   anchorMode,
@@ -16,7 +17,7 @@ import {
   movePath,
 } from './pathEdit';
 import { commandsToPathD } from './svgPath';
-import { localDistanceThreshold, mapVectorPaths } from './vectorTransform';
+import { localDistanceThreshold, mapVectorPaths, vectorPointMaps } from './vectorTransform';
 
 /**
  * Direct-selection path editing overlay (features/06-vector-nodes/
@@ -138,9 +139,16 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
   const [dragPaths, setDragPaths] = useState<VectorPath[] | null>(null);
   const displayPaths = dragPaths ?? node.paths; // local/path space — source of truth for edits
 
+  // mask-follows-node.md: when this shape is a node-pinned mask whose consumer
+  // has moved since attach, the mask reads at `current ∘ inverse(attach)` of
+  // where its paths sit — draw and edit through that ONE delta (identity
+  // otherwise). Pointer positions go back through its inverse before
+  // anything is written, so stored anchors stay in their own space.
+  const scene = useSceneStore((s) => s.scene);
+  const maskDelta = editingDeltaFor(node.id, scene);
+
   const transform2d = node.transform2d ?? IDENTITY_TRANSFORM_2D;
-  const toWorld = (p: Point) => localToWorld(p, transform2d, extent);
-  const toLocal = (p: Point) => worldToLocal(p, transform2d, extent);
+  const { toWorld, toLocal } = vectorPointMaps(transform2d, extent, maskDelta);
   // World/doc-space paths — render-only; every edit still reads/writes `displayPaths`/`node.paths`.
   const worldPaths = mapVectorPaths(displayPaths, toWorld);
 
@@ -275,7 +283,10 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
 
     // Precise confirm (module doc): the SVG catcher element is a generous
     // approximation of the body region, this is the authoritative test.
-    const localThreshold = localDistanceThreshold(pathBodyStrokeThresholdDoc, transform2d);
+    const localThreshold = localDistanceThreshold(
+      pathBodyStrokeThresholdDoc / maskDelta.scale,
+      transform2d,
+    );
     if (!hitTestPathBody(basePaths[pathIndex], startLocal, node.fillRule, localThreshold)) return;
 
     let moved = false;
@@ -320,7 +331,10 @@ export function PathEditor({ node, viewScale, toDoc, extent }: PathEditorProps) 
     const doc = toDoc(e.clientX, e.clientY);
     const local = toLocal(doc);
     const hit = closestPointOnPaths(node.paths, local);
-    const localThreshold = localDistanceThreshold(segmentClickThresholdDoc, transform2d);
+    const localThreshold = localDistanceThreshold(
+      segmentClickThresholdDoc / maskDelta.scale,
+      transform2d,
+    );
     if (!hit || hit.distance > localThreshold) return;
     const next = insertAnchorAt(node.paths, hit);
     setVectorPaths(node.id, next);

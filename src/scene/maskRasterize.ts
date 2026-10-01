@@ -202,11 +202,14 @@ function fillAndReadPlane(
  * same node can be soft on one modifier and hard-inverted on another).
  *
  * `consumerSourceSize`/`consumerTransform2d` map document space into the
- * CONSUMING node's own local buffer. The transform is the consumer's
- * CURRENT one, passed fresh each cook, never a snapshot: vector masks are
- * document-pinned (VectorMaskRef's doc comment; Georg 2026-07-06) — the
- * mask reads where the shape sits in the document, and moving the consumer
- * recooks it in its new frame. A vector node's paths are document-space,
+ * CONSUMING node's own local buffer. For a document-pinned ref (the default,
+ * `space` absent or `'document'`) the transform is the consumer's CURRENT
+ * one, passed fresh each cook: the mask reads where the shape sits in the
+ * document, and moving the consumer recooks it in its new frame (Georg
+ * 2026-07-06). For `space: 'node'` (mask-follows-node.md) the ref's
+ * `attachTransform` snapshot is inverted INSTEAD, so the mask lands in the
+ * same place in the consumer's local buffer wherever the consumer later
+ * moves — it travels with the pixels. A vector node's paths are document-space,
  * but the modifier being masked cooks into its own node-local buffer
  * (node-transform-2d.md: a node's raster is always produced untransformed
  * at its own origin). Production-only (needs OffscreenCanvas/Path2D) —
@@ -226,7 +229,7 @@ function fillAndReadPlane(
 export function rasterizeVectorMask(
   paths: VectorPath[],
   fillRule: 'nonzero' | 'evenodd',
-  ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert'>,
+  ref: Pick<VectorMaskRef, 'featherPx' | 'expand' | 'invert' | 'space' | 'attachTransform'>,
   vectorTransform2d: Transform2D,
   documentSize: [number, number],
   consumerTransform2d: Transform2D,
@@ -245,7 +248,9 @@ export function rasterizeVectorMask(
   // transform — document-pinned), then node-local -> target px (cook
   // factor). ctx.transform appends right, so the calls run in reverse
   // application order.
-  const m = docToLocalMatrix(consumerTransform2d, consumerSourceSize[0], consumerSourceSize[1]);
+  const consumerFrame =
+    ref.space === 'node' && ref.attachTransform ? ref.attachTransform : consumerTransform2d;
+  const m = docToLocalMatrix(consumerFrame, consumerSourceSize[0], consumerSourceSize[1]);
   const vm = localToDocMatrix(vectorTransform2d, documentSize[0], documentSize[1]);
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);

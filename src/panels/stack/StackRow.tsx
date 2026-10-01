@@ -54,6 +54,11 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   const applyMarqueeAsVectorMask = useSceneStore((s) => s.applyMarqueeAsVectorMask);
   const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
+  const setMaskSpace = useSceneStore((s) => s.setMaskSpace);
+  // The resolved ref (undefined when unmasked/dangling) — drives "Follows layer".
+  const maskRef = useSceneStore((s) =>
+    modifier.maskId ? s.scene.maskRefs?.[modifier.maskId] : undefined,
+  );
   // Select the stable nodes array and filter during render — a selector
   // returning a fresh array per call trips React 19's getSnapshot-must-be-
   // cached invariant and loops forever.
@@ -95,8 +100,9 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   /**
    * "Mask from selection" (marquees-as-vectors.md): converts the active
    * marquee into a hidden `VectorNode` + a live `VectorMaskRef` — the mask
-   * is document-pinned and editable forever with the pen tool (the story's
-   * whole point). One undo step: node creation + attach + replace-cleanup
+   * is node-pinned by default (mask-follows-node.md — it travels with the
+   * layer; "Follows layer" switches it off) and editable forever with the pen
+   * tool. One undo step: node creation + attach + replace-cleanup
    * all land inside this transaction.
    */
   function maskFromSelection() {
@@ -119,7 +125,8 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
    * MarqueeToolbar only shows with an active marquee, so the vector flow
    * had no way to reach these). No transform snapshot: vector masks are
    * document-pinned (VectorMaskRef's doc comment) — the cook path reads
-   * the consumer's current transform2d fresh every cook.
+   * the consumer's current transform2d fresh every cook. (The "Follows layer"
+   * checkbox below switches a ref to node-pinned afterwards.)
    */
   function maskFromVectorNode(vectorNodeId: string) {
     if (locked) return;
@@ -315,6 +322,24 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
                   </button>
                 ))}
               </div>
+            )}
+            {maskRef && (
+              <label
+                htmlFor={`vector-mask-follows-${modifier.id}`}
+                className={`flex items-center gap-2 px-2 py-1 text-xs ${locked ? 'opacity-40' : ''}`}
+              >
+                <Checkbox
+                  id={`vector-mask-follows-${modifier.id}`}
+                  className="border-neutral-500"
+                  disabled={locked}
+                  checked={maskRef.space === 'node'}
+                  onCheckedChange={(checked) =>
+                    !locked &&
+                    setMaskSpace(node.id, modifier.id, checked === true ? 'node' : 'document')
+                  }
+                />
+                Follows layer
+              </label>
             )}
             {modifier.maskId && (
               <button
