@@ -210,7 +210,7 @@ export function spanRoles(nodes: SceneNode[]): SpanRole[] {
   const roles = new Map<SceneNode, SpanRole>();
   for (const span of splitIntoSpans(nodes)) {
     const last = span[span.length - 1];
-    if (!last || last.output !== 'mask') {
+    if (last?.output !== 'mask') {
       for (const node of span) roles.set(node, 'none');
       continue;
     }
