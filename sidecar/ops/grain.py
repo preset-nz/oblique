@@ -22,7 +22,16 @@ _MAX_STD = 128.0
     description="Seeded, chunky film-grain noise added to the RGB channels.",
     params=[
         P("amount", "float", min=0.0, max=1.0, default=0.1, step=0.01),
-        P("size", "int", min=1, max=8, default=1, step=1, scale="spatial"),
+        P(
+            "size",
+            "int",
+            min=1,
+            max=8,
+            default=1,
+            step=1,
+            scale="spatial",
+            widget="slider",
+        ),
         P("seed", "int", min=0, max=2**31 - 1, default=0, step=1),
     ],
 )

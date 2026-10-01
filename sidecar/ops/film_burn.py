@@ -147,7 +147,16 @@ def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
     writes_alpha=True,
     params=[
         P("progress", "float", min=0.0, max=1.0, default=0.0, step=0.01, scale="none"),
-        P("count", "int", min=1, max=4, default=1, step=1, scale="none"),
+        P(
+            "count",
+            "int",
+            min=1,
+            max=4,
+            default=1,
+            step=1,
+            scale="none",
+            widget="slider",
+        ),
         P(
             "irregularity",
             "float",

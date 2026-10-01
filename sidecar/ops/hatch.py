@@ -1120,7 +1120,7 @@ def _coverage(
             default="lines",
             choices=("lines", "dashes", "crosses", "stipple"),
         ),
-        P("layers", "int", min=1, max=4, default=2, step=1),
+        P("layers", "int", min=1, max=4, default=2, step=1, widget="slider"),
         P(
             "spacing",
             "float",

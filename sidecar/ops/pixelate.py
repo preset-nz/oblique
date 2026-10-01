@@ -54,6 +54,7 @@ from ops import P, op
             default=8,
             step=1,
             scale="spatial",
+            widget="slider",
         ),
     ],
 )

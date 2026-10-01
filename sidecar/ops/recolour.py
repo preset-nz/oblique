@@ -41,7 +41,7 @@ _STOP_DEFAULTS_RGB01 = tuple(
         P("stop_2", "color", default=_STOP_DEFAULTS[1]),
         P("stop_3", "color", default=_STOP_DEFAULTS[2]),
         P("stop_4", "color", default=_STOP_DEFAULTS[3]),
-        P("stops", "int", min=2, max=4, default=2, step=1),
+        P("stops", "int", min=2, max=4, default=2, step=1, widget="slider"),
         P(
             "blend",
             "float",

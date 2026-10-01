@@ -67,11 +67,11 @@ def _tiled_bayer(h: int, w: int) -> np.ndarray:
     label="Colour Crush",
     description="Per-channel bit-depth reduction — posterise's meaner sibling, with optional Bayer dither.",
     params=[
-        P("bits", "int", min=1, max=8, default=3, step=1),
+        P("bits", "int", min=1, max=8, default=3, step=1, widget="slider"),
         P("dither", "bool", default=False),
-        P("bits_r", "int", min=0, max=8, default=0, step=1),
-        P("bits_g", "int", min=0, max=8, default=0, step=1),
-        P("bits_b", "int", min=0, max=8, default=0, step=1),
+        P("bits_r", "int", min=0, max=8, default=0, step=1, widget="slider"),
+        P("bits_g", "int", min=0, max=8, default=0, step=1, widget="slider"),
+        P("bits_b", "int", min=0, max=8, default=0, step=1, widget="slider"),
     ],
 )
 def colour_crush(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
