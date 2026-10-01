@@ -60,8 +60,10 @@ module.exports = {
         'two @tauri-apps/api submodules the frame transport actually uses (core: invoke, ' +
         'event: listen) — narrowed 2026-07-04 (pixel-node-import story) so other Tauri API ' +
         'surfaces (e.g. @tauri-apps/api/webview for drag-drop) remain usable elsewhere; the ' +
-        'architecture note this gate encodes is specifically "Tauri IPC for frames".',
-      from: { pathNot: '^src/sidecar/tauriTransport\\.ts$' },
+        'architecture note this gate encodes is specifically "Tauri IPC for frames". ' +
+        '2026-10-01, Epic 20: `fonts/fontsIpc.ts` is the one other sanctioned `invoke` caller ' +
+        '(font catalogue + outlines); it is not frame IPC.',
+      from: { pathNot: '^src/(sidecar/tauriTransport|fonts/fontsIpc)\\.ts$' },
       to: { path: 'node_modules/@tauri-apps/api/(core|event)' },
     },
     {

@@ -4,6 +4,7 @@ import { installProjectWindowIntegration } from './app/closeGuard';
 import { Layout } from './app/Layout';
 import { installMenu } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
+import { useFontCatalogueStore } from './fonts/catalogue';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
@@ -34,6 +35,8 @@ function App() {
   // Settings dialog shows the persisted endpoint the first time it opens,
   // per acceptance ("enter an endpoint, restart the app: same value").
   useEffect(() => void loadAiSettings(), []);
+  // Installed-font catalogue (Epic 20 story 1) — idempotent, so StrictMode re-runs are safe.
+  useEffect(() => void useFontCatalogueStore.getState().load(), []);
 
   // Once per app, not per StrictMode re-run: window listeners have no
   // teardown API worth building for a singleton window.
