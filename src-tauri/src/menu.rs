@@ -50,6 +50,7 @@ const EVT_FILE_SAVE_AS: &str = "menu://file/save-as";
 const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
 const EVT_EDIT_UNDO: &str = "menu://edit/undo";
 const EVT_EDIT_REDO: &str = "menu://edit/redo";
+const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
 
 /// Builds and installs the app menu bar, wiring menu-item activation to
 /// webview events. Called once from `run`'s `.setup()`.
@@ -148,7 +149,21 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
 
-    let menu = Menu::with_items(app, &[&app_submenu, &file_submenu, &edit_submenu])?;
+    // Type menu (Epic 20): Replace Font… (story 6) lives here; Convert to Outlines
+    // (story 7) joins it. No accelerator.
+    let type_replace_font = MenuItem::with_id(
+        app,
+        "type-replace-font",
+        "Replace Font…",
+        true,
+        None::<&str>,
+    )?;
+    let type_submenu = Submenu::with_items(app, "Type", true, &[&type_replace_font])?;
+
+    let menu = Menu::with_items(
+        app,
+        &[&app_submenu, &file_submenu, &edit_submenu, &type_submenu],
+    )?;
     app.set_menu(menu)?;
 
     app.on_menu_event(|app_handle, event| {
@@ -162,6 +177,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "file-export-png" => EVT_FILE_EXPORT_PNG,
             "edit-undo" => EVT_EDIT_UNDO,
             "edit-redo" => EVT_EDIT_REDO,
+            "type-replace-font" => EVT_TYPE_REPLACE_FONT,
             _ => return,
         };
         let _ = app_handle.emit(evt, ());

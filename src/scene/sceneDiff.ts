@@ -37,3 +37,21 @@ export function sceneChangedIgnoringDirty(a: Scene, b: Scene): boolean {
   }
   return false;
 }
+
+/**
+ * True when some node's dirty flag went false -> true between two snapshots with
+ * no other change needed. The cook scheduler treats this as a trigger even though
+ * `sceneChangedIgnoringDirty` calls it churn: only `clearDirty` (true -> false)
+ * is cook churn, while a rising flag means something outside the edit stream
+ * (the font catalogue becoming ready, missing-fonts.md) wants a recook.
+ */
+export function dirtyRose(a: Scene, b: Scene): boolean {
+  if (a === b) return false;
+  const before = new Map(a.nodes.map((n) => [n.id, n.dirty]));
+  for (const node of b.nodes) {
+    const was = before.get(node.id);
+    if (!was) continue; // a new node arrives through the real-edit path
+    if ((node.dirty.draft && !was.draft) || (node.dirty.working && !was.working)) return true;
+  }
+  return false;
+}

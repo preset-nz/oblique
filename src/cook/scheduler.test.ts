@@ -109,6 +109,22 @@ describe('CookScheduler', () => {
     scheduler.stop();
   });
 
+  it('a dirty flag rising with no other change (catalogue-ready dirtying) still schedules a cook', async () => {
+    const executor = vi.fn(async () => {});
+    const scheduler = new CookScheduler(executor);
+    setNodes([makeNode('a')]);
+    scheduler.start();
+
+    useSceneStore.getState().markDirty('a', 'draft');
+
+    await vi.advanceTimersByTimeAsync(81);
+    expect(executor).toHaveBeenCalledWith('a', 'draft');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(executor).toHaveBeenCalledWith('a', 'working');
+
+    scheduler.stop();
+  });
+
   it('promotes to WORKING after 400ms of no further store mutation', async () => {
     const executor = vi.fn(async () => {});
     const scheduler = new CookScheduler(executor);

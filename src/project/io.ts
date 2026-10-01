@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner';
 import { create } from 'zustand';
 import { PRODUCT_NAME } from '@/branding';
+import { useMissingFontsStore } from '@/fonts/missingFonts';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
 import * as sources from '@/scene/sources';
@@ -337,6 +338,10 @@ export async function loadProject(
   // Cleared at the end (not the start) so it wins over anything this
   // function's own mutations pushed on the way in.
   history.clear();
+
+  // Missing fonts (missing-fonts.md): one warning per open, shown now if the
+  // catalogue is ready, otherwise as soon as it is.
+  useMissingFontsStore.getState().documentOpened();
 }
 
 /**
@@ -371,6 +376,7 @@ export async function newProject(
   // wins over the undo-stack push this function's own resetScene mutation
   // would otherwise have caused (per-session only, never persisted).
   history.clear();
+  useMissingFontsStore.getState().documentCleared();
 }
 
 /**

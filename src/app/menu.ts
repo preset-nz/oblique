@@ -1,5 +1,6 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { commitActiveTextEdit } from '@/canvas/text/textEditState';
+import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
@@ -58,6 +59,11 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://edit/redo': () => {
     commitActiveTextEdit();
     return redo();
+  },
+  // Same reason: Replace's undo step must not swallow a half-finished text edit.
+  'menu://type/replace-font': () => {
+    commitActiveTextEdit();
+    openReplaceFontDialog();
   },
 };
 

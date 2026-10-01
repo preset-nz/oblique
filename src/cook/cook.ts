@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
 import { rasterizeVectorMask } from '@/scene/maskRasterize';
@@ -358,7 +359,13 @@ export const productionCookDeps: CookDeps = {
   rasterizeVectorMask,
   downscale: realDownscale,
   rasterizeVector,
-  getTextGeometry: ensureGeometry,
+  // Wait for the font catalogue first: until it settles, effectiveFontFor
+  // can't substitute a missing font (missing-fonts.md), and a restored
+  // document would toast a cook failure on every relaunch.
+  getTextGeometry: async (node) => {
+    await fontCatalogueSettled();
+    return ensureGeometry(node);
+  },
   rasterizeText,
   runPython: realRunPython,
   encode: realEncode,

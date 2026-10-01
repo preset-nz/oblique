@@ -1,4 +1,5 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
+import { TriangleAlert } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -9,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { cn } from '@/lib/utils';
 import { beginTransaction, endTransaction } from '@/scene/history';
@@ -39,16 +41,31 @@ function ReadOnlyText({ label, text }: { label: string; text: string }) {
   );
 }
 
-function FontFamilyField({
+/** Amber marker for a font that isn't installed; `hint` is the tooltip (missing-fonts.md). */
+function MissingMarker({ hint }: { hint: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <TriangleAlert size={12} className="shrink-0 text-amber-400" role="img" aria-label={hint} />
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Also used outside facets by the Replace Font dialog. `missingHint` adds the amber marker. */
+export function FontFamilyField({
   label,
   family,
   onChange,
   disabled,
+  missingHint,
 }: {
   label: string;
   family: string;
   onChange?: (next: string) => void;
   disabled: boolean;
+  missingHint?: string;
 }) {
   const status = useFontCatalogueStore((s) => s.status);
   const families = useFontCatalogueStore((s) => s.families);
@@ -56,7 +73,14 @@ function FontFamilyField({
   const [query, setQuery] = useState('');
 
   if (status !== 'ready' || !onChange || disabled) {
-    return <ReadOnlyText label={label} text={family} />;
+    return (
+      <div className="flex items-end gap-1">
+        <div className="min-w-0 flex-1">
+          <ReadOnlyText label={label} text={family} />
+        </div>
+        {missingHint && <MissingMarker hint={missingHint} />}
+      </div>
+    );
   }
 
   const needle = query.trim().toLowerCase();
@@ -65,70 +89,75 @@ function FontFamilyField({
   return (
     <div className="flex flex-col gap-1">
       <FieldLabel text={label} />
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setQuery('');
-        }}
-      >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label={label}
-            className="truncate rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-left text-xs hover:bg-neutral-800"
-          >
-            {family}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-64 p-1">
-          <input
-            type="text"
-            aria-label="Search fonts"
-            placeholder="Search fonts"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="mb-1 w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-neutral-700 focus:ring-sky-500"
-          />
-          <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Font families">
-            {shown.length === 0 && (
-              <div className="px-2 py-1 text-xs text-neutral-500">No matching fonts.</div>
-            )}
-            {shown.map((f) => (
-              <button
-                key={f.family}
-                type="button"
-                role="option"
-                aria-selected={f.family === family}
-                className={cn(
-                  'block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800',
-                  f.family === family && 'bg-neutral-800 text-neutral-50',
-                )}
-                onClick={() => {
-                  onChange(f.family);
-                  setOpen(false);
-                }}
-              >
-                {f.family}
-              </button>
-            ))}
-          </div>
-        </PopoverContent>
-      </Popover>
+      <div className="flex items-center gap-1">
+        <Popover
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (!next) setQuery('');
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={label}
+              className="min-w-0 flex-1 truncate rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-left text-xs hover:bg-neutral-800"
+            >
+              {family}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-64 p-1">
+            <input
+              type="text"
+              aria-label="Search fonts"
+              placeholder="Search fonts"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="mb-1 w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-neutral-700 focus:ring-sky-500"
+            />
+            <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Font families">
+              {shown.length === 0 && (
+                <div className="px-2 py-1 text-xs text-neutral-500">No matching fonts.</div>
+              )}
+              {shown.map((f) => (
+                <button
+                  key={f.family}
+                  type="button"
+                  role="option"
+                  aria-selected={f.family === family}
+                  className={cn(
+                    'block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800',
+                    f.family === family && 'bg-neutral-800 text-neutral-50',
+                  )}
+                  onClick={() => {
+                    onChange(f.family);
+                    setOpen(false);
+                  }}
+                >
+                  {f.family}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+        {missingHint && <MissingMarker hint={missingHint} />}
+      </div>
     </div>
   );
 }
 
-const FontFamilyRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, onChange }) => (
+const FontFamilyRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, onChange, ctx }) => (
   <FontFamilyField
     label={field.label ?? field.id}
     family={typeof value === 'string' ? value : ''}
     disabled={disabled}
     onChange={onChange ? (next) => onChange(next) : undefined}
+    missingHint={(ctx as TextScopeContext | null)?.missingHint}
   />
 );
 
-function FontStyleField({
+/** Also used outside facets by the Replace Font dialog. */
+export function FontStyleField({
   label,
   font,
   onChange,

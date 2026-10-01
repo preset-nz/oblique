@@ -3,6 +3,7 @@
 // number fields below get their one-undo-step-per-scrub behaviour from there.
 import '@/panels/stack/bootstrap';
 import { PropertyPanel } from '@preset.nz/facets';
+import { missingFontTooltip, useMissingFont } from '@/fonts/missingFonts';
 import { stackControlsDisabled } from '@/panels/stack/lockUi';
 import type { TextNode } from '@/scene/types';
 import { registerTextFieldRenderers } from './fontFieldRenderers';
@@ -21,7 +22,11 @@ registerTextScope();
  */
 export function TextInspector({ node }: { node: TextNode }) {
   const locked = stackControlsDisabled(node);
-  const ctx: TextScopeContext = { font: node.font };
+  const missing = useMissingFont(node.font);
+  const ctx: TextScopeContext = {
+    font: node.font,
+    missingHint: missing ? missingFontTooltip(node.font, missing.substitute) : undefined,
+  };
   return (
     <div className="rounded border border-neutral-800 bg-neutral-900/40">
       <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

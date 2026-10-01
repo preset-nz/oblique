@@ -36,6 +36,8 @@ export interface TextSelection {
  */
 export interface TextScopeContext {
   font: FontRef;
+  /** Set when the node's font isn't installed: the amber marker's tooltip (missing-fonts.md). */
+  missingHint?: string;
 }
 
 /** Extra props the number renderer reads (see `modifierFieldRenderers.tsx`): a tooltip. */

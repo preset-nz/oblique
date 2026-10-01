@@ -1,5 +1,5 @@
 import * as cache from '@/scene/cache';
-import { sceneChangedIgnoringDirty } from '@/scene/sceneDiff';
+import { dirtyRose, sceneChangedIgnoringDirty } from '@/scene/sceneDiff';
 import { useSceneStore } from '@/scene/store';
 import { useSidecarStatusStore } from '@/sidecar/client';
 import { type CookLevel, cookNode, cookNodeFullRes, resetCookErrorBurst } from './cook';
@@ -90,7 +90,15 @@ export class CookScheduler {
       // in", Georg 2026-07-05). Only a real edit resets the idle clock; the
       // timer callbacks read dirty state fresh at fire time, so dirty set by
       // markDirty right after a real edit (project load) is still picked up.
-      if (!sceneChangedIgnoringDirty(prev.scene, state.scene)) return;
+      // A dirty flag RISING with no real edit is not churn though: the font
+      // catalogue becoming ready dirties text nodes on its own (missing-fonts.md)
+      // and nothing else would ever wake the scheduler for it.
+      if (
+        !sceneChangedIgnoringDirty(prev.scene, state.scene) &&
+        !dirtyRose(prev.scene, state.scene)
+      ) {
+        return;
+      }
       this.armDraftThrottle();
       this.armWorkingIdle();
     });

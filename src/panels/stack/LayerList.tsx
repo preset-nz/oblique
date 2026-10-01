@@ -1,4 +1,13 @@
-import { Eye, EyeOff, Loader2, Lock, LockOpen, Trash2, VenetianMask } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  Loader2,
+  Lock,
+  LockOpen,
+  Trash2,
+  TriangleAlert,
+  VenetianMask,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -11,12 +20,13 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cookNodeFullRes } from '@/cook/cook';
+import { missingFontTooltip, useMissingFont } from '@/fonts/missingFonts';
 import * as cache from '@/scene/cache';
 import { useCacheVersionStore } from '@/scene/cache';
 import { deleteNode } from '@/scene/deleteNode';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
-import type { BlendMode, SceneNode } from '@/scene/types';
+import type { BlendMode, SceneNode, TextNode } from '@/scene/types';
 import { isTextNode, isVectorNode } from '@/scene/types';
 import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './lockUi';
 
@@ -116,6 +126,21 @@ function Thumbnail({ node }: { node: SceneNode }) {
   );
 }
 
+/** Amber badge on a text row whose font isn't installed (missing-fonts.md); mirrors the pixel source-missing treatment. */
+function FontMissingBadge({ node }: { node: TextNode }) {
+  const missing = useMissingFont(node.font);
+  if (!missing) return null;
+  const hint = missingFontTooltip(node.font, missing.substitute);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <TriangleAlert size={14} className="shrink-0 text-amber-400" role="img" aria-label={hint} />
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function LayerRow({
   node,
   index,
@@ -209,6 +234,7 @@ function LayerRow({
           <TooltipContent>Mask — clips the span below it</TooltipContent>
         </Tooltip>
       )}
+      {isTextNode(node) && <FontMissingBadge node={node} />}
     </>
   );
 
