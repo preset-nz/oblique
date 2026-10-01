@@ -1,8 +1,11 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
+import { Pipette } from 'lucide-react';
+import { useEffect, useId, useRef } from 'react';
 import { InputNumber } from '@/components/InputNumber';
 import { LabelTip } from '@/components/LabelTip';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
+import { useEyedropperStore } from '@/scene/eyedropperState';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { snapToIntegerStep } from './integerStepFix';
 import type {
@@ -169,6 +172,73 @@ const ModifierSelectRenderer: FieldRenderer<ModifierSelectFieldDef> = ({
 };
 
 /**
+ * Pipette beside a colour swatch (eyedropper.md): arms a one-shot canvas pick
+ * through `eyedropperState`, whose `onPick` is the field's own `onChange` —
+ * one write, one undo step. A real component (not inline in the renderer)
+ * because facets calls renderers as plain functions, so hooks must live here.
+ *
+ * `fieldKey` comes from `useId`: the facets renderer receives no node/modifier
+ * ids (`ctx` is `null` for the modifier scope and the selection never reaches
+ * the renderer), but every mounted field instance gets its own id, which is
+ * exactly the uniqueness the active state needs. Unmounting (row collapsed,
+ * node deleted) while armed cancels the pick rather than leaving it dangling.
+ */
+function EyedropperButton({
+  onChange,
+  disabled,
+}: {
+  onChange?: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const fieldKey = useId();
+  const active = useEyedropperStore((s) => s.armed?.fieldKey === fieldKey);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(
+    () => () => {
+      const { armed, disarm } = useEyedropperStore.getState();
+      if (armed?.fieldKey === fieldKey) disarm();
+    },
+    [fieldKey],
+  );
+
+  // A field that becomes read-only (layer locked) mid-pick drops the pick.
+  useEffect(() => {
+    if (!disabled) return;
+    const { armed, disarm } = useEyedropperStore.getState();
+    if (armed?.fieldKey === fieldKey) disarm();
+  }, [disabled, fieldKey]);
+
+  const toggle = () => {
+    const store = useEyedropperStore.getState();
+    if (store.armed?.fieldKey === fieldKey) {
+      store.disarm();
+      return;
+    }
+    store.arm({ fieldKey, onPick: (hex) => onChangeRef.current?.(hex) });
+  };
+
+  return (
+    <LabelTip description="Pick from canvas">
+      <button
+        type="button"
+        aria-label="Pick from canvas"
+        aria-pressed={active}
+        disabled={disabled}
+        onClick={toggle}
+        className={cn(
+          'flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-neutral-200 disabled:cursor-not-allowed',
+          active && 'text-sky-400 hover:text-sky-400',
+        )}
+      >
+        <Pipette size={14} />
+      </button>
+    </LabelTip>
+  );
+}
+
+/**
  * Colour op params render as a native `<input type="color">` swatch plus a
  * read-only hex readout, matching the in-app precedent for the document
  * background colour control (`DocumentSetup.tsx`) rather than the shared
@@ -212,6 +282,7 @@ const ModifierColorRenderer: FieldRenderer<ModifierColorFieldDef> = ({
           onBlur={() => endTransaction()}
           className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent disabled:cursor-not-allowed"
         />
+        <EyedropperButton onChange={onChange} disabled={readOnly} />
         <span className="font-mono text-xs text-muted-foreground">{hex}</span>
       </div>
     </div>

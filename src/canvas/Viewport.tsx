@@ -1,9 +1,11 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
 import { destSizeFor } from '@/compositor/composite';
+import { cn } from '@/lib/utils';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
+import { useEyedropperStore } from '@/scene/eyedropperState';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import {
   fillRuleForMarquee,
@@ -41,6 +43,7 @@ import {
   recompositeBuffer,
   viewChangeNeedsRecomposite,
 } from './paintScene';
+import { isInsideDocument, sampleBufferHex } from './sampleBuffer';
 import { getTargetFrame } from './selectShared/payload';
 import { SmartSelectController } from './smartSelect/controller';
 import { resolveOutlineSeed } from './smartSelect/outlinePrompt';
@@ -124,6 +127,8 @@ export function Viewport() {
   const clearSelection = useSelectionStore((s) => s.clear);
   const setNodeTransform = useSceneStore((s) => s.setNodeTransform);
   const tool = useToolStateStore((s) => s.tool);
+  // Armed colour-param eyedropper (eyedropper.md): crosshair cursor while a pick is pending.
+  const eyedropperArmed = useEyedropperStore((s) => s.armed !== null);
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
 
   const marquee = useMarqueeStateStore((s) => s.marquee);
@@ -310,6 +315,14 @@ export function Viewport() {
         return;
       }
 
+      // An armed eyedropper pick (eyedropper.md) takes Escape first: it
+      // cancels the pick only, leaving selection/marquee/pen state alone.
+      if (e.key === 'Escape' && useEyedropperStore.getState().armed) {
+        e.preventDefault();
+        useEyedropperStore.getState().disarm();
+        return;
+      }
+
       // Escape clears node selection from any tool (de-select, tool-state.md),
       // the active marquee (marquees.md), and cancels an in-progress pen
       // path (pen-tool.md — "no scene mutation"). All three are UI-only
@@ -479,6 +492,22 @@ export function Viewport() {
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || spaceHeld) return; // let usePanZoom own space/middle-button drags
+
+      // Armed eyedropper (eyedropper.md): this one primary click belongs to
+      // the pick, whatever tool is active — no marquee/move/pen starts. A
+      // click outside the document is swallowed too but leaves the pick armed.
+      if (useEyedropperStore.getState().armed) {
+        e.preventDefault();
+        e.stopPropagation();
+        const docPt = toDoc(e.clientX, e.clientY);
+        const { docW, docH } = useViewTransformStore.getState();
+        const buffer = bufferRef.current;
+        if (buffer && isInsideDocument(docPt.x, docPt.y, docW, docH)) {
+          const hex = sampleBufferHex(buffer, docPt.x, docPt.y);
+          if (hex) useEyedropperStore.getState().pick(hex);
+        }
+        return;
+      }
 
       if (tool === 'pan') {
         e.preventDefault();
@@ -982,7 +1011,10 @@ export function Viewport() {
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
     >
-      <canvas ref={canvasRef} className="absolute inset-0 touch-none" />
+      <canvas
+        ref={canvasRef}
+        className={cn('absolute inset-0 touch-none', eyedropperArmed && 'cursor-crosshair')}
+      />
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none"
         role="presentation"
