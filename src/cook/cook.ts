@@ -2,6 +2,7 @@ import { toast } from 'sonner';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
+import { resolvedMaskInput } from '@/scene/maskInputs';
 import { rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
@@ -506,6 +507,24 @@ export async function cookNodeFullRes(
 }
 
 /**
+ * Everything a node's modifier masks rasterise from that lives OUTSIDE its
+ * `modifiers` array: each resolved ref + target geometry, and — when any
+ * mask resolves — the node's own transform2d (document-pinned masks
+ * rasterise through the consumer's current frame). Mirrors history.ts's
+ * `cookAffectingChanged` mask clauses.
+ */
+function maskInputsKey(
+  node: SceneNode,
+  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef'>,
+): string {
+  const refs = node.modifiers.map((m) =>
+    resolvedMaskInput(m.maskId, deps.getVectorMaskRef, deps.getNode),
+  );
+  if (refs.every((r) => r === null)) return '';
+  return JSON.stringify({ refs, transform2d: node.transform2d });
+}
+
+/**
  * Cook one node at one resolution level: downscale the source, run the
  * enabled modifier stack through the sidecar (partitioned by backend —
  * today that's always a single Python run, per starter-ops.md), write the
@@ -556,6 +575,10 @@ export async function cookNode(
   // identity check would read every dirty flip as an edit. Taken before the
   // geometry await.
   const textKeyAtStart = isTextNode(node) ? textCookKey(node) : undefined;
+  // Mask race guard: a mask-source edit (dirtyMaskRefConsumers) dirties this
+  // node without touching its `modifiers`, so the reference check alone
+  // would let this in-flight cook clear that fresh dirty flag.
+  const maskKeyAtStart = maskInputsKey(node, deps);
 
   // Phase timings, logged at debug level. performance.now() reads are
   // sub-microsecond against phases costing milliseconds — measuring here
@@ -612,7 +635,12 @@ export async function cookNode(
     const textInputsUnchanged =
       textKeyAtStart === undefined ||
       (current !== undefined && isTextNode(current) && textCookKey(current) === textKeyAtStart);
-    if (current && current.modifiers === modifiersAtStart && textInputsUnchanged) {
+    if (
+      current &&
+      current.modifiers === modifiersAtStart &&
+      textInputsUnchanged &&
+      maskInputsKey(current, deps) === maskKeyAtStart
+    ) {
       deps.clearDirty(nodeId, level);
     }
     // Note: the error-burst flag is NOT reset on a bare success here — a

@@ -1,5 +1,6 @@
 import { readFile } from '@tauri-apps/plugin-fs';
 import * as cache from '@/scene/cache';
+import { resolvedMaskInput } from '@/scene/maskInputs';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
@@ -153,36 +154,12 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
  * undo that only changes the referenced vector node's paths must dirty the
  * consumer too, not just the vector node.
  */
-function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
-  if (!maskId) return null;
-  const ref = scene.maskRefs?.[maskId];
-  if (!ref) return null;
-  const target = scene.nodes.find((n) => n.id === ref.nodeId);
-  // The referenced shape's transform2d is a cook input too — document-pinned
-  // masks rasterise at the shape's COMPOSITED position, so undoing a move of
-  // the vector node must recook its consumers.
-  // A text target (text-modifier-masks.md) is keyed by what shapes its glyph
-  // mask: the spec fields + position. Fill/stroke are left out — the modifier
-  // mask is glyph fill only, so they don't affect it.
-  const geometry =
-    target && isVectorNode(target)
-      ? { paths: target.paths, fillRule: target.fillRule, transform2d: target.transform2d }
-      : target && isTextNode(target)
-        ? {
-            text: {
-              content: target.content,
-              font: target.font,
-              fontSize: target.fontSize,
-              tracking: target.tracking,
-              kerning: target.kerning,
-              lineHeight: target.lineHeight,
-              align: target.align,
-              position: target.position,
-            },
-            transform2d: target.transform2d,
-          }
-        : null;
-  return { ref, geometry };
+function resolvedMaskInputIn(maskId: string | undefined, scene: Scene): unknown {
+  return resolvedMaskInput(
+    maskId,
+    (id) => scene.maskRefs?.[id],
+    (id) => scene.nodes.find((n) => n.id === id),
+  );
 }
 
 function hasVectorMask(node: SceneNode, scene: Scene): boolean {
@@ -206,8 +183,8 @@ function textInputs(n: TextNode): unknown {
 
 function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB: Scene): boolean {
   if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
-  const refA = a.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneA));
-  const refB = b.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneB));
+  const refA = a.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneA));
+  const refB = b.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneB));
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
   // Document-pinned vector masks rasterise through the consumer's CURRENT
   // transform2d (store.ts setNodeTransform's rule-4 exception), so for a

@@ -279,6 +279,88 @@ describe('packMaskedPayload', () => {
 });
 
 describe('cookNode — masks', () => {
+  function maskedConsumerSetup() {
+    const vectorRef = { current: makeVectorNode({ id: 'v1' }) as VectorNode };
+    const ref = { id: 'ref-1', nodeId: 'v1', featherPx: 0, expand: 0, invert: false };
+    const nodeRef = {
+      current: makeNode({
+        modifiers: [
+          {
+            id: 'm1',
+            type: 'gaussian_blur',
+            enabled: true,
+            params: { radius: 8 },
+            maskId: 'ref-1',
+          },
+        ],
+      }),
+    };
+    return { vectorRef, ref, nodeRef };
+  }
+
+  it('race guard: a mask-source edit mid-cook (consumer modifiers untouched) leaves dirty set', async () => {
+    const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
+      ),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        // setVectorPaths on the mask source: new paths, and
+        // dirtyMaskRefConsumers replaces the consumer with a fresh dirty flag —
+        // its `modifiers` array is the same reference.
+        vectorRef.current = { ...vectorRef.current, paths: [] };
+        nodeRef.current = { ...nodeRef.current, dirty: { draft: true, working: true } };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.setCache).toHaveBeenCalledTimes(1);
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('race guard: a consumer move mid-cook leaves a vector-masked node dirty', async () => {
+    const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
+      ),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        nodeRef.current = {
+          ...nodeRef.current,
+          transform2d: { x: 5, y: 5, scaleX: 1, scaleY: 1, rotation: 0 },
+        };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('race guard: an unrelated dirty flip on a masked consumer still clears dirty', async () => {
+    const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
+      ),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        nodeRef.current = { ...nodeRef.current, dirty: { draft: true, working: true } };
+        vectorRef.current = { ...vectorRef.current, dirty: { draft: false, working: false } };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
   it('resolves a maskId against a vector-node reference and hands the rasterised plane to the run', async () => {
     const vectorTransform = { x: -15, y: 8, scaleX: 1, scaleY: 1, rotation: -0.2 };
     const vectorNode = makeVectorNode({ id: 'v1', transform2d: vectorTransform }) as VectorNode;
