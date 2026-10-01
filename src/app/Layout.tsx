@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { StatusBar } from '@/app/StatusBar';
 import { PRODUCT_NAME } from '@/branding';
 import { ToolbarRail } from '@/canvas/ToolbarRail';
@@ -11,8 +12,20 @@ import { ReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { StackPanel } from '@/panels/StackPanel';
 import { SettingsDialog } from '@/panels/settings/SettingsDialog';
 import { VectorsPanel } from '@/panels/VectorsPanel';
+import { useTextEditStore } from '@/scene/textEditState';
 
 export function Layout() {
+  // Controlled so a request to focus the Text field (T-click, double-click,
+  // Enter: dogfood-revisions.md) can bring the Stack tab forward first.
+  const [tab, setTab] = useState('stack');
+  useEffect(
+    () =>
+      useTextEditStore.subscribe((state, prev) => {
+        if (state.focusRequest !== prev.focusRequest) setTab('stack');
+      }),
+    [],
+  );
+
   return (
     <TooltipProvider>
       <div className="flex flex-col h-screen bg-neutral-950 text-neutral-50">
@@ -37,7 +50,11 @@ export function Layout() {
 
           {/* Right panel: 320px */}
           <div className="w-80 border-l border-neutral-800 flex flex-col">
-            <Tabs defaultValue="stack" className="flex flex-1 flex-col overflow-hidden">
+            <Tabs
+              value={tab}
+              onValueChange={setTab}
+              className="flex flex-1 flex-col overflow-hidden"
+            >
               <TabsList className="w-full rounded-none border-b border-neutral-800">
                 <TabsTrigger value="stack">Stack</TabsTrigger>
                 <TabsTrigger value="vectors">Vectors</TabsTrigger>

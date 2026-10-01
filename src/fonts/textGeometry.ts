@@ -10,7 +10,8 @@ export interface TextSpec {
   postscriptName: string;
   fontSize: number;
   tracking: number;
-  kerning: boolean;
+  /** Percent of the font's kern pairs, 0–200 (100 = the font's own). */
+  kerning: number;
   lineHeight: number;
   align: 'left' | 'center' | 'right';
 }

@@ -1,6 +1,6 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
 import { TriangleAlert } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -14,13 +14,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { cn } from '@/lib/utils';
 import { beginTransaction, endTransaction } from '@/scene/history';
+import { beginTextEdit, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
 import type { OptionalColourFieldDef, TextScopeContext } from './textScope';
 
 /**
  * Custom facets field kinds for the Text inspector (text-tool-and-inspector.md).
  * facets doesn't type-check a custom kind's extra props, so they're documented
  * here: `font-family`/`font-style` read the node's `FontRef` from the panel's
- * `ctx` (`TextScopeContext`); `optional-colour` reads `fallback`.
+ * `ctx` (`TextScopeContext`); `optional-colour` reads `fallback`; `text-content`
+ * is the words themselves (dogfood-revisions.md) and reads `ctx.nodeId`.
  */
 
 const labelClass = 'text-[11px] font-medium text-muted-foreground tracking-wide';
@@ -215,6 +217,175 @@ const FontStyleRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, on
   );
 };
 
+const TEXT_MIN_ROWS = 2;
+const TEXT_MAX_ROWS = 8;
+
+/** How long a pointer-initiated focus is defended if no pointerup arrives to end it (ms). */
+const FOCUS_SETTLE_MAX_MS = 1000;
+
+/**
+ * The Text inspector's words field (dogfood-revisions.md): a multi-line
+ * `<textarea>` that autosizes from 2 to 8 rows. **Its focus is the edit
+ * transaction**: focus calls `beginTextEdit`, blur calls
+ * `commitActiveTextEdit` (new blank node removed with no history entry,
+ * otherwise one undo step). Every input writes the content straight through, so
+ * the canvas shows the type live while the field, off to the side, holds the caret.
+ *
+ * The canvas asks for focus through the shared edit store's `focusTarget`
+ * (T-click, double-click, Enter), which this field consumes on mount or when
+ * the request counter bumps.
+ */
+function TextContentField({
+  label,
+  nodeId,
+  value,
+  readOnly,
+  onChange,
+}: {
+  label: string;
+  nodeId: string;
+  value: string;
+  readOnly: boolean;
+  onChange?: (next: string) => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // True from a pointer-initiated focus request until that pointer is released:
+  // the pointerdown that asked for focus can still pull it away afterwards
+  // (default action of the press), which must not read as "the user left".
+  const settling = useRef(false);
+  const stopSettling = useRef<(() => void) | null>(null);
+  const focusRequest = useTextEditStore((s) => s.focusRequest);
+  const focusTarget = useTextEditStore((s) => s.focusTarget);
+
+  // Autosize 2..8 rows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `value` is the trigger, not an input of the measurement
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    const lineHeight = Number.parseFloat(cs.lineHeight) || 16;
+    const px = (v: string) => Number.parseFloat(v) || 0;
+    const border = px(cs.borderTopWidth) + px(cs.borderBottomWidth);
+    const chrome = border + px(cs.paddingTop) + px(cs.paddingBottom);
+    const min = lineHeight * TEXT_MIN_ROWS + chrome;
+    const max = lineHeight * TEXT_MAX_ROWS + chrome;
+    el.style.height = 'auto';
+    const wanted = el.scrollHeight + border;
+    el.style.height = `${Math.min(max, Math.max(min, wanted))}px`;
+    el.style.overflowY = wanted > max ? 'auto' : 'hidden';
+  }, [value]);
+
+  // Honour a focus ask for this node (on mount too: the section may have been
+  // collapsed or on another tab when it was made).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `focusRequest` re-fires an ask for the same node
+  useEffect(() => {
+    if (!focusTarget || focusTarget.nodeId !== nodeId) return;
+    const consume = useTextEditStore.getState().consumeFocusRequest;
+    const el = ref.current;
+    if (!el || readOnly) {
+      consume();
+      return;
+    }
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    consume();
+    if (!focusTarget.viaPointer) return;
+
+    stopSettling.current?.();
+    settling.current = true;
+    const end = () => {
+      settling.current = false;
+      stopSettling.current = null;
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+      window.clearTimeout(timer);
+    };
+    // Stop defending once the press's own default action has run.
+    const onUp = () => requestAnimationFrame(() => requestAnimationFrame(end));
+    const timer = window.setTimeout(end, FOCUS_SETTLE_MAX_MS);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+    stopSettling.current = end;
+    // Re-assert once, after the press's default action has had its turn.
+    requestAnimationFrame(() => {
+      if (el.isConnected && document.activeElement !== el) el.focus();
+    });
+  }, [focusRequest, focusTarget, nodeId, readOnly]);
+
+  // Drop the settle listeners if the field unmounts mid-press.
+  useEffect(() => () => stopSettling.current?.(), []);
+
+  // A primary press anywhere else ends the edit. Blur alone isn't enough: a
+  // pointerdown the canvas cancels (preventDefault) may leave focus where it was.
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      const el = ref.current;
+      if (!el || e.button !== 0 || settling.current || document.activeElement !== el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      el.blur();
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <FieldLabel text={label} dim={readOnly} />
+      <textarea
+        ref={ref}
+        aria-label={label}
+        value={value}
+        rows={TEXT_MIN_ROWS}
+        readOnly={readOnly}
+        spellCheck={false}
+        onFocus={() => {
+          if (!readOnly) beginTextEdit(nodeId, false);
+        }}
+        onBlur={() => {
+          const el = ref.current;
+          if (settling.current && el) {
+            // Focus was pulled away by the very press that asked for it: take it back, don't commit.
+            requestAnimationFrame(() => el.focus());
+            return;
+          }
+          commitActiveTextEdit();
+        }}
+        onChange={(e) => {
+          if (!onChange) return;
+          // Cmd+Z mid-typing commits first (menu.ts) and leaves the caret here:
+          // typing on opens a fresh edit rather than writing outside any transaction.
+          if (useTextEditStore.getState().editing?.nodeId !== nodeId) beginTextEdit(nodeId, false);
+          onChange(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return; // IME owns Enter/Escape mid-composition
+          if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.blur();
+          }
+          // Plain Enter is a newline (point text, manual line breaks only).
+        }}
+        className="w-full resize-none rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs outline-none focus:border-sky-400 read-only:opacity-60"
+      />
+    </div>
+  );
+}
+
+const TextContentRenderer: FieldRenderer<FieldDef> = ({ field, value, onChange, ctx }) => {
+  const nodeId = (ctx as TextScopeContext | null)?.nodeId;
+  if (!nodeId) return null;
+  return (
+    <TextContentField
+      label={field.label ?? field.id}
+      nodeId={nodeId}
+      value={typeof value === 'string' ? value : ''}
+      readOnly={!onChange}
+      onChange={onChange ? (next) => onChange(next) : undefined}
+    />
+  );
+};
+
 function OptionalColour({
   field,
   value,
@@ -224,16 +395,18 @@ function OptionalColour({
   field: OptionalColourFieldDef;
   value: unknown;
   disabled: boolean;
-  onChange?: (next: string | null) => void;
+  /** A colour recolours, `null` disables, `true` enables (the scope restores the remembered colour). */
+  onChange?: (next: string | true | null) => void;
 }) {
   const colour = typeof value === 'string' && value.length > 0 ? value : null;
-  // "None" -> unchecked restores the last colour seen (or the field's fallback).
+  // The swatch keeps showing the last colour seen while disabled (or the fallback);
+  // the scope owns the restore on re-enable.
   const lastRef = useRef(colour ?? field.fallback);
   if (colour) lastRef.current = colour;
   const readOnly = disabled || !onChange;
   const label = field.label ?? field.id;
   const swatch = colour ?? lastRef.current;
-  const checkId = `optional-colour-none-${field.id}`;
+  const checkId = `optional-colour-enabled-${field.id}`;
 
   return (
     <div className="flex flex-col gap-1">
@@ -259,11 +432,11 @@ function OptionalColour({
           <Checkbox
             id={checkId}
             className="border-neutral-500"
-            checked={colour === null}
+            checked={colour !== null}
             disabled={readOnly}
-            onCheckedChange={(checked) => onChange?.(checked === true ? null : lastRef.current)}
+            onCheckedChange={(checked) => onChange?.(checked === true ? true : null)}
           />
-          None
+          Enabled
         </label>
       </div>
     </div>
@@ -284,4 +457,5 @@ export function registerTextFieldRenderers(): void {
   registerFieldRenderer('font-family', FontFamilyRenderer);
   registerFieldRenderer('font-style', FontStyleRenderer);
   registerFieldRenderer('optional-colour', OptionalColourRenderer);
+  registerFieldRenderer('text-content', TextContentRenderer);
 }

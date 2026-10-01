@@ -1,10 +1,10 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { commitActiveTextEdit } from '@/canvas/text/textEditState';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
 import { redo, undo } from '@/scene/history';
+import { commitActiveTextEdit } from '@/scene/textEditState';
 
 /**
  * Native macOS menu bar → webview bridge (roadmap gap "Native app menu +
@@ -48,7 +48,7 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://file/save': () => saveProject({ as: false }),
   'menu://file/save-as': () => saveProject({ as: true }),
   'menu://file/export-png': () => exportPng(),
-  // The native menu owns Cmd+Z even while the text overlay's <textarea> has
+  // The native menu owns Cmd+Z even while the inspector's Text field has
   // focus, so an open text edit (an open history transaction) must be
   // committed first — otherwise undo() would flush a half-finished edit or
   // leave a new blank node orphaned (text-tool-and-inspector.md).

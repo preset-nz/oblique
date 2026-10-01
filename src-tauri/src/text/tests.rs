@@ -21,7 +21,7 @@ fn spec(content: &str) -> TextSpec {
         postscript_name: FONT.to_string(),
         font_size: 100.0,
         tracking: 0.0,
-        kerning: true,
+        kerning: 100.0,
         line_height: 1.2,
         align: Align::Left,
     }
@@ -38,11 +38,75 @@ fn kerning_narrows_av() {
     let off = width(
         db,
         &TextSpec {
-            kerning: false,
+            kerning: 0.0,
             ..spec("AV")
         },
     );
     assert!(on < off, "kerned {on} should be < unkerned {off}");
+}
+
+fn width_at(db: &fontdb::Database, content: &str, kerning: f32) -> f32 {
+    width(
+        db,
+        &TextSpec {
+            kerning,
+            ..spec(content)
+        },
+    )
+}
+
+/// The old `kerning: false` / `true` widths come from the same single-shape paths, so
+/// 0 and 100 must match them exactly (no float blending on the endpoints).
+#[test]
+fn kerning_zero_matches_the_old_off_width_exactly() {
+    let Some(db) = db() else { return };
+    let off = shape_width_with_kern(db, "AVATAR", false);
+    assert_eq!(width_at(db, "AVATAR", 0.0), off);
+}
+
+#[test]
+fn kerning_hundred_matches_the_old_on_width_exactly() {
+    let Some(db) = db() else { return };
+    let on = shape_width_with_kern(db, "AVATAR", true);
+    assert_eq!(width_at(db, "AVATAR", 100.0), on);
+}
+
+#[test]
+fn kerning_fifty_is_strictly_between_off_and_on() {
+    let Some(db) = db() else { return };
+    let (off, mid, on) = (
+        width_at(db, "AV", 0.0),
+        width_at(db, "AV", 50.0),
+        width_at(db, "AV", 100.0),
+    );
+    assert!(on < mid && mid < off, "{on} < {mid} < {off}");
+}
+
+#[test]
+fn kerning_two_hundred_is_narrower_than_one_hundred() {
+    let Some(db) = db() else { return };
+    let (on, double) = (width_at(db, "AV", 100.0), width_at(db, "AV", 200.0));
+    assert!(double < on, "{double} should be < {on}");
+}
+
+/// Reference widths: the pre-4b behaviour (one shape, kern on or off) computed straight
+/// from `shape_once`, independent of `layout`'s kerning dispatch.
+fn shape_width_with_kern(db: &fontdb::Database, content: &str, kern: bool) -> f32 {
+    let id = db
+        .faces()
+        .find(|f| f.post_script_name == FONT)
+        .map(|f| f.id)
+        .unwrap();
+    db.with_face_data(id, |data, index| {
+        let face = rustybuzz::Face::from_slice(data, index).unwrap();
+        let scale = 100.0 / face.units_per_em() as f32;
+        let mut pen = 0.0_f32;
+        for g in shape_once(&face, content, kern) {
+            pen += g.x_advance * scale;
+        }
+        pen
+    })
+    .unwrap()
 }
 
 #[test]
@@ -160,7 +224,6 @@ fn bounds_and_metrics_are_sane() {
         assert!(a.point.y >= b.y - 0.01 && a.point.y <= b.y + b.h + 0.01);
     }
 }
-
 
 /// Glyphs in some fonts wind in opposite directions (HelveticaNeue-CondensedBold:
 /// H's outer is anticlockwise, A's clockwise), so tight tracking punched holes

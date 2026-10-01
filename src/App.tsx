@@ -4,9 +4,7 @@ import { installProjectWindowIntegration } from './app/closeGuard';
 import { Layout } from './app/Layout';
 import { installMenu } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
-import { useTextEditStore } from './canvas/text/textEditState';
 import { useFontCatalogueStore } from './fonts/catalogue';
-import { setTextStyleListener } from './panels/text/textScope';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
@@ -39,14 +37,6 @@ function App() {
   useEffect(() => void loadAiSettings(), []);
   // Installed-font catalogue (Epic 20 story 1) — idempotent, so StrictMode re-runs are safe.
   useEffect(() => void useFontCatalogueStore.getState().load(), []);
-
-  // The text tool starts new text in the font/size last picked in the Text
-  // inspector (Epic 20 story 4). panels/ can't import canvas/, so the app
-  // shell connects the two.
-  useEffect(() => {
-    setTextStyleListener((patch) => useTextEditStore.getState().setLastUsed(patch));
-    return () => setTextStyleListener(null);
-  }, []);
 
   // Once per app, not per StrictMode re-run: window listeners have no
   // teardown API worth building for a singleton window.

@@ -99,7 +99,7 @@ function makeTextNode(overrides: Partial<TextNode> = {}): TextNode {
     },
     fontSize: 72,
     tracking: 0,
-    kerning: true,
+    kerning: 100,
     lineHeight: 1.2,
     align: 'left',
     fill: '#ffffff',

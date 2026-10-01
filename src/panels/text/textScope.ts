@@ -9,6 +9,7 @@ import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { resolveFont } from '@/fonts/resolveFont';
 import { type FontFace, type FontRef, fontRefOf } from '@/fonts/types';
 import { type TextPropPatch, useSceneStore } from '@/scene/store';
+import { useTextEditStore } from '@/scene/textEditState';
 import { isTextNode, type TextNode } from '@/scene/types';
 
 /**
@@ -21,6 +22,9 @@ import { isTextNode, type TextNode } from '@/scene/types';
  */
 
 export const TEXT_SCOPE_KEY = 'text-node';
+
+/** The fill an enabled-from-nothing fill starts with. */
+export const FILL_FALLBACK = '#ffffff';
 
 /** A stroke that gets switched on from nothing starts here. */
 export const DEFAULT_STROKE = { color: '#000000', width: 2 } as const;
@@ -35,6 +39,8 @@ export interface TextSelection {
  * Style select is keyed by PostScript name), which a flat `value` can't carry.
  */
 export interface TextScopeContext {
+  /** The node the panel edits: the Text field's focus/blur drive its edit transaction. */
+  nodeId: string;
   font: FontRef;
   /** Set when the node's font isn't installed: the amber marker's tooltip (missing-fonts.md). */
   missingHint?: string;
@@ -45,20 +51,26 @@ export interface TextNumberFieldDef extends NumberFieldDef {
   hint?: string;
 }
 
-/** `optional-colour` (see `fontFieldRenderers.tsx`): a colour with a "None" checkbox. */
+/**
+ * `optional-colour` (see `fontFieldRenderers.tsx`): a colour with an "Enabled"
+ * checkbox. Checked means painted. The renderer writes a colour string to
+ * recolour, `null` to disable and `true` to enable (restoring the remembered
+ * colour, see `textPatchFor`).
+ */
 // A `type` alias (not an interface) so it is assignable to facets' open `CustomFieldDef`.
 export type OptionalColourFieldDef = {
   kind: 'optional-colour';
   id: string;
   label?: string;
   path: string;
-  /** What "None" -> unchecked restores when no colour has been seen yet. */
+  /** What enabling restores when no colour has been seen yet. */
   fallback: string;
 };
 
 const NUMBER_LIMITS: Record<string, readonly [min: number, max: number]> = {
   fontSize: [1, 2000],
   tracking: [-500, 2000],
+  kerning: [0, 200],
   lineHeight: [0.5, 4],
   'stroke.width': [0, 200],
 };
@@ -71,6 +83,7 @@ export const TEXT_SCHEMA: PropertySchema = {
     {
       id: 'text',
       rows: [
+        { kind: 'text-content', id: 'content', label: 'Text', path: 'content' },
         { kind: 'font-family', id: 'font.family', label: 'Font', path: 'font.family' },
         { kind: 'font-style', id: 'font.style', label: 'Style', path: 'font.style' },
         {
@@ -92,7 +105,16 @@ export const TEXT_SCHEMA: PropertySchema = {
           step: 5,
           hint: '1/1000 em',
         } satisfies TextNumberFieldDef,
-        { kind: 'checkbox', id: 'kerning', label: 'Kerning', path: 'kerning' },
+        {
+          kind: 'number',
+          id: 'kerning',
+          label: 'Kerning',
+          path: 'kerning',
+          min: NUMBER_LIMITS.kerning[0],
+          max: NUMBER_LIMITS.kerning[1],
+          step: 5,
+          hint: "% of the font's kerning",
+        } satisfies TextNumberFieldDef,
         {
           kind: 'number',
           id: 'lineHeight',
@@ -118,7 +140,7 @@ export const TEXT_SCHEMA: PropertySchema = {
           id: 'fill',
           label: 'Fill',
           path: 'fill',
-          fallback: '#ffffff',
+          fallback: FILL_FALLBACK,
         } satisfies OptionalColourFieldDef,
         {
           kind: 'optional-colour',
@@ -135,6 +157,8 @@ export const TEXT_SCHEMA: PropertySchema = {
           min: NUMBER_LIMITS['stroke.width'][0],
           max: NUMBER_LIMITS['stroke.width'][1],
           step: 0.5,
+          // Not live while the stroke is off: the Enabled toggle is the only way on.
+          disabledWhen: { path: 'stroke.color', equals: null },
         } satisfies TextNumberFieldDef,
       ],
     },
@@ -169,23 +193,56 @@ export function fontForFamily(current: FontRef, family: string, faces: FontFace[
 }
 
 /**
+ * The last colour a fill/stroke had before it was disabled, per node, so
+ * re-enabling restores it. UI-only memory (per session, never saved).
+ */
+export interface RememberedColours {
+  fill?: string;
+  stroke?: string;
+}
+
+const remembered = new Map<string, RememberedColours>();
+
+export function rememberedColoursFor(nodeId: string): RememberedColours {
+  return remembered.get(nodeId) ?? {};
+}
+
+function remember(nodeId: string, patch: RememberedColours): void {
+  remembered.set(nodeId, { ...remembered.get(nodeId), ...patch });
+}
+
+/** Test seam. */
+export function clearRememberedColours(): void {
+  remembered.clear();
+}
+
+/**
  * Maps one panel write to a `setTextProps` patch, or `null` for an
  * unusable value. Pure: never mutates `node`; rebuilds `stroke` and `font`.
  *
+ * - `content`: the Text field's words, verbatim.
  * - `font.family`: value is the family name (see `fontForFamily`).
  * - `font.style`: value is the chosen face's PostScript name (a style name
  *   isn't guaranteed unique within a family), looked up in `faces`.
- * - `stroke.color`: `null` switches the stroke off; a colour switches it on
- *   (with `DEFAULT_STROKE`'s width when it was off) or recolours it.
- * - `stroke.width`: switches the stroke on with `DEFAULT_STROKE`'s colour when it was off.
+ * - `fill`: a colour string, `null` (disable) or `true` (enable: the
+ *   remembered colour, else `#ffffff`).
+ * - `stroke.color`: `null` disables the stroke, `true` enables it (the
+ *   remembered colour, else `DEFAULT_STROKE`'s, with the default width), a
+ *   colour recolours an enabled stroke. A colour for a disabled stroke is
+ *   ignored: the Enabled toggle is the only way on.
+ * - `stroke.width`: ignored while the stroke is disabled (the field is
+ *   disabled too, so this is the model-side backstop).
  */
 export function textPatchFor(
   node: TextNode,
   path: string,
   value: unknown,
   faces: FontFace[],
+  memory: RememberedColours = {},
 ): TextPropPatch | null {
   switch (path) {
+    case 'content':
+      return typeof value === 'string' ? { content: value } : null;
     case 'font.family': {
       if (typeof value !== 'string') return null;
       const font = fontForFamily(node.font, value, faces);
@@ -198,26 +255,31 @@ export function textPatchFor(
     }
     case 'fontSize':
     case 'tracking':
+    case 'kerning':
     case 'lineHeight': {
       if (typeof value !== 'number' || Number.isNaN(value)) return null;
       return { [path]: clamp(path, value) };
     }
-    case 'kerning':
-      return typeof value === 'boolean' ? { kerning: value } : null;
     case 'align':
       return ALIGN_VALUES.includes(value as TextNode['align'])
         ? { align: value as TextNode['align'] }
         : null;
     case 'fill':
+      if (value === true) return { fill: memory.fill ?? FILL_FALLBACK };
       return value === null || typeof value === 'string' ? { fill: value } : null;
     case 'stroke.color': {
       if (value === null) return { stroke: null };
-      if (typeof value !== 'string') return null;
-      return { stroke: { ...(node.stroke ?? DEFAULT_STROKE), color: value } };
+      if (value === true) {
+        return {
+          stroke: { ...DEFAULT_STROKE, color: memory.stroke ?? DEFAULT_STROKE.color },
+        };
+      }
+      if (typeof value !== 'string' || !node.stroke) return null;
+      return { stroke: { ...node.stroke, color: value } };
     }
     case 'stroke.width': {
-      if (typeof value !== 'number' || Number.isNaN(value)) return null;
-      return { stroke: { ...(node.stroke ?? DEFAULT_STROKE), width: clamp(path, value) } };
+      if (typeof value !== 'number' || Number.isNaN(value) || !node.stroke) return null;
+      return { stroke: { ...node.stroke, width: clamp(path, value) } };
     }
     default:
       return null;
@@ -227,6 +289,7 @@ export function textPatchFor(
 /** The flat record facets reads (`path` is a key lookup, so nested fields use dotted keys). */
 export function readTextValues(node: TextNode): Record<string, unknown> {
   return {
+    content: node.content,
     'font.family': node.font.family,
     'font.style': node.font.style,
     fontSize: node.fontSize,
@@ -238,18 +301,6 @@ export function readTextValues(node: TextNode): Record<string, unknown> {
     'stroke.color': node.stroke?.color ?? null,
     'stroke.width': node.stroke?.width ?? DEFAULT_STROKE.width,
   };
-}
-
-type StyleListener = (patch: { font?: FontRef; fontSize?: number }) => void;
-let styleListener: StyleListener | null = null;
-
-/**
- * Called after a panel write that changes the font or size. `panels/` can't
- * import `canvas/` (depcruise), so the text tool's `lastUsedFont`/`lastUsedSize`
- * (`canvas/text/textEditState.ts`) are fed by `App.tsx` registering a listener.
- */
-export function setTextStyleListener(listener: StyleListener | null): void {
-  styleListener = listener;
 }
 
 function findTextNode(nodeId: string): TextNode | undefined {
@@ -266,11 +317,21 @@ export const textScope: Scope<TextSelection, Record<string, unknown>> = {
   write: (path, value, selection) => {
     const node = findTextNode(selection.nodeId);
     if (!node) return;
-    const patch = textPatchFor(node, path, value, useFontCatalogueStore.getState().faces);
+    const patch = textPatchFor(
+      node,
+      path,
+      value,
+      useFontCatalogueStore.getState().faces,
+      rememberedColoursFor(node.id),
+    );
     if (!patch) return;
+    // Disabling remembers the colour it had, so re-enabling restores it.
+    if (patch.fill === null && node.fill) remember(node.id, { fill: node.fill });
+    if (patch.stroke === null && node.stroke) remember(node.id, { stroke: node.stroke.color });
     useSceneStore.getState().setTextProps(node.id, patch);
+    // The text tool starts the next new text in the font/size last picked here.
     if (patch.font || patch.fontSize !== undefined) {
-      styleListener?.({ font: patch.font, fontSize: patch.fontSize });
+      useTextEditStore.getState().setLastUsed({ font: patch.font, fontSize: patch.fontSize });
     }
   },
 };

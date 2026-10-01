@@ -101,7 +101,24 @@ export function parseProject(text: string, sourcePath?: string): Scene {
     );
     delete scene.masks;
   }
+  migrateLegacyTextKerning(scene);
   return scene;
+}
+
+/**
+ * Epic 20 story 4b: `TextNode.kerning` went from a boolean to a percentage
+ * (0–200, 100 = the font's own pairs). A saved `true` loads as 100 and `false`
+ * as 0; a missing or otherwise non-numeric value is the default, 100. Mutates
+ * the freshly parsed scene in place, before `loadScene`.
+ */
+function migrateLegacyTextKerning(scene: Scene): void {
+  if (!Array.isArray(scene.nodes)) return;
+  for (const node of scene.nodes) {
+    if (node?.type !== 'text') continue;
+    const text = node as unknown as { kerning?: unknown };
+    if (typeof text.kerning === 'boolean') text.kerning = text.kerning ? 100 : 0;
+    else if (typeof text.kerning !== 'number' || !Number.isFinite(text.kerning)) text.kerning = 100;
+  }
 }
 
 /** A single entry from a directory listing — the subset baked-dir sweeping needs. */

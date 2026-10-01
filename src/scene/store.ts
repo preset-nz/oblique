@@ -466,7 +466,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       font: partial.font,
       fontSize: partial.fontSize ?? 72,
       tracking: partial.tracking ?? 0,
-      kerning: partial.kerning ?? true,
+      kerning: partial.kerning ?? 100,
       lineHeight: partial.lineHeight ?? 1.2,
       align: partial.align ?? 'left',
       fill: partial.fill === undefined ? '#ffffff' : partial.fill,

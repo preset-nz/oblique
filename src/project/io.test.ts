@@ -215,6 +215,60 @@ describe('serialise/parse round trip', () => {
     expect(loaded).toEqual(scene);
   });
 
+  it('migrates a legacy boolean text kerning: true -> 100, false -> 0, numbers untouched', () => {
+    const scene = sampleScene();
+    const text = (id: string, kerning: unknown) => ({
+      id,
+      label: id,
+      type: 'text',
+      state: 'active',
+      output: 'image',
+      cameraId: null,
+      modifiers: [],
+      visible: true,
+      blendMode: 'normal',
+      opacity: 1,
+      dirty: { draft: false, working: false },
+      content: 'AV',
+      font: {
+        family: 'Helvetica',
+        style: 'Regular',
+        postscriptName: 'Helvetica',
+        weight: 400,
+        italic: false,
+        category: 'sans',
+      },
+      fontSize: 72,
+      tracking: 0,
+      kerning,
+      lineHeight: 1.2,
+      align: 'left',
+      fill: '#ffffff',
+      stroke: null,
+      position: { x: 0, y: 0 },
+    });
+    const doc = {
+      format: 'oblique-project',
+      version: 2,
+      scene: {
+        ...scene,
+        nodes: [
+          text('on', true),
+          text('off', false),
+          text('amount', 35),
+          text('absent', undefined),
+        ],
+      },
+    };
+    const loaded = parseProject(JSON.stringify(doc));
+    const kerning = (id: string) =>
+      (loaded.nodes.find((n) => n.id === id) as unknown as { kerning: number }).kerning;
+    expect(kerning('on')).toBe(100);
+    expect(kerning('off')).toBe(0);
+    expect(kerning('amount')).toBe(35);
+    expect(kerning('absent')).toBe(100);
+  });
+
   it('rejects non-JSON', () => {
     expect(() => parseProject('nope{')).toThrow(/not valid JSON/);
   });

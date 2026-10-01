@@ -16,7 +16,7 @@ const node = (font: FontRef): TextNode =>
     font,
     fontSize: 10,
     tracking: 0,
-    kerning: true,
+    kerning: 100,
     lineHeight: 1.2,
     align: 'left',
   }) as TextNode;

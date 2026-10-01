@@ -172,7 +172,7 @@ export interface TextNode extends SceneNode {
   font: FontRef;
   fontSize: number; // document px (em size)
   tracking: number; // 1/1000 em, added after every glyph cluster
-  kerning: boolean; // font kern pairs; default true
+  kerning: number; // percent of the font's kern pairs, 0–200, default 100
   lineHeight: number; // multiple of fontSize (default 1.2)
   align: 'left' | 'center' | 'right';
   fill: string | null; // CSS hex; null = no fill

@@ -27,7 +27,9 @@ pub struct TextSpec {
     pub font_size: f32,
     /// 1/1000 em, added after every glyph cluster.
     pub tracking: f32,
-    pub kerning: bool,
+    /// Percent of the font's own kern pairs: 0 = off, 100 = the font's pairs, 200 = doubled.
+    /// Clamped to 0..=200 (the UI range). See `shape_line` for how the in-between is made.
+    pub kerning: f32,
     /// Multiple of `font_size`.
     pub line_height: f32,
     pub align: Align,
@@ -101,6 +103,81 @@ pub fn layout(db: &fontdb::Database, spec: &TextSpec) -> Result<TextGeometry, Te
         .ok_or_else(|| TextError::FontNotFound(spec.postscript_name.clone()))?
 }
 
+/// One shaped glyph, positions in font units.
+struct ShapedGlyph {
+    glyph_id: u32,
+    cluster: u32,
+    x_advance: f32,
+    x_offset: f32,
+    y_offset: f32,
+}
+
+fn shape_once(face: &rustybuzz::Face, line: &str, kern: bool) -> Vec<ShapedGlyph> {
+    let no_kern = [rustybuzz::Feature::new(
+        rustybuzz::ttf_parser::Tag::from_bytes(b"kern"),
+        0,
+        ..,
+    )];
+    let features: &[rustybuzz::Feature] = if kern { &[] } else { &no_kern };
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(line);
+    buffer.guess_segment_properties();
+    let shaped = rustybuzz::shape(face, features, buffer);
+    shaped
+        .glyph_infos()
+        .iter()
+        .zip(shaped.glyph_positions())
+        .map(|(info, pos)| ShapedGlyph {
+            glyph_id: info.glyph_id,
+            cluster: info.cluster,
+            x_advance: pos.x_advance as f32,
+            x_offset: pos.x_offset as f32,
+            y_offset: pos.y_offset as f32,
+        })
+        .collect()
+}
+
+/// Shapes one line at a kerning amount (percent of the font's kern pairs).
+///
+/// 0 shapes once with the `kern` feature off and 100 shapes once with the font's defaults.
+/// Anything between (or beyond) shapes twice, kern on and kern off, and blends each glyph's
+/// `x_advance` and `x_offset` as `off + k * (on - off)` with `k = kerning / 100`, in font units.
+/// Kerning is positioning-only, so the two runs normally have the same glyphs. Some fonts'
+/// kern lookups interact with other features and change the glyph sequence; then there is
+/// nothing to blend, so the kern-on result is used when `kerning >= 100` and the kern-off
+/// result otherwise.
+fn shape_line(face: &rustybuzz::Face, line: &str, kerning: f32) -> Vec<ShapedGlyph> {
+    let kerning = if kerning.is_finite() {
+        kerning.clamp(0.0, 200.0)
+    } else {
+        100.0
+    };
+    if kerning <= 0.0 {
+        return shape_once(face, line, false);
+    }
+    if kerning == 100.0 {
+        return shape_once(face, line, true);
+    }
+    let on = shape_once(face, line, true);
+    let off = shape_once(face, line, false);
+    let same_glyphs =
+        on.len() == off.len() && on.iter().zip(&off).all(|(a, b)| a.glyph_id == b.glyph_id);
+    if !same_glyphs {
+        return if kerning >= 100.0 { on } else { off };
+    }
+    let k = kerning / 100.0;
+    on.iter()
+        .zip(&off)
+        .map(|(on, off)| ShapedGlyph {
+            glyph_id: on.glyph_id,
+            cluster: on.cluster,
+            x_advance: off.x_advance + k * (on.x_advance - off.x_advance),
+            x_offset: off.x_offset + k * (on.x_offset - off.x_offset),
+            y_offset: on.y_offset,
+        })
+        .collect()
+}
+
 fn layout_face(data: &[u8], index: u32, spec: &TextSpec) -> Result<TextGeometry, TextError> {
     let face = rustybuzz::Face::from_slice(data, index).ok_or(TextError::Parse)?;
     let units_per_em = face.units_per_em() as f32;
@@ -110,13 +187,6 @@ fn layout_face(data: &[u8], index: u32, spec: &TextSpec) -> Result<TextGeometry,
     let scale = spec.font_size / units_per_em;
     let tracking_px = spec.tracking * spec.font_size / 1000.0;
 
-    let no_kern = [rustybuzz::Feature::new(
-        rustybuzz::ttf_parser::Tag::from_bytes(b"kern"),
-        0,
-        ..,
-    )];
-    let features: &[rustybuzz::Feature] = if spec.kerning { &[] } else { &no_kern };
-
     let mut paths = Vec::new();
     let mut lines = Vec::new();
     let mut bounds: Option<Bounds> = None;
@@ -124,32 +194,25 @@ fn layout_face(data: &[u8], index: u32, spec: &TextSpec) -> Result<TextGeometry,
     for (i, line) in spec.content.split('\n').enumerate() {
         let baseline_y = i as f32 * spec.line_height * spec.font_size;
 
-        let mut buffer = rustybuzz::UnicodeBuffer::new();
-        buffer.push_str(line);
-        buffer.guess_segment_properties();
         let shaped = if line.is_empty() {
-            None
+            Vec::new()
         } else {
-            Some(rustybuzz::shape(&face, features, buffer))
+            shape_line(&face, line, spec.kerning)
         };
 
         // Pass 1: pen positions (the line width is needed for alignment before outlining).
         let mut origins: Vec<(f32, rustybuzz::ttf_parser::GlyphId, f32)> = Vec::new();
         let mut pen = 0.0_f32;
-        if let Some(shaped) = &shaped {
-            let infos = shaped.glyph_infos();
-            let positions = shaped.glyph_positions();
-            for (g, (info, pos)) in infos.iter().zip(positions).enumerate() {
-                origins.push((
-                    pen + pos.x_offset as f32 * scale,
-                    rustybuzz::ttf_parser::GlyphId(info.glyph_id as u16),
-                    pos.y_offset as f32 * scale,
-                ));
-                pen += pos.x_advance as f32 * scale;
-                let cluster_ends = infos.get(g + 1).is_none_or(|n| n.cluster != info.cluster);
-                if cluster_ends {
-                    pen += tracking_px;
-                }
+        for (g, glyph) in shaped.iter().enumerate() {
+            origins.push((
+                pen + glyph.x_offset * scale,
+                rustybuzz::ttf_parser::GlyphId(glyph.glyph_id as u16),
+                glyph.y_offset * scale,
+            ));
+            pen += glyph.x_advance * scale;
+            let cluster_ends = shaped.get(g + 1).is_none_or(|n| n.cluster != glyph.cluster);
+            if cluster_ends {
+                pen += tracking_px;
             }
         }
         let width = pen;

@@ -1,7 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { PropertyPanel } from '@preset.nz/facets';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { useFontCatalogueStore } from '@/fonts/catalogue';
 import type { FontFace, FontRef } from '@/fonts/types';
+import '@/panels/stack/bootstrap';
+import { useSceneStore } from '@/scene/store';
 import type { TextNode } from '@/scene/types';
-import { DEFAULT_STROKE, readTextValues, textPatchFor } from './textScope';
+import { registerTextFieldRenderers } from './fontFieldRenderers';
+import {
+  clearRememberedColours,
+  DEFAULT_STROKE,
+  readTextValues,
+  registerTextScope,
+  TEXT_SCOPE_KEY,
+  textPatchFor,
+  textScope,
+} from './textScope';
 
 const face = (
   family: string,
@@ -46,7 +61,7 @@ const node = (overrides: Partial<TextNode> = {}): TextNode => ({
   font: refOf(ps('HelveticaNeue-Bold')),
   fontSize: 72,
   tracking: 0,
-  kerning: true,
+  kerning: 100,
   lineHeight: 1.2,
   align: 'left',
   fill: '#ffffff',
@@ -104,33 +119,140 @@ describe('font.style', () => {
 });
 
 describe('stroke', () => {
-  it('stroke.width with stroke null turns it on with the default colour', () => {
-    expect(textPatchFor(node(), 'stroke.width', 5, FACES)).toEqual({
-      stroke: { color: DEFAULT_STROKE.color, width: 5 },
+  const on = { color: '#112233', width: 4 };
+
+  it('stroke.width is not writable while the stroke is disabled', () => {
+    expect(textPatchFor(node(), 'stroke.width', 5, FACES)).toBeNull();
+  });
+
+  it('stroke.color (a colour) is ignored while the stroke is disabled; Enabled is the way on', () => {
+    expect(textPatchFor(node(), 'stroke.color', '#ff0000', FACES)).toBeNull();
+    expect(textPatchFor(node(), 'stroke.color', true, FACES)).toEqual({
+      stroke: { color: DEFAULT_STROKE.color, width: DEFAULT_STROKE.width },
     });
   });
 
-  it('stroke.color with stroke null turns it on with the default width', () => {
-    expect(textPatchFor(node(), 'stroke.color', '#ff0000', FACES)).toEqual({
-      stroke: { color: '#ff0000', width: DEFAULT_STROKE.width },
+  it('enabling restores the remembered colour with the default width', () => {
+    expect(textPatchFor(node(), 'stroke.color', true, FACES, { stroke: '#abcdef' })).toEqual({
+      stroke: { color: '#abcdef', width: DEFAULT_STROKE.width },
     });
   });
 
   it('rebuilds the stroke object rather than mutating it', () => {
-    const stroke = { color: '#112233', width: 4 };
-    const n = node({ stroke });
+    const n = node({ stroke: on });
     const patch = textPatchFor(n, 'stroke.width', 9, FACES);
     expect(patch).toEqual({ stroke: { color: '#112233', width: 9 } });
-    expect(patch?.stroke).not.toBe(stroke);
-    expect(stroke).toEqual({ color: '#112233', width: 4 });
+    expect(patch?.stroke).not.toBe(on);
+    expect(on).toEqual({ color: '#112233', width: 4 });
   });
 
-  it('stroke.color null switches the stroke off', () => {
-    expect(
-      textPatchFor(node({ stroke: { color: '#000000', width: 2 } }), 'stroke.color', null, FACES),
-    ).toEqual({
+  it('recolours an enabled stroke, and null switches it off', () => {
+    expect(textPatchFor(node({ stroke: on }), 'stroke.color', '#ff0000', FACES)).toEqual({
+      stroke: { color: '#ff0000', width: 4 },
+    });
+    expect(textPatchFor(node({ stroke: on }), 'stroke.color', null, FACES)).toEqual({
       stroke: null,
     });
+  });
+});
+
+describe('fill enable', () => {
+  it('true restores the remembered colour, else #ffffff', () => {
+    expect(textPatchFor(node({ fill: null }), 'fill', true, FACES, { fill: '#ff8800' })).toEqual({
+      fill: '#ff8800',
+    });
+    expect(textPatchFor(node({ fill: null }), 'fill', true, FACES)).toEqual({ fill: '#ffffff' });
+  });
+});
+
+describe('enable/disable through the scope remembers the colour', () => {
+  beforeEach(() => {
+    clearRememberedColours();
+    useFontCatalogueStore.setState({ status: 'idle', faces: [] });
+  });
+
+  const seed = (overrides: Partial<TextNode>) => {
+    const n = node(overrides);
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [n] } }));
+    return n.id;
+  };
+  const current = (id: string) =>
+    useSceneStore.getState().scene.nodes.find((x) => x.id === id) as TextNode;
+  const write = (id: string, path: string, value: unknown) =>
+    textScope.write?.(path, value, { nodeId: id }, null);
+
+  it('fill: disable then enable gives the old colour back', () => {
+    const id = seed({ fill: '#336699' });
+    write(id, 'fill', null);
+    expect(current(id).fill).toBeNull();
+    write(id, 'fill', true);
+    expect(current(id).fill).toBe('#336699');
+  });
+
+  it('fill: enabling with nothing remembered gives #ffffff', () => {
+    const id = seed({ fill: null });
+    write(id, 'fill', true);
+    expect(current(id).fill).toBe('#ffffff');
+  });
+
+  it('stroke: disable then enable restores colour, width resets to the default', () => {
+    const id = seed({ stroke: { color: '#ff00ff', width: 7 } });
+    write(id, 'stroke.color', null);
+    expect(current(id).stroke).toBeNull();
+    write(id, 'stroke.width', 9); // not writable while disabled
+    expect(current(id).stroke).toBeNull();
+    write(id, 'stroke.color', true);
+    expect(current(id).stroke).toEqual({ color: '#ff00ff', width: DEFAULT_STROKE.width });
+  });
+
+  it('stroke: enabling with nothing remembered gives { #000000, 2 }', () => {
+    const id = seed({ stroke: null });
+    write(id, 'stroke.color', true);
+    expect(current(id).stroke).toEqual({ color: '#000000', width: 2 });
+  });
+});
+
+describe('Text panel rendering', () => {
+  registerTextFieldRenderers();
+  registerTextScope();
+
+  const render = (n: TextNode) => {
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [n] } }));
+    return renderToStaticMarkup(
+      createElement(PropertyPanel, {
+        scopeKey: TEXT_SCOPE_KEY,
+        selection: { nodeId: n.id },
+        ctx: { nodeId: n.id, font: n.font },
+      }),
+    );
+  };
+  /** The `<input>` that follows a number field's label span, as markup. */
+  const inputAfter = (markup: string, label: string) => {
+    const start = markup.indexOf(`>${label}<`);
+    if (start === -1) throw new Error(`no field ${label}`);
+    const open = markup.indexOf('<input', start);
+    return markup.slice(open, markup.indexOf('>', open));
+  };
+
+  it('Text is the first field, above Font', () => {
+    const markup = render(node());
+    expect(markup.indexOf('aria-label="Text"')).toBeGreaterThan(-1);
+    expect(markup.indexOf('aria-label="Text"')).toBeLessThan(markup.indexOf('Font'));
+    expect(markup).toContain('>Text<');
+    expect(markup).toContain('>HI</textarea>');
+  });
+
+  it('stroke width is disabled while the stroke is off, live while it is on', () => {
+    expect(inputAfter(render(node({ stroke: null })), 'Stroke width')).toContain('disabled=""');
+    expect(
+      inputAfter(render(node({ stroke: { color: '#000000', width: 2 } })), 'Stroke width'),
+    ).not.toContain('disabled=""');
+  });
+
+  it('Fill and Stroke use "Enabled" checkboxes, never "None"', () => {
+    const markup = render(node());
+    expect(markup.match(/Enabled/g)).toHaveLength(2);
+    expect(markup).not.toContain('None');
   });
 });
 
@@ -138,7 +260,9 @@ describe('plain fields', () => {
   it('maps fill, kerning and align, and rejects nonsense', () => {
     expect(textPatchFor(node(), 'fill', null, FACES)).toEqual({ fill: null });
     expect(textPatchFor(node(), 'fill', '#abcdef', FACES)).toEqual({ fill: '#abcdef' });
-    expect(textPatchFor(node(), 'kerning', false, FACES)).toEqual({ kerning: false });
+    expect(textPatchFor(node(), 'kerning', 35, FACES)).toEqual({ kerning: 35 });
+    expect(textPatchFor(node(), 'kerning', true, FACES)).toBeNull();
+    expect(textPatchFor(node(), 'content', 'A\nB', FACES)).toEqual({ content: 'A\nB' });
     expect(textPatchFor(node(), 'align', 'center', FACES)).toEqual({ align: 'center' });
     expect(textPatchFor(node(), 'align', 'justify', FACES)).toBeNull();
     expect(textPatchFor(node(), 'fontSize', Number.NaN, FACES)).toBeNull();
@@ -150,9 +274,11 @@ describe('plain fields', () => {
     expect(textPatchFor(node(), 'fontSize', 0, FACES)).toEqual({ fontSize: 1 });
     expect(textPatchFor(node(), 'tracking', -9000, FACES)).toEqual({ tracking: -500 });
     expect(textPatchFor(node(), 'lineHeight', 0.1, FACES)).toEqual({ lineHeight: 0.5 });
-    expect(textPatchFor(node(), 'stroke.width', 500, FACES)).toEqual({
-      stroke: { color: DEFAULT_STROKE.color, width: 200 },
-    });
+    expect(textPatchFor(node(), 'kerning', 900, FACES)).toEqual({ kerning: 200 });
+    expect(textPatchFor(node(), 'kerning', -5, FACES)).toEqual({ kerning: 0 });
+    expect(
+      textPatchFor(node({ stroke: { color: '#000000', width: 2 } }), 'stroke.width', 500, FACES),
+    ).toEqual({ stroke: { color: '#000000', width: 200 } });
   });
 });
 

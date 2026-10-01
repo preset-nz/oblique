@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import type { FontRef } from '@/fonts/types';
-import * as history from '@/scene/history';
-import { useSelectionStore } from '@/scene/selection';
-import { useSceneStore } from '@/scene/store';
-import type { Scene, TextNode } from '@/scene/types';
-import { useToolStateStore } from '../toolState';
+import * as history from './history';
+import { useSelectionStore } from './selection';
+import { useSceneStore } from './store';
 import {
   beginNewTextAt,
   beginReEdit,
+  beginTextEdit,
   commitActiveTextEdit,
   useTextEditStore,
 } from './textEditState';
+import type { Scene, TextNode } from './types';
 
 const font: FontRef = {
   family: 'Helvetica',
@@ -49,8 +49,13 @@ function existingText(content = 'HELLO'): string {
 beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
   useSelectionStore.setState({ selection: { kind: 'none' } });
-  useToolStateStore.setState({ tool: 'text' });
-  useTextEditStore.setState({ editing: null, lastUsedFont: null, lastUsedSize: null });
+  useTextEditStore.setState({
+    editing: null,
+    focusRequest: 0,
+    focusTarget: null,
+    lastUsedFont: null,
+    lastUsedSize: null,
+  });
   useFontCatalogueStore.setState({ status: 'idle', faces: [] });
   history.clear();
 });
@@ -140,6 +145,9 @@ describe('commitActiveTextEdit', () => {
   it('re-edit: one undo step restores the original words', async () => {
     const id = existingText('HELLO');
     expect(beginReEdit(id)).toBe(true);
+    // The ask alone opens nothing: the field's focus does.
+    expect(edit().editing).toBeNull();
+    beginTextEdit(id, false); // field focus
     expect(edit().editing).toEqual({ nodeId: id, isNew: false });
     type(id, 'HELLO W');
     type(id, 'HELLO WORLD');
@@ -154,13 +162,15 @@ describe('commitActiveTextEdit', () => {
   it('re-edit that changes nothing records no step', () => {
     const id = existingText();
     beginReEdit(id);
-    commitActiveTextEdit();
+    beginTextEdit(id, false);
+    commitActiveTextEdit(); // field blur
     expect(history.canUndo()).toBe(false);
   });
 
   it('re-edit that blanks the content keeps the node (only new blank nodes are discarded)', () => {
     const id = existingText('HELLO');
     beginReEdit(id);
+    beginTextEdit(id, false);
     type(id, '');
     commitActiveTextEdit();
     expect(textAt(id).content).toBe('');
@@ -174,6 +184,118 @@ describe('commitActiveTextEdit', () => {
     commitActiveTextEdit();
     await history.undo();
     expect(history.canUndo()).toBe(false);
+  });
+});
+
+describe('the edit transaction is the field focus (dogfood-revisions.md)', () => {
+  it('a new node: the field focusing after the T click opens no second transaction', async () => {
+    const id = beginNewTextAt({ x: 0, y: 0 });
+    beginTextEdit(id, false); // the field's onFocus
+    expect(edit().editing).toEqual({ nodeId: id, isNew: true });
+    type(id, 'ABC');
+    commitActiveTextEdit(); // blur
+    await history.undo();
+    expect(scene().nodes).toHaveLength(0);
+    expect(history.canUndo()).toBe(false);
+  });
+
+  it('new + blank: focus then blur leaves no node and no history entry', () => {
+    const id = beginNewTextAt({ x: 0, y: 0 });
+    beginTextEdit(id, false);
+    commitActiveTextEdit();
+    expect(scene().nodes).toHaveLength(0);
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'none' });
+    expect(history.canUndo()).toBe(false);
+  });
+
+  it('re-edit through focus and blur is one undo step', async () => {
+    const id = existingText('HELLO');
+    beginReEdit(id);
+    beginTextEdit(id, false);
+    type(id, 'HELLO W');
+    type(id, 'HELLO WORLD');
+    commitActiveTextEdit();
+    await history.undo();
+    expect(textAt(id).content).toBe('HELLO');
+    expect(history.canUndo()).toBe(false);
+  });
+
+  it('Cmd+Z while the field is focused commits, then undoes; typing on opens a fresh edit', async () => {
+    const id = existingText('HELLO');
+    beginTextEdit(id, false);
+    type(id, 'HELLO WORLD');
+
+    // menu://edit/undo while focused.
+    commitActiveTextEdit();
+    await history.undo();
+    expect(textAt(id).content).toBe('HELLO');
+    expect(edit().editing).toBeNull();
+
+    // The caret is still in the field: the next keystroke re-opens an edit (what
+    // the field's onChange does) and is again exactly one undo step.
+    beginTextEdit(id, false);
+    type(id, 'HELLO!');
+    commitActiveTextEdit();
+    await history.undo();
+    expect(textAt(id).content).toBe('HELLO');
+    expect(history.canUndo()).toBe(false);
+  });
+
+  it('beginTextEdit ignores a locked or missing node', () => {
+    const id = existingText();
+    useSceneStore.setState({
+      scene: {
+        ...scene(),
+        nodes: scene().nodes.map((n) => (n.id === id ? { ...n, state: 'locked' as const } : n)),
+      },
+    });
+    beginTextEdit(id, false);
+    beginTextEdit('nope', false);
+    expect(edit().editing).toBeNull();
+  });
+});
+
+describe('focus requests', () => {
+  it('a T click creates the node, selects it and bumps the focus request', () => {
+    const before = edit().focusRequest;
+    const id = beginNewTextAt({ x: 5, y: 6 });
+    expect(edit().focusRequest).toBe(before + 1);
+    expect(edit().focusTarget).toEqual({ nodeId: id, viaPointer: true });
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'node', nodeId: id });
+  });
+
+  it('re-editing bumps the request (viaPointer only when asked)', () => {
+    const id = existingText();
+    beginReEdit(id);
+    expect(edit().focusRequest).toBe(1);
+    expect(edit().focusTarget).toEqual({ nodeId: id, viaPointer: false });
+    beginReEdit(id, { viaPointer: true });
+    expect(edit().focusRequest).toBe(2);
+    expect(edit().focusTarget).toEqual({ nodeId: id, viaPointer: true });
+  });
+
+  it('a locked node honours no focus request', () => {
+    const id = existingText();
+    useSceneStore.setState({
+      scene: {
+        ...scene(),
+        nodes: scene().nodes.map((n) => (n.id === id ? { ...n, state: 'locked' as const } : n)),
+      },
+    });
+    beginReEdit(id);
+    expect(edit().focusRequest).toBe(0);
+    expect(edit().focusTarget).toBeNull();
+  });
+
+  it('consuming clears the target; a stale target is dropped when the selection moves on', () => {
+    const id = existingText();
+    beginReEdit(id);
+    edit().consumeFocusRequest();
+    expect(edit().focusTarget).toBeNull();
+
+    beginReEdit(id);
+    useSelectionStore.getState().clear();
+    expect(edit().focusTarget).toBeNull();
   });
 });
 
@@ -202,14 +324,6 @@ describe('beginReEdit', () => {
 });
 
 describe('other ways an edit ends', () => {
-  it('a tool change commits (a blank new node vanishes)', () => {
-    beginNewTextAt({ x: 0, y: 0 });
-    useToolStateStore.getState().setTool('move');
-    expect(edit().editing).toBeNull();
-    expect(scene().nodes).toHaveLength(0);
-    expect(history.canUndo()).toBe(false);
-  });
-
   it('the selection moving away commits', () => {
     const id = beginNewTextAt({ x: 0, y: 0 });
     type(id, 'KEEP');

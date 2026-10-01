@@ -13,6 +13,7 @@ import {
 import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
+import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from '@/scene/textEditState';
 import { IDENTITY_TRANSFORM_2D, isTextNode, isVectorNode } from '@/scene/types';
 import { ColourSelectOverlay } from './colourSelect/ColourSelectOverlay';
 import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel';
@@ -47,8 +48,7 @@ import { SmartSelectStatusPanel } from './smartSelect/SmartSelectStatusPanel';
 import { useSmartSelectStore } from './smartSelect/state';
 import { TransformBox } from './TransformBox';
 import { TextBounds } from './text/TextBounds';
-import { TextEditor } from './text/TextEditor';
-import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from './text/textEditState';
+import './text/textEditTriggers';
 import { type ClickRecord, isDoubleClick } from './text/textFrame';
 import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
@@ -354,8 +354,8 @@ export function Viewport() {
         return;
       }
 
-      // Enter re-opens the selected, unlocked text node's overlay editor
-      // (text-tool-and-inspector.md) — the only way into mask-output text,
+      // Enter focuses the selected, unlocked text node's Text field in the
+      // inspector (dogfood-revisions.md) — the only way into mask-output text,
       // which hit-testing skips. Only when focus is on the canvas side or the
       // layer list, so Enter still activates other focused buttons.
       if (e.key === 'Enter' && !e.repeat && !isEditableTarget && canEditTextFrom(target)) {
@@ -555,18 +555,20 @@ export function Viewport() {
         return;
       }
 
-      // Text tool (text-tool-and-inspector.md): commit any open edit first (the
-      // TextEditor's capture-phase listener has normally done it already — it
-      // is idempotent), then re-edit the unlocked text under the pointer, or
-      // place a new blank node. preventDefault so this pointerdown can't pull
-      // focus back out of the textarea the edit is about to mount.
+      // Text tool (text-tool-and-inspector.md, dogfood-revisions.md): commit any
+      // open edit first (the Text field's window-level pointerdown listener has
+      // normally done it already — it is idempotent), then focus the unlocked
+      // text under the pointer, or place a new blank node. Either way the words
+      // are typed in the inspector's Text field, which this only asks for focus.
+      // preventDefault so this pointerdown's own default action doesn't pull focus
+      // back out of the field (the field also defends it until pointerup).
       if (tool === 'text') {
         e.preventDefault();
         commitActiveTextEdit();
         const docPt = toDoc(e.clientX, e.clientY);
         const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
         if (hit && isTextNode(hit) && hit.state !== 'locked') {
-          beginReEdit(hit.id);
+          beginReEdit(hit.id, { viaPointer: true });
         } else {
           beginNewTextAt(docPt);
         }
@@ -578,9 +580,8 @@ export function Viewport() {
       const docPt = toDoc(e.clientX, e.clientY);
       const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
 
-      // Double-click on unlocked text re-edits it. Checked BEFORE the drag
-      // branch below: its beginTransaction() would otherwise flush the edit's
-      // own transaction. A locked node falls through (and does nothing here).
+      // Double-click on unlocked text focuses its Text field. Checked BEFORE the
+      // drag branch below, which would otherwise start moving the node. A locked node falls through (and does nothing here).
       const click: ClickRecord | null = hit
         ? { t: e.timeStamp, x: e.clientX, y: e.clientY, nodeId: hit.id }
         : null;
@@ -595,7 +596,7 @@ export function Viewport() {
       ) {
         lastClickRef.current = null;
         e.preventDefault();
-        beginReEdit(hit.id);
+        beginReEdit(hit.id, { viaPointer: true });
         return;
       }
 
@@ -1080,7 +1081,6 @@ export function Viewport() {
           )}
         </g>
       </svg>
-      <TextEditor />
       <MarqueeToolbar />
       {tool === 'select-smart' && <SmartSelectStatusPanel />}
       {tool === 'select-colour' && <ColourSelectStatusPanel />}
