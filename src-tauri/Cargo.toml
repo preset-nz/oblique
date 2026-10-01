@@ -29,3 +29,7 @@ fontdb = "0.24"
 ttf-parser = "0.25"
 
 rustybuzz = "0.20"
+
+[dev-dependencies]
+# Golden-render test rasteriser only (text/raster_tests.rs); nothing ships. BSD-3-Clause.
+tiny-skia = "0.11"

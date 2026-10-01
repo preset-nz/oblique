@@ -272,4 +272,6 @@ fn layout_face(data: &[u8], index: u32, spec: &TextSpec) -> Result<TextGeometry,
 }
 
 #[cfg(test)]
+mod raster_tests;
+#[cfg(test)]
 mod tests;
