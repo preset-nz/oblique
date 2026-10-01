@@ -2,7 +2,7 @@
 //!
 //! The webview can't enumerate system fonts, and an unknown CSS family falls back
 //! silently, so "installed or missing?" and "which face is closest?" need Rust.
-//! `list_fonts` scans once (fontdb), caches the result for the process lifetime and
+//! `list_fonts` scans once (fontdb, via the shared `database()`), caches the result for the process lifetime and
 //! hands the frontend a flat, deterministically ordered list of faces. Faces are
 //! addressed by PostScript name everywhere downstream.
 
@@ -28,6 +28,18 @@ pub struct FontFace {
 }
 
 static CATALOGUE: OnceLock<Vec<FontFace>> = OnceLock::new();
+static DATABASE: OnceLock<fontdb::Database> = OnceLock::new();
+
+/// The process-wide system font database, scanned on first use. Shared by the catalogue
+/// and the text engine (Epic 20, story 2). The first call blocks on the scan, so call
+/// it from a blocking context.
+pub fn database() -> &'static fontdb::Database {
+    DATABASE.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    })
+}
 
 #[tauri::command]
 pub async fn list_fonts() -> Vec<FontFace> {
@@ -82,8 +94,7 @@ fn name_string(face: &ttf_parser::Face, id: u16) -> Option<String> {
 }
 
 fn scan_system_fonts() -> Vec<FontFace> {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
+    let db = database();
 
     let mut faces = Vec::with_capacity(db.len());
     for info in db.faces() {

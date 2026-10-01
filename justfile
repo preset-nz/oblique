@@ -41,6 +41,7 @@ check:
     uv run --project sidecar ruff format --check .
     uv run --project sidecar pytest sidecar
     ./node_modules/.bin/vitest run
+    cargo test --manifest-path src-tauri/Cargo.toml --lib
     ./node_modules/.bin/depcruise src
     node scripts/check-licenses.mjs
     python3 scripts/check_python_licenses.py

@@ -28,3 +28,4 @@ tauri-plugin-fs = "2.5.1"
 fontdb = "0.24"
 ttf-parser = "0.25"
 
+rustybuzz = "0.20"

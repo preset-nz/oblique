@@ -1,6 +1,8 @@
 mod fonts;
 mod menu;
 mod sidecar;
+mod text;
+mod text_cmd;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -18,6 +20,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             fonts::list_fonts,
+            text_cmd::text_outlines,
             sidecar::sidecar_send,
             sidecar::sidecar_subscribe
         ])

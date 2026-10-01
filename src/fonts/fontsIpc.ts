@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { TextGeometry, TextSpec } from './textGeometry';
 import type { FontFace } from './types';
 
 /**
@@ -7,4 +8,9 @@ import type { FontFace } from './types';
  */
 export function listFonts(): Promise<FontFace[]> {
   return invoke<FontFace[]>('list_fonts');
+}
+
+/** Shapes `spec` in Rust and returns anchor-space glyph outlines. Rejects with the Rust error string. */
+export function textOutlines(spec: TextSpec): Promise<TextGeometry> {
+  return invoke<TextGeometry>('text_outlines', { spec });
 }
