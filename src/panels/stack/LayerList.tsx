@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { type SpanRole, spanRoles } from '@/compositor/composite';
 import { cookNodeFullRes } from '@/cook/cook';
 import { missingFontTooltip, useMissingFont } from '@/fonts/missingFonts';
 import * as cache from '@/scene/cache';
@@ -141,17 +142,25 @@ function FontMissingBadge({ node }: { node: TextNode }) {
   );
 }
 
+// Mask-span members (layer-list-span-indent.md): indented one level with a muted
+// left rail. The rail extends up across the list's gap-1 so consecutive members
+// (and the mask row above) read as one connected guide. Padding only, no nesting.
+const MEMBER_ROW_CLASS =
+  'relative ml-3 rounded-l-none before:absolute before:-top-1 before:bottom-0 before:left-0 before:w-px before:bg-neutral-700';
+
 function LayerRow({
   node,
   index,
   length,
   selected,
+  spanRole,
   onSelect,
 }: {
   node: SceneNode;
   index: number;
   length: number;
   selected: boolean;
+  spanRole: SpanRole;
   onSelect: () => void;
 }) {
   const setNodeProp = useSceneStore((s) => s.setNodeProp);
@@ -247,7 +256,7 @@ function LayerRow({
     // biome-ignore lint/a11y/noStaticElementInteractions: same — pointer-only convenience
     <div
       onClick={onSelect}
-      className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''}`}
+      className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''} ${spanRole === 'member' ? MEMBER_ROW_CLASS : ''}`}
     >
       {editingLabel ? (
         <div className="flex flex-1 items-center gap-2 min-w-0">
@@ -460,6 +469,7 @@ export function LayerList({
   const nodes = useSceneStore((s) => s.scene.nodes);
 
   if (nodes.length === 0) return null;
+  const roles = spanRoles(nodes);
 
   return (
     // data-layer-list: Viewport's Enter-to-edit-text shortcut recognises focus
@@ -472,6 +482,7 @@ export function LayerList({
           index={index}
           length={nodes.length}
           selected={node.id === selectedNodeId}
+          spanRole={roles[index] ?? 'none'}
           onSelect={() => onSelectNode(node.id)}
         />
       ))}

@@ -194,6 +194,30 @@ export function splitIntoSpans(nodes: SceneNode[]): SceneNode[][] {
   return spans;
 }
 
+/** A node's place in the mask-span structure (layer-list-span-indent.md). */
+export type SpanRole = 'head' | 'member' | 'none';
+
+/**
+ * Per-node span role, index-aligned with `nodes` (layer-panel order, top
+ * first). Derived from `splitIntoSpans`, so the panel and the compositor share
+ * one walk. A mask-terminated span's closing mask node is its `head`, the
+ * nodes below it (in its span) are `member`s; nodes above every mask form the
+ * trailing non-mask-terminated span and are `none`. Positional only —
+ * visibility is deliberately ignored.
+ */
+export function spanRoles(nodes: SceneNode[]): SpanRole[] {
+  const roles = new Map<SceneNode, SpanRole>();
+  for (const span of splitIntoSpans(nodes)) {
+    const last = span[span.length - 1];
+    if (!last || last.output !== 'mask') {
+      for (const node of span) roles.set(node, 'none');
+      continue;
+    }
+    for (const node of span) roles.set(node, node === last ? 'head' : 'member');
+  }
+  return nodes.map((node) => roles.get(node) ?? 'none');
+}
+
 /** Destination draw size for a node at `level`: its own `sourceSize`, scaled by the level's factor. */
 export function destSizeFor(
   node: SceneNode,

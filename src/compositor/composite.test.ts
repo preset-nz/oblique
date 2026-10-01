@@ -11,6 +11,7 @@ import {
   pickBestAvailable,
   resetCompositeCallCount,
   resolutionFactorFor,
+  spanRoles,
   splitIntoSpans,
 } from './composite';
 
@@ -268,6 +269,54 @@ describe('splitIntoSpans', () => {
     // bottom, mask, top — the mask ends the first span.
     const spans = splitIntoSpans([top, mask, bottom]);
     expect(spans).toEqual([[bottom, mask], [top]]);
+  });
+});
+
+describe('spanRoles', () => {
+  const img = (id: string) => makeNode(id);
+  const mask = (id: string) => makeNode(id, { output: 'mask' });
+
+  it("Georg's layout: members indent under the mask above them", () => {
+    const nodes = [mask('m1'), img('a'), img('b'), mask('m2'), img('c')];
+    expect(spanRoles(nodes)).toEqual(['head', 'member', 'member', 'head', 'member']);
+  });
+
+  it('nodes above every mask are unspanned', () => {
+    const nodes = [img('top'), mask('m'), img('under')];
+    expect(spanRoles(nodes)).toEqual(['none', 'head', 'member']);
+  });
+
+  it('a mask at the stack bottom has no members', () => {
+    expect(spanRoles([img('a'), mask('m')])).toEqual(['none', 'head']);
+    expect(spanRoles([mask('m')])).toEqual(['head']);
+  });
+
+  it('a stack with no masks is all unspanned; empty stack is empty', () => {
+    expect(spanRoles([img('a'), img('b')])).toEqual(['none', 'none']);
+    expect(spanRoles([])).toEqual([]);
+  });
+
+  it('adjacent masks are each a head with no members between them', () => {
+    expect(spanRoles([mask('m1'), mask('m2'), img('a')])).toEqual(['head', 'head', 'member']);
+  });
+
+  it('re-derives on output toggle, reorder and delete', () => {
+    const a = img('a');
+    const b = img('b');
+    const c = img('c');
+    expect(spanRoles([a, b, c])).toEqual(['none', 'none', 'none']);
+    // toggle b to mask: c becomes its member
+    const b2 = { ...b, output: 'mask' as const };
+    expect(spanRoles([a, b2, c])).toEqual(['none', 'head', 'member']);
+    // reorder: mask to the top
+    expect(spanRoles([b2, a, c])).toEqual(['head', 'member', 'member']);
+    // delete the mask: back to none
+    expect(spanRoles([a, c])).toEqual(['none', 'none']);
+  });
+
+  it('ignores visibility: a hidden mask still heads its span', () => {
+    const hidden = makeNode('m', { output: 'mask', visible: false });
+    expect(spanRoles([hidden, img('a')])).toEqual(['head', 'member']);
   });
 });
 
