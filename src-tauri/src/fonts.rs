@@ -25,6 +25,9 @@ pub struct FontFace {
     pub italic: bool,
     /// "serif" | "sans" | "mono" | "script" | "display" | "symbol" | "unknown"
     pub category: String,
+    /// The cmap maps all 52 of `A–Z a–z` (font-picker-curation.md). Only the picker
+    /// reads it; the matcher and missing-font detection see every face.
+    pub latin: bool,
 }
 
 static CATALOGUE: OnceLock<Vec<FontFace>> = OnceLock::new();
@@ -74,6 +77,11 @@ fn family_class_hi(face: &ttf_parser::Face) -> Option<u8> {
     os2.get(30).copied()
 }
 
+/// True when the face's cmap maps every one of `A–Z a–z` — i.e. it can set basic Latin text.
+fn covers_basic_latin(face: &ttf_parser::Face) -> bool {
+    ('A'..='Z').chain('a'..='z').all(|c| face.glyph_index(c).is_some())
+}
+
 /// English (US) record for `id` if present, else the first decodable record with that ID.
 fn name_string(face: &ttf_parser::Face, id: u16) -> Option<String> {
     let mut first: Option<String> = None;
@@ -107,9 +115,10 @@ fn scan_system_fonts() -> Vec<FontFace> {
                 .or_else(|| name_string(&face, name_id::FAMILY));
             let style = name_string(&face, name_id::TYPOGRAPHIC_SUBFAMILY)
                 .or_else(|| name_string(&face, name_id::SUBFAMILY));
-            Some((family, style, family_class_hi(&face)))
+            Some((family, style, family_class_hi(&face), covers_basic_latin(&face)))
         });
-        let (family, style, class_hi) = parsed.flatten().unwrap_or((None, None, None));
+        let (family, style, class_hi, latin) =
+            parsed.flatten().unwrap_or((None, None, None, false));
         let Some(family) = family.or_else(|| info.families.first().map(|(f, _)| f.clone())) else {
             continue;
         };
@@ -121,6 +130,7 @@ fn scan_system_fonts() -> Vec<FontFace> {
             italic: info.style != fontdb::Style::Normal,
             category: category_from_family_class(class_hi.unwrap_or(0), info.monospaced)
                 .to_string(),
+            latin,
         });
     }
     finalise(faces)
@@ -178,6 +188,7 @@ mod tests {
             weight,
             italic,
             category: "sans".into(),
+            latin: true,
         }
     }
 
@@ -194,6 +205,38 @@ mod tests {
         assert_eq!(names, ["Alpha-Regular", "Alpha-Italic", "Beta-Bold"]);
     }
 
+    /// Parses the first face named `ps` in the system database and runs `covers_basic_latin`.
+    fn latin_of(ps: &str) -> Option<bool> {
+        let db = database();
+        let info = db.faces().find(|f| f.post_script_name == ps)?;
+        db.with_face_data(info.id, |data, index| {
+            ttf_parser::Face::parse(data, index)
+                .ok()
+                .map(|face| covers_basic_latin(&face))
+        })
+        .flatten()
+    }
+
+    #[test]
+    fn basic_latin_coverage_on_system_faces() {
+        match latin_of("Helvetica") {
+            Some(v) => assert!(v, "Helvetica covers A-Z a-z"),
+            None => eprintln!("skipping: Helvetica is not installed"),
+        }
+        // A script-specific face, when one is present.
+        let mut checked = false;
+        for ps in ["AlBayan", "AlBayan-Bold", "NotoSansArabic-Regular", "NotoSansThai-Regular"] {
+            if let Some(v) = latin_of(ps) {
+                assert!(!v, "{ps} is not a Latin face");
+                checked = true;
+                break;
+            }
+        }
+        if !checked {
+            eprintln!("skipping: no non-Latin test face installed");
+        }
+    }
+
     /// Real scan of this machine's fonts. `cargo test -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -208,6 +251,13 @@ mod tests {
             .find(|f| f.postscript_name == "HelveticaNeue-CondensedBold")
             .expect("HelveticaNeue-CondensedBold");
         println!("{hn:?}");
+        let families: HashSet<_> = faces.iter().map(|f| f.family.to_lowercase()).collect();
+        let latin: HashSet<_> = faces
+            .iter()
+            .filter(|f| f.latin)
+            .map(|f| f.family.to_lowercase())
+            .collect();
+        println!("{} families, {} with a Latin face", families.len(), latin.len());
         assert_eq!(hn.family, "Helvetica Neue");
         assert_eq!(hn.style, "Condensed Bold");
     }

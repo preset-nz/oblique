@@ -97,7 +97,7 @@ describe('findMissingFonts', () => {
   it('reports a null substitute when nothing is installed, and finds nothing when all is installed', () => {
     addText(BLACKLETTER_BOLD);
     expect(findMissingFonts(textNodes(), [])[0].substitute).toBeNull();
-    expect(findMissingFonts(textNodes(), [{ ...BLACKLETTER_BOLD }])).toEqual([]);
+    expect(findMissingFonts(textNodes(), [{ ...BLACKLETTER_BOLD, latin: true }])).toEqual([]);
   });
 
   it('findUsedFonts lists installed fonts too, flagged', () => {

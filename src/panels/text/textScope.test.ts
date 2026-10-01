@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
-import type { FontFace, FontRef } from '@/fonts/types';
+import { type FontFace, type FontRef, fontRefOf } from '@/fonts/types';
 import '@/panels/stack/bootstrap';
 import { useSceneStore } from '@/scene/store';
 import type { TextNode } from '@/scene/types';
@@ -24,7 +24,7 @@ const face = (
   postscriptName: string,
   weight: number,
   italic = false,
-): FontFace => ({ family, style, postscriptName, weight, italic, category: 'sans' });
+): FontFace => ({ family, style, postscriptName, weight, italic, category: 'sans', latin: true });
 
 const FACES: FontFace[] = [
   face('Helvetica Neue', 'Light', 'HelveticaNeue-Light', 300),
@@ -38,7 +38,7 @@ const FACES: FontFace[] = [
   face('Plain Sans', 'Heavy', 'PlainSans-Heavy', 800),
 ];
 
-const refOf = (f: FontFace): FontRef => ({ ...f });
+const refOf = (f: FontFace): FontRef => fontRefOf(f);
 const ps = (name: string): FontFace => {
   const f = FACES.find((x) => x.postscriptName === name);
   if (!f) throw new Error(name);

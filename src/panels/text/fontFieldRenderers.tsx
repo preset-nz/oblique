@@ -1,6 +1,6 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
-import { TriangleAlert } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Star, TriangleAlert } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -11,7 +11,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useFontCatalogueStore } from '@/fonts/catalogue';
+import { type FontFamilyGroup, useFontCatalogueStore } from '@/fonts/catalogue';
+import { buildPickerSections } from '@/fonts/pickerSections';
+import {
+  noteUsed,
+  toggleFavourite,
+  useFavouritesOnlyStore,
+  useFontPreferencesStore,
+} from '@/fonts/preferences';
 import { cn } from '@/lib/utils';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { beginTextEdit, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
@@ -55,6 +62,57 @@ function MissingMarker({ hint }: { hint: string }) {
   );
 }
 
+/** One picker row: the family button, and a star that toggles the favourite without picking. */
+function PickerRow({
+  group,
+  selected,
+  starred,
+  onPick,
+}: {
+  group: FontFamilyGroup;
+  selected: boolean;
+  starred: boolean;
+  onPick: (family: string) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        'group flex items-center rounded hover:bg-neutral-800',
+        selected && 'bg-neutral-800',
+      )}
+    >
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        className={cn(
+          'min-w-0 flex-1 truncate px-2 py-1 text-left text-xs',
+          selected && 'text-neutral-50',
+        )}
+        onClick={() => onPick(group.family)}
+      >
+        {group.family}
+      </button>
+      <button
+        type="button"
+        aria-label={starred ? `Unfavourite ${group.family}` : `Favourite ${group.family}`}
+        aria-pressed={starred}
+        className={cn(
+          'mr-1 shrink-0 rounded p-1',
+          starred ? 'text-amber-400' : 'text-neutral-600 hover:text-neutral-300',
+        )}
+        onClick={(e) => {
+          // Starring must not pick the family.
+          e.stopPropagation();
+          void toggleFavourite(group.family);
+        }}
+      >
+        <Star size={12} fill={starred ? 'currentColor' : 'none'} />
+      </button>
+    </div>
+  );
+}
+
 /** Also used outside facets by the Replace Font dialog. `missingHint` adds the amber marker. */
 export function FontFamilyField({
   label,
@@ -70,9 +128,15 @@ export function FontFamilyField({
   missingHint?: string;
 }) {
   const status = useFontCatalogueStore((s) => s.status);
-  const families = useFontCatalogueStore((s) => s.families);
+  const pickerFamilies = useFontCatalogueStore((s) => s.pickerFamilies);
+  const prefs = useFontPreferencesStore((s) => s.prefs);
+  const favouritesOnly = useFavouritesOnlyStore((s) => s.on);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const sections = useMemo(
+    () => buildPickerSections(pickerFamilies, prefs, query, favouritesOnly),
+    [pickerFamilies, prefs, query, favouritesOnly],
+  );
 
   if (status !== 'ready' || !onChange || disabled) {
     return (
@@ -85,8 +149,12 @@ export function FontFamilyField({
     );
   }
 
-  const needle = query.trim().toLowerCase();
-  const shown = needle ? families.filter((f) => f.family.toLowerCase().includes(needle)) : families;
+  const starred = new Set(prefs.favourites.map((f) => f.toLowerCase()));
+  const pick = (name: string) => {
+    onChange(name);
+    void noteUsed(name);
+    setOpen(false);
+  };
 
   return (
     <div className="flex flex-col gap-1">
@@ -109,35 +177,56 @@ export function FontFamilyField({
             </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64 p-1">
-            <input
-              type="text"
-              aria-label="Search fonts"
-              placeholder="Search fonts"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="mb-1 w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-neutral-700 focus:ring-sky-500"
-            />
+            <div className="mb-1 flex items-center gap-1">
+              <input
+                type="text"
+                aria-label="Search fonts"
+                placeholder="Search fonts"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="min-w-0 flex-1 rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-neutral-700 focus:ring-sky-500"
+              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Favourites only"
+                    aria-pressed={favouritesOnly}
+                    onClick={() => useFavouritesOnlyStore.getState().setOn(!favouritesOnly)}
+                    className={cn(
+                      'shrink-0 rounded p-1.5 hover:bg-neutral-800',
+                      favouritesOnly ? 'text-amber-400' : 'text-neutral-500',
+                    )}
+                  >
+                    <Star size={14} fill={favouritesOnly ? 'currentColor' : 'none'} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Favourites only</TooltipContent>
+              </Tooltip>
+            </div>
             <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Font families">
-              {shown.length === 0 && (
-                <div className="px-2 py-1 text-xs text-neutral-500">No matching fonts.</div>
+              {sections.length === 0 && (
+                <div className="px-2 py-1 text-xs text-neutral-500">
+                  {favouritesOnly && !query.trim() ? 'No favourites yet.' : 'No matching fonts.'}
+                </div>
               )}
-              {shown.map((f) => (
-                <button
-                  key={f.family}
-                  type="button"
-                  role="option"
-                  aria-selected={f.family === family}
-                  className={cn(
-                    'block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800',
-                    f.family === family && 'bg-neutral-800 text-neutral-50',
+              {sections.map((section) => (
+                <div key={section.id}>
+                  {section.heading && (
+                    <div className="px-2 pt-1.5 pb-0.5 text-[10px] font-medium tracking-wide text-neutral-500 uppercase">
+                      {section.heading}
+                    </div>
                   )}
-                  onClick={() => {
-                    onChange(f.family);
-                    setOpen(false);
-                  }}
-                >
-                  {f.family}
-                </button>
+                  {section.families.map((f) => (
+                    <PickerRow
+                      key={f.family}
+                      group={f}
+                      selected={f.family === family}
+                      starred={starred.has(f.family.toLowerCase())}
+                      onPick={pick}
+                    />
+                  ))}
+                </div>
               ))}
             </div>
           </PopoverContent>

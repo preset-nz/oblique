@@ -15,6 +15,12 @@ interface FontCatalogueState {
   byPostscript: Map<string, FontFace>;
   /** Grouped by family, order preserved from Rust. */
   families: FontFamilyGroup[];
+  /**
+   * What the family picker lists: families with at least one Latin face. `families`
+   * stays complete, so the matcher and missing-font detection resolve a document's
+   * non-Latin font exactly (font-picker-curation.md).
+   */
+  pickerFamilies: FontFamilyGroup[];
   /** Idempotent: a second call while loading/ready is a no-op. */
   load: () => Promise<void>;
 }
@@ -36,11 +42,16 @@ export function groupFamilies(faces: FontFace[]): FontFamilyGroup[] {
   return groups;
 }
 
+/** Families that can set basic Latin text (at least one face covers A–Z a–z). */
+export const pickerFamiliesOf = (families: FontFamilyGroup[]): FontFamilyGroup[] =>
+  families.filter((g) => g.faces.some((f) => f.latin));
+
 export const useFontCatalogueStore = create<FontCatalogueState>(() => ({
   status: 'idle',
   faces: [],
   byPostscript: new Map(),
   families: [],
+  pickerFamilies: [],
   load() {
     inFlight ??= loadOnce();
     return inFlight;
@@ -70,11 +81,13 @@ async function loadOnce(): Promise<void> {
   set({ status: 'loading' });
   try {
     const faces = await listFonts();
+    const families = groupFamilies(faces);
     set({
       status: 'ready',
       faces,
       byPostscript: new Map(faces.map((f) => [f.postscriptName, f])),
-      families: groupFamilies(faces),
+      families,
+      pickerFamilies: pickerFamiliesOf(families),
     });
     // Text geometry may now resolve to a different face (missing-fonts.md).
     // The geometry cache keys on the spec's effective PostScript name, so
@@ -88,6 +101,12 @@ async function loadOnce(): Promise<void> {
     // No toast: text still renders by PostScript name; only the pickers and the
     // missing-font detection degrade.
     console.warn('Font catalogue unavailable:', err);
-    set({ status: 'error', faces: [], byPostscript: new Map(), families: [] });
+    set({
+      status: 'error',
+      faces: [],
+      byPostscript: new Map(),
+      families: [],
+      pickerFamilies: [],
+    });
   }
 }

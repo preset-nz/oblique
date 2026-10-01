@@ -5,6 +5,7 @@ import { Layout } from './app/Layout';
 import { installMenu } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
 import { useFontCatalogueStore } from './fonts/catalogue';
+import { loadFontPreferences } from './fonts/preferences';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
@@ -37,6 +38,8 @@ function App() {
   useEffect(() => void loadAiSettings(), []);
   // Installed-font catalogue (Epic 20 story 1) — idempotent, so StrictMode re-runs are safe.
   useEffect(() => void useFontCatalogueStore.getState().load(), []);
+  // Picker favourites and recents (font-picker-curation.md) — app-data JSON, loaded beside the catalogue.
+  useEffect(() => void loadFontPreferences(), []);
 
   // Once per app, not per StrictMode re-run: window listeners have no
   // teardown API worth building for a singleton window.

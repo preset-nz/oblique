@@ -7,7 +7,8 @@ export const face = (
   postscriptName: string,
   weight = 400,
   category: FontFace['category'] = 'sans',
-): FontFace => ({ family, style, postscriptName, weight, italic: false, category });
+  latin = true,
+): FontFace => ({ family, style, postscriptName, weight, italic: false, category, latin });
 
 export const BLACKLETTER_BOLD: FontRef = {
   family: 'Blackletter Grim',

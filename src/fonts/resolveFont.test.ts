@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultFontRef, resolveFont } from './resolveFont';
-import type { FontCategory, FontFace, FontRef } from './types';
+import { type FontCategory, type FontFace, type FontRef, fontRefOf } from './types';
 
 const face = (
   family: string,
@@ -8,9 +8,17 @@ const face = (
   weight = 400,
   italic = false,
   category: FontCategory = 'sans',
-): FontFace => ({ family, style: 'x', postscriptName, weight, italic, category });
+): FontFace => ({
+  family,
+  style: 'x',
+  postscriptName,
+  weight,
+  italic,
+  category,
+  latin: true,
+});
 
-const wantedOf = (f: FontFace): FontRef => ({ ...f });
+const wantedOf = (f: FontFace): FontRef => fontRefOf(f);
 
 const helv = [
   face('Helvetica Neue', 'HelveticaNeue-Light', 300),

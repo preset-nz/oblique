@@ -62,7 +62,7 @@ describe('effectiveFontFor', () => {
     const wanted = { ...BLACKLETTER_BOLD };
     setCatalogue('ready', INSTALLED);
     expect(effectiveFontFor(node(wanted)).postscriptName).toBe('TimesNewRomanPS-BoldMT');
-    setCatalogue('ready', [...INSTALLED, { ...wanted }]);
+    setCatalogue('ready', [...INSTALLED, { ...wanted, latin: true }]);
     expect(effectiveFontFor(node(wanted)).postscriptName).toBe('BlackletterGrim-Bold');
   });
 

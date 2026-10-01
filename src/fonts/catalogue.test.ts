@@ -15,6 +15,7 @@ const face = (family: string, postscriptName: string, weight = 400): FontFace =>
   weight,
   italic: false,
   category: 'sans',
+  latin: true,
 });
 
 const mocked = vi.mocked(listFonts);

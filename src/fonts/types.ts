@@ -8,6 +8,8 @@ export interface FontFace {
   weight: number;
   italic: boolean;
   category: FontCategory;
+  /** The face maps all of A–Z a–z. Only the family picker reads it (font-picker-curation.md). */
+  latin: boolean;
 }
 
 /**
@@ -23,4 +25,12 @@ export interface FontRef {
   category: FontCategory;
 }
 
-export const fontRefOf = (f: FontFace): FontRef => ({ ...f });
+/** Picks the FontRef fields explicitly: face-only flags like `latin` must never reach the saved scene. */
+export const fontRefOf = (f: FontFace): FontRef => ({
+  family: f.family,
+  style: f.style,
+  postscriptName: f.postscriptName,
+  weight: f.weight,
+  italic: f.italic,
+  category: f.category,
+});
