@@ -29,6 +29,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 import { toast } from 'sonner';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
+import * as prefixStore from '@/scene/prefixStore';
 import * as importModule from './import';
 import type { ProjectIoDeps } from './io';
 import {
@@ -503,6 +504,21 @@ describe('writeProjectFile', () => {
   });
 });
 
+describe('loadProject — prefix cache', () => {
+  it("drops the previous project's prefix-cache state (prefix-cache.md)", async () => {
+    prefixStore.setLastStack('stale-node', 'draft', ['x']);
+    prefixStore.setPrefix('stale-node', 'draft', {
+      descriptor: { source: 's', width: 1, height: 1, modifiers: ['x'] },
+      bytes: new Uint8Array(4),
+    });
+
+    await loadProject('/proj/x.oblique', makeDeps());
+
+    expect(prefixStore.getLastStack('stale-node', 'draft')).toBeUndefined();
+    expect(prefixStore.getPrefix('stale-node', 'draft')).toBeUndefined();
+  });
+});
+
 describe('loadProject', () => {
   it('loads the scene verbatim, rehydrates sources, marks nodes draft-dirty', async () => {
     const deps = makeDeps();
@@ -684,6 +700,15 @@ describe('newProject', () => {
     expect(clearCache).toHaveBeenCalled();
     expect(clearSources).toHaveBeenCalled();
     expect(clearHistory).toHaveBeenCalled();
+  });
+
+  it('clears prefix-cache state (prefix-cache.md)', async () => {
+    await loadProject('/proj/x.oblique', makeDeps());
+    prefixStore.setLastStack('n1', 'draft', ['x']);
+
+    await newProject(vi.fn());
+
+    expect(prefixStore.getLastStack('n1', 'draft')).toBeUndefined();
   });
 
   it('dirty project: prompts, and a cancelled prompt leaves the scene untouched', async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as cache from './cache';
 import { deleteNode } from './deleteNode';
+import * as prefixStore from './prefixStore';
 import * as sources from './sources';
 import { useSceneStore } from './store';
 import type { PixelNode } from './types';
@@ -30,6 +31,7 @@ function fakeBitmap(): ImageBitmap {
 
 beforeEach(() => {
   cache.clearAll();
+  prefixStore.clearAll();
   sources.clearAll();
   useSceneStore.setState({
     scene: {
@@ -63,6 +65,22 @@ describe('deleteNode', () => {
     expect(workingA.close).toHaveBeenCalled();
     expect(cache.get('b', 'draft')).toBe(draftB);
     expect(draftB.close).not.toHaveBeenCalled();
+  });
+
+  it("drops the deleted node's prefix-cache state, and only that node's", () => {
+    const entry = {
+      descriptor: { source: 's', width: 1, height: 1, modifiers: ['x'] },
+      bytes: new Uint8Array(4),
+    };
+    prefixStore.setPrefix('a', 'draft', entry);
+    prefixStore.setLastStack('a', 'draft', ['x']);
+    prefixStore.setPrefix('b', 'draft', entry);
+
+    deleteNode('a');
+
+    expect(prefixStore.getPrefix('a', 'draft')).toBeUndefined();
+    expect(prefixStore.getLastStack('a', 'draft')).toBeUndefined();
+    expect(prefixStore.getPrefix('b', 'draft')).toBe(entry);
   });
 
   it('drops the decoded source bitmap', () => {

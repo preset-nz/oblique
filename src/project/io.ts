@@ -15,6 +15,7 @@ import { useMissingFontsStore } from '@/fonts/missingFonts';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
+import * as prefixStore from '@/scene/prefixStore';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
@@ -305,6 +306,7 @@ export async function loadProject(
   // leaving it around leaks full-res ImageBitmaps (including baked ones)
   // across every Open. Same mechanism `newProject` already uses.
   cache.clearAll();
+  prefixStore.clearAll();
 
   // Baked-bitmap rehydration (baked-persistence.md) runs BEFORE the scene
   // lands in the store: the scheduler subscribes to scene changes and its
@@ -390,6 +392,7 @@ export async function newProject(
 
   useSceneStore.getState().resetScene();
   cache.clearAll();
+  prefixStore.clearAll();
   sources.clearAll();
   backgroundSource.clear();
 

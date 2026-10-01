@@ -1,5 +1,6 @@
 import { toast } from 'sonner';
 import { useLastCookStore } from '@/cook/lastCook';
+import * as prefixCache from '@/cook/prefixCache';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
@@ -213,6 +214,12 @@ export interface CookDeps {
   encode: (bytes: Uint8Array, width: number, height: number) => Promise<ImageBitmap>;
   setCache: (nodeId: string, level: CookLevel, bitmap: ImageBitmap) => void;
   clearDirty: (nodeId: string, level: CookLevel) => void;
+  /** Prefix cache (prefix-cache.md): the stored intermediate for a node/level. Production wiring is `scene/prefixStore.ts`. */
+  getPrefix: (nodeId: string, level: CookLevel) => prefixCache.PrefixEntry | undefined;
+  setPrefix: (nodeId: string, level: CookLevel, entry: prefixCache.PrefixEntry) => void;
+  /** Descriptors of the last successfully cooked full stack (no bytes) — only used to infer where an edit is happening. */
+  getLastStack: (nodeId: string, level: CookLevel) => string[] | undefined;
+  setLastStack: (nodeId: string, level: CookLevel, descriptors: string[]) => void;
 }
 
 function realDownscale(source: ImageBitmap, width: number, height: number): Uint8Array {
@@ -373,6 +380,10 @@ export const productionCookDeps: CookDeps = {
   encode: realEncode,
   setCache: cache.set,
   clearDirty: (nodeId, level) => useSceneStore.getState().clearDirty(nodeId, level),
+  getPrefix: prefixCache.getPrefix,
+  setPrefix: prefixCache.setPrefix,
+  getLastStack: prefixCache.getLastStack,
+  setLastStack: prefixCache.setLastStack,
 };
 
 /**
@@ -545,6 +556,29 @@ function maskInputsKey(
 }
 
 /**
+ * Pipe `bytes` through one group of modifiers: partitioned into same-backend
+ * runs, one sidecar call per run (none for an empty group).
+ */
+async function runGroup(
+  deps: Pick<CookDeps, 'runPython'>,
+  width: number,
+  height: number,
+  group: CookModifier[],
+  bytes: Uint8Array,
+): Promise<Uint8Array> {
+  let result = bytes;
+  for (const run of partitionRuns(group)) {
+    if (run.backend === 'rust') {
+      // deferred: rust ops via `cook_rust` (lands with the first Rust op) —
+      // no rust ops exist yet, so this branch is currently unreachable.
+      throw new Error('rust op backend not yet implemented');
+    }
+    result = await deps.runPython(width, height, run.modifiers, result);
+  }
+  return result;
+}
+
+/**
  * Cook one node at one resolution level: downscale the source, run the
  * enabled modifier stack through the sidecar (partitioned by backend —
  * today that's always a single Python run, per starter-ops.md), write the
@@ -600,20 +634,78 @@ export async function cookNode(
   // would let this in-flight cook clear that fresh dirty flag.
   const maskKeyAtStart = maskInputsKey(node, deps);
 
+  // Prefix-cache inputs (prefix-cache.md), captured synchronously beside the
+  // guard keys and before any await: what this cook's bytes will be derived
+  // from. The commit below re-derives them and only stores on an exact match,
+  // so a mid-cook edit can never leave a prefix claiming inputs it wasn't
+  // built from.
+  const sourceKey = prefixCache.sourceKeyFor(node, source);
+  const stackDescriptors = prefixCache.descriptorsFor(node, deps);
+  /** True while every prefix input still reads as it did at the start of this cook. */
+  const prefixInputsUnchanged = (): boolean => {
+    const latest = deps.getNode(nodeId);
+    if (latest?.type !== 'pixel' && latest?.type !== 'vector' && latest?.type !== 'text') {
+      return false;
+    }
+    const latestNode = latest as PixelNode | VectorNode | TextNode;
+    const [latestW, latestH] = computeTargetSize(
+      latestNode.type === 'pixel' ? latestNode.sourceSize : deps.getDocumentSize(),
+      factor,
+    );
+    return (
+      latestW === width &&
+      latestH === height &&
+      prefixCache.sourceKeyFor(
+        latestNode,
+        latestNode.type === 'pixel' ? deps.getSource(nodeId) : undefined,
+      ) === sourceKey &&
+      prefixCache.sameDescriptors(prefixCache.descriptorsFor(latestNode, deps), stackDescriptors)
+    );
+  };
+
   // Phase timings, logged at debug level. performance.now() reads are
   // sub-microsecond against phases costing milliseconds — measuring here
   // cannot skew the result. console.debug is invisible (and near-free)
   // unless devtools' Verbose level is on.
   const t0 = performance.now();
   try {
+    const enabled = modifiersAtStart.filter((m) => m.enabled);
+    const stackLength = enabled.length;
+    if (stackDescriptors.length !== stackLength) {
+      throw new Error('prefix descriptors are out of step with the enabled modifiers');
+    }
+
+    // Reuse check: a stored intermediate is only a hit when it was built from
+    // exactly this source, at exactly this size, by an exact prefix of this
+    // stack. Anything else — a miss — is today's full cook.
+    const stored = deps.getPrefix(nodeId, level);
+    const hit =
+      stored !== undefined &&
+      stored.descriptor.modifiers.length > 0 &&
+      stored.descriptor.source === sourceKey &&
+      stored.descriptor.width === width &&
+      stored.descriptor.height === height &&
+      stored.bytes.byteLength === width * height * 4 &&
+      prefixCache.isPrefix(stored.descriptor.modifiers, stackDescriptors)
+        ? stored
+        : undefined;
+    const start = hit ? hit.descriptor.modifiers.length : 0;
+
     // The geometry await sits inside this try: a Rust error (e.g. FontNotFound)
     // is a cook failure — one toast per burst, dirty stays, stale cache untouched.
-    let resultBytes =
-      node.type === 'pixel'
-        ? deps.downscale(source as ImageBitmap, width, height)
-        : node.type === 'text'
-          ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
-          : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+    let resultBytes: Uint8Array;
+    if (hit) {
+      // Always a copy: the stored buffer stays the cache's, whatever the run
+      // (or encode, when the prefix covers the whole stack) does with it.
+      resultBytes = hit.bytes.slice();
+    } else {
+      resultBytes =
+        node.type === 'pixel'
+          ? deps.downscale(source as ImageBitmap, width, height)
+          : node.type === 'text'
+            ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
+            : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+    }
     const tDownscale = performance.now();
     // Text mask targets' geometry (async) resolves here, inside the failure try,
     // so a Rust error is a cook failure; makeRasterizeFor stays synchronous.
@@ -627,18 +719,43 @@ export async function cookNode(
       height,
       factor,
     );
-    const cookModifiers = buildCookModifiers(modifiersAtStart, factor, deps.getOps(), rasterizeFor);
+    // Only the not-yet-applied modifiers are built (and so only their masks
+    // rasterised). The enabled-only 1:1 mapping between modifiers, descriptors
+    // and CookModifiers is what makes the index arithmetic below sound.
+    const pending = enabled.slice(start);
+    const cookModifiers = buildCookModifiers(pending, factor, deps.getOps(), rasterizeFor);
+    if (cookModifiers.length !== pending.length) {
+      throw new Error('buildCookModifiers no longer maps enabled modifiers 1:1');
+    }
+    // Mask planes were just rasterised from LIVE scene state, after an await:
+    // if anything the descriptors cover moved since the start (even if it has
+    // moved back by the end), these bytes aren't safe to file under them.
+    const builtFromStartInputs = prefixInputsUnchanged();
 
-    if (cookModifiers.length > 0) {
-      const runs = partitionRuns(cookModifiers);
-      for (const run of runs) {
-        if (run.backend === 'rust') {
-          // deferred: rust ops via `cook_rust` (lands with the first Rust op) —
-          // no rust ops exist yet, so this branch is currently unreachable.
-          throw new Error('rust op backend not yet implemented');
-        }
-        resultBytes = await deps.runPython(width, height, run.modifiers, resultBytes);
-      }
+    // Split point: where this stack first differs from the last one cooked is
+    // where an edit is happening; everything before it is worth keeping as the
+    // next prefix. Split only strictly inside the not-yet-applied range.
+    const lastStack = deps.getLastStack(nodeId, level);
+    const diffIdx = lastStack ? prefixCache.firstDiff(lastStack, stackDescriptors) : 0;
+    const split = diffIdx > start && diffIdx < stackLength;
+
+    let newPrefix: prefixCache.PrefixEntry | undefined;
+    if (split) {
+      const cut = diffIdx - start;
+      resultBytes = await runGroup(deps, width, height, cookModifiers.slice(0, cut), resultBytes);
+      newPrefix = {
+        descriptor: {
+          source: sourceKey as ImageBitmap | string,
+          width,
+          height,
+          modifiers: stackDescriptors.slice(0, diffIdx),
+        },
+        // Copied: the run below must not be able to touch what we keep.
+        bytes: resultBytes.slice(),
+      };
+      resultBytes = await runGroup(deps, width, height, cookModifiers.slice(cut), resultBytes);
+    } else {
+      resultBytes = await runGroup(deps, width, height, cookModifiers, resultBytes);
     }
     const tSidecar = performance.now();
 
@@ -647,7 +764,7 @@ export async function cookNode(
     console.debug(
       `[cook] ${node.label} ${level} ${width}x${height}: total ${(tEncode - t0).toFixed(1)}ms ` +
         `(downscale ${(tDownscale - t0).toFixed(1)}, sidecar+ipc ${(tSidecar - tDownscale).toFixed(1)}, ` +
-        `encode ${(tEncode - tSidecar).toFixed(1)})`,
+        `encode ${(tEncode - tSidecar).toFixed(1)}) prefix ${start}/${stackLength}`,
     );
     deps.setCache(nodeId, level, bitmap);
     // Success only: the status bar's "last cook" readout (cook-time-readout.md).
@@ -660,6 +777,14 @@ export async function cookNode(
       width,
       height,
     });
+
+    // Prefix commit — only now the whole cook has succeeded, and only if every
+    // input it was derived from still reads as it did at the start. A failed
+    // or raced cook leaves the previous entry in place.
+    if (builtFromStartInputs && prefixInputsUnchanged()) {
+      if (newPrefix) deps.setPrefix(nodeId, level, newPrefix);
+      deps.setLastStack(nodeId, level, stackDescriptors);
+    }
 
     const current = deps.getNode(nodeId);
     const textInputsUnchanged =
