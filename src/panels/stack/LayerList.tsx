@@ -17,7 +17,7 @@ import { deleteNode } from '@/scene/deleteNode';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode } from '@/scene/types';
-import { isVectorNode } from '@/scene/types';
+import { isTextNode, isVectorNode } from '@/scene/types';
 import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './lockUi';
 
 /**
@@ -277,7 +277,7 @@ function LayerRow({
       )}
       <div className="flex flex-1 flex-col gap-1 min-w-0">
         <div className="flex items-center gap-2">
-          {isVectorNode(node) && (
+          {(isVectorNode(node) || isTextNode(node)) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button

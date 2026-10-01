@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpDescriptor } from '@/sidecar/opsCache';
-import type { Modifier, PixelNode, SceneNode, VectorNode } from '../scene/types';
+import type { TextGeometry } from '../fonts/textGeometry';
+import type { Modifier, PixelNode, SceneNode, TextNode, VectorNode } from '../scene/types';
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn() },
@@ -72,6 +73,42 @@ function makeVectorNode(overrides: Partial<VectorNode> = {}): SceneNode {
   } as SceneNode;
 }
 
+const emptyGeometry: TextGeometry = { paths: [], lines: [], ascent: 0, descent: 0, bounds: null };
+
+function makeTextNode(overrides: Partial<TextNode> = {}): TextNode {
+  return {
+    id: 'node-1',
+    label: 'Text',
+    type: 'text',
+    state: 'active',
+    output: 'image',
+    cameraId: null,
+    modifiers: [],
+    visible: true,
+    blendMode: 'normal',
+    opacity: 1,
+    dirty: { draft: true, working: true },
+    content: 'HELLO',
+    font: {
+      family: 'Helvetica',
+      style: 'Regular',
+      postscriptName: 'Helvetica',
+      weight: 400,
+      italic: false,
+      category: 'sans',
+    },
+    fontSize: 72,
+    tracking: 0,
+    kerning: true,
+    lineHeight: 1.2,
+    align: 'left',
+    fill: '#ffffff',
+    stroke: null,
+    position: { x: 10, y: 60 },
+    ...overrides,
+  };
+}
+
 /** A minimal CookDeps with all browser/sidecar edges stubbed; individual fields overridable per test. */
 function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> = {}): CookDeps {
   return {
@@ -97,6 +134,10 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
     rasterizeVector: vi.fn(
       (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+    ),
+    getTextGeometry: vi.fn(async () => emptyGeometry),
+    rasterizeText: vi.fn(
+      (_node, _geometry, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
     ),
     runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
     encode: vi.fn(async () => fakeBitmap()),
@@ -521,6 +562,122 @@ describe('cookNode — vector nodes', () => {
   });
 });
 
+describe('cookNode — text nodes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCookErrorBurst();
+  });
+
+  it('cooks at documentSize x factor from the geometry + raster stubs', async () => {
+    const node = makeTextNode();
+    const nodeRef = { current: node as SceneNode };
+    const deps = makeDeps(nodeRef);
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.getSource).not.toHaveBeenCalled();
+    expect(deps.getTextGeometry).toHaveBeenCalledWith(node);
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, 100, 50, 1 / 8);
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything());
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
+  it('a geometry rejection is a cook failure: dirty stays, cache untouched, one toast per burst', async () => {
+    const nodeRef = { current: makeTextNode() as SceneNode };
+    const deps = makeDeps(nodeRef, {
+      getTextGeometry: vi.fn(async () => {
+        throw new Error('FontNotFound: Nope');
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+    await cookNode('node-1', 'working', deps);
+
+    expect(deps.rasterizeText).not.toHaveBeenCalled();
+    expect(deps.setCache).not.toHaveBeenCalled();
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs enabled modifiers over the text raster', async () => {
+    const nodeRef = {
+      current: makeTextNode({
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      }) as SceneNode,
+    };
+    const raster = new Uint8Array(100 * 50 * 4).fill(7);
+    const deps = makeDeps(nodeRef, { rasterizeText: vi.fn(() => raster) });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.runPython).toHaveBeenCalledTimes(1);
+    const [, , modifiers, payload] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(modifiers).toEqual([
+      { type: 'gaussian_blur', backend: 'python', params: { radius: 1 } },
+    ]);
+    expect(payload).toBe(raster);
+  });
+
+  it('race guard: a dirty-flag flip (new node object, same inputs) still clears dirty', async () => {
+    const nodeRef = { current: makeTextNode() as SceneNode };
+    const deps = makeDeps(nodeRef, {
+      getTextGeometry: vi.fn(async () => {
+        // markDirty replaces the node object but changes no cook input.
+        nodeRef.current = { ...nodeRef.current, dirty: { draft: true, working: true } };
+        return emptyGeometry;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
+  it('race guard: a cook-input edit mid-cook writes the bitmap but leaves dirty set', async () => {
+    const nodeRef = { current: makeTextNode() as SceneNode };
+    const deps = makeDeps(nodeRef, {
+      getTextGeometry: vi.fn(async () => {
+        nodeRef.current = { ...(nodeRef.current as TextNode), content: 'CHANGED' } as TextNode;
+        return emptyGeometry;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.setCache).toHaveBeenCalledTimes(1);
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('race guard: a position edit (raster-time input, not geometry) also leaves dirty set', async () => {
+    const nodeRef = { current: makeTextNode() as SceneNode };
+    const deps = makeDeps(nodeRef, {
+      encode: vi.fn(async () => {
+        nodeRef.current = {
+          ...(nodeRef.current as TextNode),
+          position: { x: 99, y: 99 },
+        } as TextNode;
+        return fakeBitmap();
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('cooks full-res at documentSize, factor 1', async () => {
+    const node = makeTextNode();
+    const deps = {
+      ...makeDeps({ current: node as SceneNode }),
+    } as unknown as FullResCookDeps;
+
+    await cookNodeFullRes('node-1', deps);
+
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, 800, 400, 1);
+    expect(deps.encode).toHaveBeenCalledWith(expect.any(Uint8Array), 800, 400);
+  });
+});
+
 describe('cookNodeFullRes', () => {
   function makeFullResDeps(
     nodeRef: { current: SceneNode },
@@ -548,6 +705,10 @@ describe('cookNodeFullRes', () => {
       ),
       rasterizeVector: vi.fn(
         (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+      ),
+      getTextGeometry: vi.fn(async () => emptyGeometry),
+      rasterizeText: vi.fn(
+        (_node, _geometry, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
       ),
       downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
       runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),

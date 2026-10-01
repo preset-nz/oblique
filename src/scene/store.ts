@@ -13,6 +13,7 @@ import type {
   PixelNode,
   Scene,
   SceneNode,
+  TextNode,
   Transform2D,
   VectorMaskRef,
   VectorNode,
@@ -33,6 +34,37 @@ function makeEmptyScene(): Scene {
 function dirtyBoth(): SceneNode['dirty'] {
   return { draft: true, working: true };
 }
+
+/**
+ * Display label for a text node (text-node-model.md): the first non-blank line,
+ * trimmed and cut to 32 characters with a trailing `…`, or `'Text'` when there is none.
+ */
+export function textLabel(content: string): string {
+  const line = content
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return 'Text';
+  const chars = Array.from(line);
+  return chars.length > 32 ? `${chars.slice(0, 32).join('')}…` : line;
+}
+
+/** The text fields `setTextProps` may change (`output`/`visible` etc. go through `setNodeProp`). */
+export type TextPropPatch = Partial<
+  Pick<
+    TextNode,
+    | 'content'
+    | 'font'
+    | 'fontSize'
+    | 'tracking'
+    | 'kerning'
+    | 'lineHeight'
+    | 'align'
+    | 'fill'
+    | 'stroke'
+    | 'position'
+  >
+>;
 
 export interface NodePropPatch {
   visible?: boolean;
@@ -70,6 +102,24 @@ interface SceneState {
    * `addPixelNode` so the scheduler cooks its first raster.
    */
   addVectorNode: (partial: Pick<VectorNode, 'paths' | 'fillRule'> & Partial<VectorNode>) => string;
+
+  /**
+   * Insert a new text node at the top of the stack (index 0), the same as
+   * `addVectorNode`. Defaults per text-node-model.md; dirtied on creation so the
+   * scheduler cooks its first raster.
+   */
+  addTextNode: (
+    partial: Pick<TextNode, 'content' | 'font' | 'position'> & Partial<TextNode>,
+  ) => string;
+
+  /**
+   * Merges a text-property patch (text-node-model.md). No-op on a missing,
+   * non-text or locked node, and on a patch that changes nothing (same state
+   * object returned, so history records nothing). Dirties the node and any
+   * node whose modifier mask references it. The label follows `content` only
+   * while it is still the auto label.
+   */
+  setTextProps: (nodeId: string, patch: TextPropPatch) => void;
 
   /**
    * Replaces a vector node's `paths` wholesale (path-editing.md) — one
@@ -395,6 +445,67 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     };
     set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
     return id;
+  },
+
+  addTextNode: (partial) => {
+    const id = crypto.randomUUID();
+    const node: TextNode = {
+      id,
+      label: partial.label ?? textLabel(partial.content),
+      type: 'text',
+      state: partial.state ?? 'active',
+      output: partial.output ?? 'image',
+      transform: partial.transform,
+      cameraId: partial.cameraId ?? null,
+      modifiers: partial.modifiers ?? [],
+      visible: partial.visible ?? true,
+      blendMode: partial.blendMode ?? 'normal',
+      opacity: partial.opacity ?? 1,
+      dirty: dirtyBoth(),
+      content: partial.content,
+      font: partial.font,
+      fontSize: partial.fontSize ?? 72,
+      tracking: partial.tracking ?? 0,
+      kerning: partial.kerning ?? true,
+      lineHeight: partial.lineHeight ?? 1.2,
+      align: partial.align ?? 'left',
+      fill: partial.fill === undefined ? '#ffffff' : partial.fill,
+      stroke: partial.stroke === undefined ? null : partial.stroke,
+      position: partial.position,
+    };
+    set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
+    return id;
+  },
+
+  setTextProps: (nodeId, patch) => {
+    set((s) => {
+      const target = s.scene.nodes.find((n) => n.id === nodeId);
+      if (target?.type !== 'text') return s;
+      if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
+      const text = target as TextNode;
+
+      const entries = (Object.entries(patch) as [keyof TextPropPatch, unknown][]).filter(
+        ([, value]) => value !== undefined,
+      );
+      const changed = entries.some(
+        ([key, value]) => JSON.stringify(value) !== JSON.stringify(text[key]),
+      );
+      if (!changed) return s;
+
+      const label =
+        patch.content !== undefined && text.label === textLabel(text.content)
+          ? textLabel(patch.content)
+          : text.label;
+      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+        ...(n as TextNode),
+        ...Object.fromEntries(entries),
+        label,
+        dirty: dirtyBoth(),
+      }));
+      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
+
+      return { scene: { ...s.scene, nodes } };
+    });
   },
 
   setVectorPaths: (nodeId, paths) => {

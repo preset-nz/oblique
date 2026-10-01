@@ -201,7 +201,7 @@ export function destSizeFor(
   documentSize: [number, number],
 ): [number, number] {
   const factor = resolutionFactorFor(level);
-  // A vector node's raster always spans documentSize (vector-node-model.md's
+  // A vector or text node's raster always spans documentSize (vector-node-model.md's
   // Sizing note — no sourceSize of its own); mesh/splat nodes will get their
   // own source-size concept in Milestone B. Only PixelNode carries
   // sourceSize today.

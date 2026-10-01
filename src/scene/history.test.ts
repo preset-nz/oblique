@@ -518,3 +518,44 @@ describe('clear()', () => {
     expect(history.canRedo()).toBe(false);
   });
 });
+
+describe('text nodes', () => {
+  const font = {
+    family: 'Helvetica',
+    style: 'Regular',
+    postscriptName: 'Helvetica',
+    weight: 400,
+    italic: false,
+    category: 'sans' as const,
+  };
+
+  it('undoing a setTextProps content change marks the node dirty', async () => {
+    const id = useSceneStore
+      .getState()
+      .addTextNode({ content: 'A', font, position: { x: 0, y: 0 } });
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+    useSceneStore.getState().setTextProps(id, { content: 'B' });
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+
+    await history.undo(fakeDeps());
+
+    const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
+    expect(node).toMatchObject({ content: 'A', dirty: { draft: true, working: true } });
+  });
+
+  it('undoing a pure compositing change (opacity) leaves a text node clean', async () => {
+    const id = useSceneStore
+      .getState()
+      .addTextNode({ content: 'A', font, position: { x: 0, y: 0 } });
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+    useSceneStore.getState().setNodeProp(id, { opacity: 0.5 });
+
+    await history.undo(fakeDeps());
+
+    const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
+    expect(node?.dirty).toEqual({ draft: false, working: false });
+  });
+});

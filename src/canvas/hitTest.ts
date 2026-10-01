@@ -1,7 +1,25 @@
 import { destSizeFor } from '@/compositor/composite';
-import { IDENTITY_TRANSFORM_2D, isVectorNode, type Scene, type SceneNode } from '@/scene/types';
+import { getGeometry } from '@/scene/textGeometryCache';
+import {
+  IDENTITY_TRANSFORM_2D,
+  isTextNode,
+  isVectorNode,
+  type Scene,
+  type SceneNode,
+} from '@/scene/types';
 import { vectorContentBounds } from '@/scene/vectorBounds';
 import { hitTestNode, type Point, worldToLocal } from './transform2d';
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function pointInRect(p: Point, r: Rect): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
 
 /**
  * Topmost visible image node whose transformed bounds contain `docPoint`
@@ -25,15 +43,17 @@ export function topmostNodeAt(scene: Scene, docPoint: Point): SceneNode | undefi
       // space the shape is painted in.
       const bounds = vectorContentBounds(node.paths);
       if (!bounds) continue;
-      const local = worldToLocal(docPoint, t, { w, h });
-      if (
-        local.x >= bounds.x &&
-        local.x <= bounds.x + bounds.w &&
-        local.y >= bounds.y &&
-        local.y <= bounds.y + bounds.h
-      ) {
-        return node;
-      }
+      if (pointInRect(worldToLocal(docPoint, t, { w, h }), bounds)) return node;
+      continue;
+    }
+    if (isTextNode(node)) {
+      // Same idea as vectors: hit the glyph bounds (anchor space, so translate
+      // by `position` into the document-sized raster's local space). No cached
+      // geometry yet (not cooked) -> not hittable.
+      const bounds = getGeometry(node)?.bounds;
+      if (!bounds) continue;
+      const rect = { ...bounds, x: bounds.x + node.position.x, y: bounds.y + node.position.y };
+      if (pointInRect(worldToLocal(docPoint, t, { w, h }), rect)) return node;
       continue;
     }
     if (hitTestNode(docPoint, t, { w, h })) return node;

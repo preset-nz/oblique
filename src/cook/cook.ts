@@ -1,14 +1,19 @@
 import { toast } from 'sonner';
+import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
 import { rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
+import { ensureGeometry, textCookKey } from '@/scene/textGeometryCache';
+import { rasterizeText } from '@/scene/textRasterize';
 import {
   IDENTITY_TRANSFORM_2D,
+  isTextNode,
   isVectorNode,
   type Modifier,
   type PixelNode,
   type SceneNode,
+  type TextNode,
   type Transform2D,
   type VectorMaskRef,
   type VectorNode,
@@ -190,6 +195,10 @@ export interface CookDeps {
     height: number,
     factor: number,
   ) => Uint8Array;
+  /** Shaped glyph geometry for a text node (scene/textGeometryCache.ts's `ensureGeometry`; hits Rust on a miss, so injected). */
+  getTextGeometry: (node: TextNode) => Promise<TextGeometry>;
+  /** Rasterise a text node's geometry at the cook target size — a text node's "source pixels" (scene/textRasterize.ts; needs OffscreenCanvas, so injected). */
+  rasterizeText: typeof rasterizeText;
   /** One sidecar `cook` call for a same-backend run. */
   runPython: (
     width: number,
@@ -301,6 +310,8 @@ export const productionCookDeps: CookDeps = {
   rasterizeVectorMask,
   downscale: realDownscale,
   rasterizeVector,
+  getTextGeometry: ensureGeometry,
+  rasterizeText,
   runPython: realRunPython,
   encode: realEncode,
   setCache: cache.set,
@@ -338,6 +349,10 @@ export interface FullResCookDeps {
     height: number,
     factor: number,
   ) => Uint8Array;
+  /** A text node's glyph geometry — same injection as `CookDeps.getTextGeometry`. */
+  getTextGeometry: (node: TextNode) => Promise<TextGeometry>;
+  /** A text node's "source pixels" at full res — same injection as `CookDeps.rasterizeText`. */
+  rasterizeText: typeof rasterizeText;
   runPython: (
     width: number,
     height: number,
@@ -356,6 +371,8 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getVectorMaskRef: productionCookDeps.getVectorMaskRef,
   rasterizeVectorMask: productionCookDeps.rasterizeVectorMask,
   rasterizeVector: productionCookDeps.rasterizeVector,
+  getTextGeometry: productionCookDeps.getTextGeometry,
+  rasterizeText: productionCookDeps.rasterizeText,
   downscale: realDownscale,
   runPython: realRunPython,
   encode: realEncode,
@@ -381,11 +398,14 @@ export async function cookNodeFullRes(
   deps: FullResCookDeps = productionFullResCookDeps,
 ): Promise<ImageBitmap> {
   const rawNode = deps.getNode(nodeId);
-  if (!rawNode || (rawNode.type !== 'pixel' && rawNode.type !== 'vector')) {
+  if (
+    !rawNode ||
+    (rawNode.type !== 'pixel' && rawNode.type !== 'vector' && rawNode.type !== 'text')
+  ) {
     throw new Error(`node ${nodeId} is not a cookable node type`);
   }
-  // Same narrowing as cookNode: the two source-pixel-producing node types.
-  const node = rawNode as PixelNode | VectorNode;
+  // Same narrowing as cookNode: the source-pixel-producing node types.
+  const node = rawNode as PixelNode | VectorNode | TextNode;
 
   const source = node.type === 'pixel' ? deps.getSource(nodeId) : undefined;
   if (node.type === 'pixel' && !source) {
@@ -399,7 +419,9 @@ export async function cookNodeFullRes(
   let resultBytes =
     node.type === 'pixel'
       ? deps.downscale(source as ImageBitmap, width, height)
-      : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+      : node.type === 'text'
+        ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
+        : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
   const rasterizeFor = makeRasterizeFor(
     deps,
     nodeExtent,
@@ -431,7 +453,8 @@ export async function cookNodeFullRes(
  * result to the cache, and clear dirty.
  *
  * If the node was mutated again after this cook started (its `modifiers`
- * array reference changed), the freshly-cooked bitmap is still written
+ * array reference changed, or — for a text node — its `textCookKey` differs),
+ * the freshly-cooked bitmap is still written
  * (newer than nothing) but dirty is left set — the scheduler's own
  * store subscription re-armed the debounce for that later mutation, so a
  * follow-up cook with the latest params is already on the way. Clearing
@@ -448,11 +471,11 @@ export async function cookNode(
   deps: CookDeps = productionCookDeps,
 ): Promise<void> {
   const rawNode = deps.getNode(nodeId);
-  if (rawNode?.type !== 'pixel' && rawNode?.type !== 'vector') return;
-  // PixelNode/VectorNode are the two source-pixel-producing node types
+  if (rawNode?.type !== 'pixel' && rawNode?.type !== 'vector' && rawNode?.type !== 'text') return;
+  // PixelNode/VectorNode/TextNode are the source-pixel-producing node types
   // today; the cast is safe once `type` is checked (mirrors the pattern in
   // project/import.ts).
-  const node = rawNode as PixelNode | VectorNode;
+  const node = rawNode as PixelNode | VectorNode | TextNode;
 
   const factor = resolutionFactor(level);
   // A vector node has no `sourceSize` of its own — its raster always spans
@@ -469,6 +492,11 @@ export async function cookNode(
   if (node.type === 'pixel' && !source) return;
 
   const modifiersAtStart = node.modifiers;
+  // Text race guard (text-node-model.md): compare cook INPUTS, not node
+  // identity — markDirty/clearDirty replace the node object too, so an
+  // identity check would read every dirty flip as an edit. Taken before the
+  // geometry await.
+  const textKeyAtStart = isTextNode(node) ? textCookKey(node) : undefined;
 
   // Phase timings, logged at debug level. performance.now() reads are
   // sub-microsecond against phases costing milliseconds — measuring here
@@ -476,10 +504,14 @@ export async function cookNode(
   // unless devtools' Verbose level is on.
   const t0 = performance.now();
   try {
+    // The geometry await sits inside this try: a Rust error (e.g. FontNotFound)
+    // is a cook failure — one toast per burst, dirty stays, stale cache untouched.
     let resultBytes =
       node.type === 'pixel'
         ? deps.downscale(source as ImageBitmap, width, height)
-        : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+        : node.type === 'text'
+          ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
+          : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
     const tDownscale = performance.now();
     const rasterizeFor = makeRasterizeFor(
       deps,
@@ -514,7 +546,10 @@ export async function cookNode(
     deps.setCache(nodeId, level, bitmap);
 
     const current = deps.getNode(nodeId);
-    if (current && current.modifiers === modifiersAtStart) {
+    const textInputsUnchanged =
+      textKeyAtStart === undefined ||
+      (current !== undefined && isTextNode(current) && textCookKey(current) === textKeyAtStart);
+    if (current && current.modifiers === modifiersAtStart && textInputsUnchanged) {
       deps.clearDirty(nodeId, level);
     }
     // Note: the error-burst flag is NOT reset on a bare success here — a

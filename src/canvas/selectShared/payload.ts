@@ -49,7 +49,8 @@ function resolveTargetFrame(
   deps: FrameDeps,
 ): { bitmap: ImageBitmap; frame: BufferFrame } | undefined {
   const node = deps.getNode(nodeId);
-  if (!node || (node.type !== 'pixel' && node.type !== 'vector')) return undefined;
+  if (!node || (node.type !== 'pixel' && node.type !== 'vector' && node.type !== 'text'))
+    return undefined;
 
   const bitmap = deps.getCachedWorking(nodeId);
   if (!bitmap) return undefined;

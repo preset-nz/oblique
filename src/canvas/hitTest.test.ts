@@ -1,6 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import type { PixelNode, Scene } from '@/scene/types';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearAll, ensureGeometry } from '@/scene/textGeometryCache';
+import type { PixelNode, Scene, TextNode } from '@/scene/types';
 import { topmostNodeAt } from './hitTest';
+
+vi.mock('@/fonts/fontsIpc', () => ({
+  textOutlines: vi.fn(async () => ({
+    paths: [],
+    lines: [],
+    ascent: 0,
+    descent: 0,
+    bounds: { x: 0, y: -50, w: 100, h: 60 },
+  })),
+  listFonts: vi.fn(),
+}));
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -21,7 +33,7 @@ function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   };
 }
 
-function scene(nodes: PixelNode[]): Scene {
+function scene(nodes: (PixelNode | TextNode)[]): Scene {
   return {
     id: 's1',
     nodes,
@@ -71,5 +83,64 @@ describe('topmostNodeAt', () => {
     // Centre (50,50); at 45 degrees the corner (100,100) rotates near (50, 50+70.7).
     expect(topmostNodeAt(s, { x: 50, y: 50 })?.id).toBe('r'); // centre always hits
     expect(topmostNodeAt(s, { x: 95, y: 95 })).toBeUndefined(); // corner rotated away
+  });
+});
+
+describe('topmostNodeAt — text nodes', () => {
+  function textNode(overrides: Partial<TextNode> = {}): TextNode {
+    return {
+      id: 't',
+      label: 't',
+      type: 'text',
+      state: 'active',
+      output: 'image',
+      cameraId: null,
+      modifiers: [],
+      visible: true,
+      blendMode: 'normal',
+      opacity: 1,
+      dirty: { draft: false, working: false },
+      content: 'HI',
+      font: {
+        family: 'Helvetica',
+        style: 'Regular',
+        postscriptName: 'Helvetica',
+        weight: 400,
+        italic: false,
+        category: 'sans',
+      },
+      fontSize: 72,
+      tracking: 0,
+      kerning: true,
+      lineHeight: 1.2,
+      align: 'left',
+      fill: '#fff',
+      stroke: null,
+      position: { x: 20, y: 100 },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => clearAll());
+
+  it('skips a node with no cached geometry', () => {
+    expect(topmostNodeAt(scene([textNode()]), { x: 60, y: 90 })).toBeUndefined();
+  });
+
+  it('hits inside the position-translated glyph bounds and misses outside them', async () => {
+    const node = textNode();
+    await ensureGeometry(node); // bounds {0,-50,100,60} -> doc rect x 20..120, y 50..110
+    const s = scene([node]);
+    expect(topmostNodeAt(s, { x: 60, y: 90 })?.id).toBe('t');
+    expect(topmostNodeAt(s, { x: 10, y: 90 })).toBeUndefined(); // left of the bounds
+    expect(topmostNodeAt(s, { x: 60, y: 120 })).toBeUndefined(); // below the baseline box
+    expect(topmostNodeAt(s, { x: 60, y: 40 })).toBeUndefined(); // above
+  });
+
+  it('falls through a text miss to the node below', async () => {
+    const node = textNode();
+    await ensureGeometry(node);
+    const s = scene([node, pixelNode('below')]);
+    expect(topmostNodeAt(s, { x: 10, y: 10 })?.id).toBe('below');
   });
 });

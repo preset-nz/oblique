@@ -1,5 +1,7 @@
+import type { FontRef } from '@/fonts/types';
+
 export type Resolution = 'draft' | 'working' | 'baked';
-export type NodeType = 'pixel' | 'vector' | 'mesh' | 'splat';
+export type NodeType = 'pixel' | 'vector' | 'text' | 'mesh' | 'splat';
 export type NodeState = 'active' | 'locked';
 export type NodeOutput = 'image' | 'mask' | 'transform' | 'data';
 export type BlendMode =
@@ -155,6 +157,31 @@ export interface VectorNode extends SceneNode {
 
 export function isVectorNode(node: SceneNode): node is VectorNode {
   return node.type === 'vector';
+}
+
+/**
+ * A live text node (Epic 20, text-node-model.md). Like a vector node its raster
+ * spans `Scene.documentSize`; the glyph geometry is shaped in Rust (anchor space)
+ * and cached outside the scene (textGeometryCache.ts). `font` is the WANTED font,
+ * never rewritten by substitution. `position` is the first line's alphabetic
+ * baseline at the align anchor, in document space.
+ */
+export interface TextNode extends SceneNode {
+  type: 'text';
+  content: string; // '\n' = line break; no wrapping
+  font: FontRef;
+  fontSize: number; // document px (em size)
+  tracking: number; // 1/1000 em, added after every glyph cluster
+  kerning: boolean; // font kern pairs; default true
+  lineHeight: number; // multiple of fontSize (default 1.2)
+  align: 'left' | 'center' | 'right';
+  fill: string | null; // CSS hex; null = no fill
+  stroke: { color: string; width: number } | null; // width in document px, centred on the outline
+  position: Point2D;
+}
+
+export function isTextNode(node: SceneNode): node is TextNode {
+  return node.type === 'text';
 }
 
 // Epic 08 will replace this with the real Camera type from the source spec;

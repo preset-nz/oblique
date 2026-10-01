@@ -4,10 +4,12 @@ import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
   isPixelNode,
+  isTextNode,
   isVectorNode,
   type PixelNode,
   type Scene,
   type SceneNode,
+  type TextNode,
 } from '@/scene/types';
 import { sceneChangedIgnoringDirty } from './sceneDiff';
 
@@ -170,6 +172,21 @@ function hasVectorMask(node: SceneNode, scene: Scene): boolean {
   return node.modifiers.some((m) => m.maskId && scene.maskRefs?.[m.maskId]);
 }
 
+function textInputs(n: TextNode): unknown {
+  return {
+    content: n.content,
+    font: n.font,
+    fontSize: n.fontSize,
+    tracking: n.tracking,
+    kerning: n.kerning,
+    lineHeight: n.lineHeight,
+    align: n.align,
+    fill: n.fill,
+    stroke: n.stroke,
+    position: n.position,
+  };
+}
+
 function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB: Scene): boolean {
   if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
   const refA = a.modifiers.map((m) => resolvedMaskInput(m.maskId, sceneA));
@@ -188,6 +205,11 @@ function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB:
   const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
   const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
   if (JSON.stringify(pa) !== JSON.stringify(pb)) return true;
+  // A text node's raster comes entirely from these fields (+ the Rust geometry
+  // they key), so an undo across a setTextProps edit must register here.
+  const ta = isTextNode(a) ? textInputs(a) : undefined;
+  const tb = isTextNode(b) ? textInputs(b) : undefined;
+  if (JSON.stringify(ta) !== JSON.stringify(tb)) return true;
   const va = isVectorNode(a) ? { paths: a.paths, fillRule: a.fillRule } : undefined;
   const vb = isVectorNode(b) ? { paths: b.paths, fillRule: b.fillRule } : undefined;
   return JSON.stringify(va) !== JSON.stringify(vb);
