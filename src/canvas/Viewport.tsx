@@ -2,6 +2,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef } from 'react';
 import { destSizeFor } from '@/compositor/composite';
 import { importFiles, tauriImportDeps } from '@/project/import';
+import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import {
@@ -915,10 +916,14 @@ export function Viewport() {
     });
     // Any cook writing a fresh bitmap bumps cacheVersion.
     const unsubscribeCache = useCacheVersionStore.subscribe(() => schedule(true));
+    // A background-image decode landing (or being dropped) changes pixels
+    // without touching the scene or the cook caches (background-image.md).
+    const unsubscribeBackground = useBackgroundSourceStore.subscribe(() => schedule(true));
     return () => {
       unsubscribeView();
       unsubscribeScene();
       unsubscribeCache();
+      unsubscribeBackground();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [paint]);

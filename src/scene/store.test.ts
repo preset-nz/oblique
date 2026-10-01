@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as backgroundSource from './backgroundSource';
 import { useSceneStore } from './store';
 import type { Modifier, PixelNode, Scene, SceneNode, VectorNode, VectorPath } from './types';
 
@@ -541,6 +542,43 @@ describe('setNodeTransform', () => {
       expect(node.dirty).toEqual(clean);
     }
     expect(useSceneStore.getState().scene.nodes[2].transform2d?.x).toBe(30);
+  });
+});
+
+describe('setBackgroundImage (background-image.md)', () => {
+  const heldBitmap = () => ({ width: 10, height: 10, close: vi.fn() }) as unknown as ImageBitmap;
+
+  it('sets scene.background to an image entry, compositing-only (no node dirtied)', () => {
+    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
+    useSceneStore.getState().clearDirty(useSceneStore.getState().scene.nodes[0].id, 'draft');
+    useSceneStore.getState().clearDirty(useSceneStore.getState().scene.nodes[0].id, 'working');
+    useSceneStore.getState().setBackgroundImage('/bg.png', [60, 40]);
+    const { scene } = useSceneStore.getState();
+    expect(scene.background).toEqual({
+      type: 'image',
+      sourcePath: '/bg.png',
+      sourceSize: [60, 40],
+    });
+    expect(scene.nodes[0].dirty).toEqual({ draft: false, working: false });
+  });
+
+  it('switching to colour or none drops the held bitmap (closing it); image -> colour -> none cycles cleanly', () => {
+    const bitmap = heldBitmap();
+    backgroundSource.set('/bg.png', bitmap);
+    useSceneStore.getState().setBackgroundImage('/bg.png', [60, 40]);
+
+    useSceneStore.getState().setBackgroundColor('#112233');
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
+    expect(backgroundSource.heldPath()).toBeUndefined();
+    expect(useSceneStore.getState().scene.background).toEqual({ type: 'color', color: '#112233' });
+
+    const second = heldBitmap();
+    backgroundSource.set('/bg.png', second);
+    useSceneStore.getState().setBackgroundImage('/bg.png', [60, 40]);
+    useSceneStore.getState().setBackgroundColor(null);
+    expect(second.close).toHaveBeenCalledTimes(1);
+    expect(backgroundSource.heldPath()).toBeUndefined();
+    expect(useSceneStore.getState().scene.background).toBeUndefined();
   });
 });
 

@@ -1,3 +1,4 @@
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as sources from '@/scene/sources';
 import type { Resolution, Scene, SceneNode } from '@/scene/types';
@@ -514,6 +515,18 @@ export function compositeScene(
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = scene.background.color;
     ctx.fillRect(0, 0, docW * factor, docH * factor);
+  } else if (scene.background?.type === 'image') {
+    // Native size, top-left (background-image.md), level-scaled like every
+    // other draw. The holder is read by path: decode pending / failed / a
+    // different image held => undefined => draw nothing, never stale content.
+    const bitmap = backgroundSource.get(scene.background.sourcePath);
+    if (bitmap) {
+      const factor = resolutionFactorFor(level);
+      const [srcW, srcH] = scene.background.sourceSize;
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(bitmap, 0, 0, srcW * factor, srcH * factor);
+    }
   }
 
   // Built once per composite, not per span: a node's dirty flags are what

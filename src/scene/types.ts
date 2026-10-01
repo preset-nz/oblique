@@ -204,11 +204,14 @@ export type Camera = never;
  * Document-level background ("paper" — background-colour.md), always the
  * lowest thing in the composite: painted before the node walk starts, so it
  * can't be masked, reordered, blend-moded, or deleted like a node could.
- * Discriminated union so a follow-on story (background-image.md) can add an
- * `{ type: 'image'; ... }` member without touching this one. `color` is a
- * CSS hex string, solid colour only for this story — no gradient/pattern.
+ * Discriminated union: `color` is a CSS hex string (solid only — no
+ * gradient/pattern); `image` (background-image.md) is drawn at native size,
+ * top-left at the document origin, its decoded bitmap held outside the scene
+ * (`scene/backgroundSource.ts`) — only the path and size persist.
  */
-export type SceneBackground = { type: 'color'; color: string };
+export type SceneBackground =
+  | { type: 'color'; color: string }
+  | { type: 'image'; sourcePath: string; sourceSize: [number, number] };
 
 export interface Scene {
   id: string;

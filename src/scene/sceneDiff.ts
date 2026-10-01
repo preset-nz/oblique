@@ -17,6 +17,13 @@ export function sceneChangedIgnoringDirty(a: Scene, b: Scene): boolean {
   }
   if (a.resolution !== b.resolution) return true;
   if (a.defaultCameraId !== b.defaultCameraId) return true;
+  // The document background (colour or image) is a real, undoable edit.
+  if (
+    a.background !== b.background &&
+    JSON.stringify(a.background ?? null) !== JSON.stringify(b.background ?? null)
+  ) {
+    return true;
+  }
   // Mask edits are real edits (selection-to-mask.md): same-id maskRefs
   // entries with different geometry/feather must register here or
   // history/scheduler treat them as cook churn.

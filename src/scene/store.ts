@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
 import {
   fillRuleForMarquee,
@@ -227,6 +228,16 @@ interface SceneState {
    * on every composite, so toggling it recomposites for free.
    */
   setBackgroundColor: (color: string | null) => void;
+
+  /**
+   * Sets the document background to an image (background-image.md).
+   * Compositing-only, same posture as `setBackgroundColor`. Scene state only
+   * — the caller decodes the file and hands the bitmap to
+   * `scene/backgroundSource.ts` (`set`) BEFORE calling this, so the first
+   * recomposite after the scene change already has the pixels. `setBackgroundColor`
+   * (none/colour) drops the held bitmap.
+   */
+  setBackgroundImage: (sourcePath: string, sourceSize: [number, number]) => void;
 
   addModifier: (nodeId: string, type: string, defaults: Modifier['params']) => string;
   removeModifier: (nodeId: string, modId: string) => void;
@@ -784,11 +795,19 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   },
 
   setBackgroundColor: (color) => {
+    // Choosing none/colour leaves no image to hold (background-image.md).
+    backgroundSource.clear();
     set((s) => ({
       scene: {
         ...s.scene,
         background: color === null ? undefined : { type: 'color', color },
       },
+    }));
+  },
+
+  setBackgroundImage: (sourcePath, sourceSize) => {
+    set((s) => ({
+      scene: { ...s.scene, background: { type: 'image', sourcePath, sourceSize } },
     }));
   },
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sceneChangedIgnoringDirty } from './sceneDiff';
-import type { Scene, VectorMaskRef } from './types';
+import type { Scene, SceneBackground, VectorMaskRef } from './types';
 
 function scene(overrides: Partial<Scene> = {}): Scene {
   return {
@@ -39,5 +39,25 @@ describe('sceneChangedIgnoringDirty — maskRefs', () => {
     const a = scene({ maskRefs: { 'ref-1': maskRef(5) } });
     const b = scene({ maskRefs: { 'ref-1': maskRef(5) } });
     expect(sceneChangedIgnoringDirty(a, b)).toBe(false);
+  });
+});
+
+describe('sceneChangedIgnoringDirty — background', () => {
+  it('setting, changing or clearing the background is a real edit', () => {
+    const image: SceneBackground = { type: 'image', sourcePath: '/bg.png', sourceSize: [10, 10] };
+    expect(sceneChangedIgnoringDirty(scene(), scene({ background: image }))).toBe(true);
+    expect(
+      sceneChangedIgnoringDirty(
+        scene({ background: { type: 'color', color: '#000000' } }),
+        scene({ background: image }),
+      ),
+    ).toBe(true);
+    expect(sceneChangedIgnoringDirty(scene({ background: image }), scene())).toBe(true);
+  });
+
+  it('an identical background registers no change', () => {
+    const mk = () =>
+      scene({ background: { type: 'image', sourcePath: '/bg.png', sourceSize: [10, 10] } });
+    expect(sceneChangedIgnoringDirty(mk(), mk())).toBe(false);
   });
 });

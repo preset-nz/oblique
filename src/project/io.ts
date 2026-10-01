@@ -12,13 +12,14 @@ import { toast } from 'sonner';
 import { create } from 'zustand';
 import { PRODUCT_NAME } from '@/branding';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
-import { filenameOf, importFiles, tauriImportDeps } from './import';
+import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './import';
 
 // On-disk format identifiers, deliberately not `PRODUCT_NAME`: the marker and
 // the `.oblique` extension must survive a product rename or existing files
@@ -342,6 +343,12 @@ export async function loadProject(
     }
   }
 
+  // Document background image (background-image.md): same re-decode as a
+  // pixel source — missing/unreadable flags `missing`, never throws, keeps
+  // `sourcePath` verbatim so a save writes it back unchanged.
+  backgroundSource.clear(); // like sources.clearAll(): a load always re-decodes
+  await backgroundSource.reconcile(scene.background, deps);
+
   for (const node of scene.nodes) {
     useSceneStore.getState().markDirty(node.id, 'draft');
   }
@@ -384,6 +391,7 @@ export async function newProject(
   useSceneStore.getState().resetScene();
   cache.clearAll();
   sources.clearAll();
+  backgroundSource.clear();
 
   const meta = useProjectMetaStore.getState();
   meta.setPath(null);
@@ -424,6 +432,40 @@ export async function importImagesDialog(): Promise<void> {
   if (!selected) return;
   const paths = Array.isArray(selected) ? selected : [selected];
   await importFiles(paths, tauriImportDeps);
+}
+
+/**
+ * Decode `path` and make it the document background. Never throws — a
+ * decode failure is a toast (filename + reason) and the background is left
+ * as it was, same contract as `importFile`. The bitmap goes into the holder
+ * BEFORE the scene action so the recomposite the scene change triggers
+ * already has pixels.
+ */
+export async function setBackgroundImageFromPath(
+  path: string,
+  deps: ImportDeps = tauriImportDeps,
+): Promise<boolean> {
+  try {
+    const bitmap = await deps.decode(await deps.readFile(path));
+    backgroundSource.set(path, bitmap as ImageBitmap);
+    useSceneStore.getState().setBackgroundImage(path, [bitmap.width, bitmap.height]);
+    return true;
+  } catch (err) {
+    toast.error(`Couldn't use ${filenameOf(path)} as the background`, {
+      description: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/** Document-setup "Choose image…": same file picker as Import, single file. */
+export async function chooseBackgroundImageDialog(): Promise<void> {
+  const selected = await openDialog({
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+  });
+  if (!selected) return;
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  await setBackgroundImageFromPath(path);
 }
 
 // Any scene mutation after the last save marks the project dirty. loadScene

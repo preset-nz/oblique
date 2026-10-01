@@ -1,5 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { filenameOf } from '@/project/import';
+import { chooseBackgroundImageDialog } from '@/project/io';
+import { useBackgroundSourceStore } from '@/scene/backgroundSource';
+import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import {
   ASPECT_PRESETS,
@@ -27,14 +32,34 @@ export function DocumentSetup() {
   const { presetId, orientation } = describeDocumentSize(documentSize);
   const baseId = describeLongEdge(documentSize);
 
-  // none/colour/(image, later) choice — background-colour.md's extension
-  // point for background-image.md, which adds an 'image' option here
-  // without reworking this control.
+  // The native colour picker fires `input` continuously while dragged; coalesce
+  // that into one undo step (same transaction pattern as the scrub inputs).
+  // Blur isn't guaranteed (the popover can unmount the input first), so the
+  // step also closes after a short idle and on unmount. Otherwise an open
+  // transaction would swallow unrelated later edits into this one step.
+  const colourDragging = useRef(false);
+  const colourIdle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const endColourStep = () => {
+    clearTimeout(colourIdle.current);
+    if (!colourDragging.current) return;
+    colourDragging.current = false;
+    history.endTransaction();
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only cleanup; endColourStep reads refs
+  useEffect(() => endColourStep, []);
+  const backgroundMissing = useBackgroundSourceStore((s) => s.missing);
+
+  // none/colour/image choice (background-colour.md's extension point,
+  // filled by background-image.md). Choosing none or colour drops any held
+  // image bitmap (store action); choosing image with none yet opens the
+  // same file picker as Import.
   const backgroundKind = background?.type ?? 'none';
+  const backgroundColor = background?.type === 'color' ? background.color : undefined;
 
   const applyBackgroundKind = (kind: string) => {
     if (kind === 'none') setBackgroundColor(null);
-    else if (kind === 'color') setBackgroundColor(background?.color ?? DEFAULT_BACKGROUND_COLOR);
+    else if (kind === 'color') setBackgroundColor(backgroundColor ?? DEFAULT_BACKGROUND_COLOR);
+    else if (kind === 'image' && background?.type !== 'image') void chooseBackgroundImageDialog();
   };
 
   const applyPreset = (nextPresetId: string) => {
@@ -133,17 +158,50 @@ export function DocumentSetup() {
                 <ToggleGroupItem value="color" aria-label="Colour background">
                   Colour
                 </ToggleGroupItem>
+                <ToggleGroupItem value="image" aria-label="Image background">
+                  Image
+                </ToggleGroupItem>
               </ToggleGroup>
               {backgroundKind === 'color' && (
                 <input
                   type="color"
-                  value={background?.color ?? DEFAULT_BACKGROUND_COLOR}
-                  onChange={(e) => setBackgroundColor(e.target.value)}
+                  value={backgroundColor ?? DEFAULT_BACKGROUND_COLOR}
+                  onChange={(e) => {
+                    if (!colourDragging.current) {
+                      colourDragging.current = true;
+                      history.beginTransaction();
+                    }
+                    setBackgroundColor(e.target.value);
+                    clearTimeout(colourIdle.current);
+                    colourIdle.current = setTimeout(endColourStep, 600);
+                  }}
+                  onBlur={endColourStep}
                   className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent"
                   aria-label="Background colour"
                 />
               )}
             </div>
+            {background?.type === 'image' && (
+              <div className="flex items-center gap-2 text-xs">
+                <span
+                  className={
+                    backgroundMissing ? 'truncate text-amber-500' : 'truncate text-neutral-400'
+                  }
+                  title={background.sourcePath}
+                >
+                  {backgroundMissing
+                    ? `${filenameOf(background.sourcePath)} (file not found)`
+                    : filenameOf(background.sourcePath)}
+                </span>
+                <button
+                  type="button"
+                  className="whitespace-nowrap text-neutral-400 hover:text-neutral-100"
+                  onClick={() => void chooseBackgroundImageDialog()}
+                >
+                  Choose image…
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </PopoverContent>

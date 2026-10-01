@@ -1,4 +1,5 @@
 import { readFile } from '@tauri-apps/plugin-fs';
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
 import * as sources from '@/scene/sources';
@@ -227,6 +228,8 @@ function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB:
  * - Node present in both, unchanged cook-affecting fields: leave clean —
  *   pure compositing fields (visible/opacity/blendMode/order) never dirty
  *   per dirty rule 4.
+ * - The document background's held bitmap is reconciled with `target.background`
+ *   (dropped for none/colour, re-decoded for an image whose path isn't held).
  * - Node present in `current` but absent from `target` (undo-of-add /
  *   redo-of-delete): evict its cache + decoded source so nothing leaks.
  */
@@ -261,6 +264,12 @@ async function restoreScene(
         }
       }),
   );
+
+  // The document background's decoded bitmap lives outside the scene, so an
+  // undo/redo across a background change must reconcile the holder too, or
+  // undoing "set image" keeps painting it and redo shows nothing
+  // (background-image.md). Same decode deps as the pixel sources above.
+  await backgroundSource.reconcile(target.background, deps);
 
   const nodes = target.nodes.map((node) => {
     const previous = currentById.get(node.id);

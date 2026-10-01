@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PRODUCT_NAME } from '@/branding';
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
@@ -37,6 +38,7 @@ import {
   openProjectDialog,
   parseProject,
   serialiseProject,
+  setBackgroundImageFromPath,
   useProjectMetaStore,
   writeProjectFile,
 } from './io';
@@ -105,6 +107,7 @@ beforeEach(() => {
   });
   useProjectMetaStore.setState({ path: null, dirtySinceSave: false });
   sources.clearAll();
+  backgroundSource.clear();
   cache.clearAll();
   vi.clearAllMocks();
 });
@@ -304,6 +307,90 @@ describe('serialise/parse round trip', () => {
   it('saves always write version 2', () => {
     const doc = JSON.parse(serialiseProject(sampleScene()));
     expect(doc.version).toBe(2);
+  });
+});
+
+describe('document background image round-trip (background-image.md)', () => {
+  const imageBackground = {
+    type: 'image',
+    sourcePath: '/pics/bg.png',
+    sourceSize: [60, 40],
+  } as const;
+
+  function sceneWithImage(): Scene {
+    const scene = sampleScene();
+    scene.background = { ...imageBackground, sourceSize: [60, 40] };
+    return scene;
+  }
+
+  it('serialise -> parse round-trips the image background verbatim', () => {
+    const scene = sceneWithImage();
+    expect(parseProject(serialiseProject(scene))).toEqual(scene);
+  });
+
+  it('loadProject re-decodes the background from sourcePath', async () => {
+    const deps = makeDeps({ readTextFile: vi.fn(async () => serialiseProject(sceneWithImage())) });
+    await loadProject('/proj/x.oblique', deps);
+    expect(deps.readFile).toHaveBeenCalledWith('/pics/bg.png');
+    expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
+    expect(backgroundSource.useBackgroundSourceStore.getState().missing).toBe(false);
+  });
+
+  it('a missing/unreadable background source degrades like a missing pixel source: no crash, path kept, flagged missing', async () => {
+    const deps = makeDeps({
+      readTextFile: vi.fn(async () => serialiseProject(sceneWithImage())),
+      readFile: vi.fn(async (path: string) => {
+        if (path === '/pics/bg.png') throw new Error('gone');
+        return new Uint8Array([1]);
+      }),
+    });
+    await loadProject('/proj/x.oblique', deps);
+
+    const { scene } = useSceneStore.getState();
+    expect(scene.background).toEqual({ ...imageBackground, sourceSize: [60, 40] });
+    expect(backgroundSource.heldPath()).toBeUndefined();
+    expect(backgroundSource.useBackgroundSourceStore.getState().missing).toBe(true);
+    expect(sources.isSourceMissing('n1')).toBe(false); // the pixel node itself was fine
+    // sourcePath survives a save untouched.
+    expect(JSON.parse(serialiseProject(scene)).scene.background.sourcePath).toBe('/pics/bg.png');
+  });
+
+  it('opening a project without an image background drops a previously held bitmap', async () => {
+    backgroundSource.set('/old.png', fakeBitmap());
+    await loadProject('/proj/x.oblique', makeDeps());
+    expect(backgroundSource.heldPath()).toBeUndefined();
+  });
+
+  it('File -> New drops the held bitmap', async () => {
+    backgroundSource.set('/old.png', fakeBitmap());
+    await newProject(async () => true);
+    expect(backgroundSource.heldPath()).toBeUndefined();
+  });
+
+  it('setBackgroundImageFromPath holds the bitmap and sets the scene background; decode failure toasts and changes nothing', async () => {
+    const decode = vi.fn(async () => ({ width: 60, height: 40, close: vi.fn() }));
+    const ok = await setBackgroundImageFromPath('/pics/bg.png', {
+      readFile: vi.fn(async () => new Uint8Array([1])),
+      decode,
+    });
+    expect(ok).toBe(true);
+    expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
+    expect(useSceneStore.getState().scene.background).toEqual({
+      type: 'image',
+      sourcePath: '/pics/bg.png',
+      sourceSize: [60, 40],
+    });
+
+    const failed = await setBackgroundImageFromPath('/pics/bad.png', {
+      readFile: vi.fn(async () => new Uint8Array([1])),
+      decode: vi.fn(async () => {
+        throw new Error('corrupt');
+      }),
+    });
+    expect(failed).toBe(false);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(useSceneStore.getState().scene.background).toMatchObject({ sourcePath: '/pics/bg.png' });
+    expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
   });
 });
 

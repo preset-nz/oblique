@@ -25,6 +25,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 import { toast } from 'sonner';
+import * as backgroundSource from '@/scene/backgroundSource';
 import type { ExportCanvas, ExportDeps } from './export';
 import { exportableNodes, exportPng, suggestedExportName } from './export';
 
@@ -162,6 +163,21 @@ describe('exportPng', () => {
     expect(deps.ctx.drawCalls).toBeGreaterThan(0); // compositeScene actually drew something
     expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
     expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('includes the document background image at native size, before the nodes (background-image.md)', async () => {
+    const bg = fakeBitmap();
+    backgroundSource.set('/bg.png', bg);
+    const scene = makeScene([pixelNode('a')]);
+    scene.background = { type: 'image', sourcePath: '/bg.png', sourceSize: [60, 40] };
+    const deps = makeDeps(scene);
+
+    await exportPng(deps);
+
+    const calls = (deps.ctx.drawImage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]).toEqual([bg, 0, 0, 60, 40]); // baked level: unscaled native size
+    expect(calls).toHaveLength(2);
+    backgroundSource.clear();
   });
 
   it('cooks mask-output nodes too, so masked spans survive into the PNG (mask-span-scoping.md)', async () => {

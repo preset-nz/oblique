@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
 import * as history from './history';
 import * as sources from './sources';
@@ -78,6 +79,7 @@ beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
   cache.clearAll();
   sources.clearAll();
+  backgroundSource.clear();
   history.clear();
 });
 
@@ -702,5 +704,56 @@ describe('mask follows node (mask-follows-node.md)', () => {
     const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
     expect(restored?.transform2d).toBeUndefined();
     expect(restored?.dirty).toEqual({ draft: false, working: false });
+  });
+});
+
+describe('undo/redo of the document background image (background-image.md)', () => {
+  const setImage = () => {
+    // Mirrors io.ts setBackgroundImageFromPath: holder first, then the scene action.
+    backgroundSource.set('/bg.png', fakeBitmap());
+    useSceneStore.getState().setBackgroundImage('/bg.png', [100, 100]);
+  };
+
+  it('undo of "set image" drops the bitmap; redo re-decodes it from the path', async () => {
+    setImage();
+    expect(backgroundSource.get('/bg.png')).toBeDefined();
+    expect(history.canUndo()).toBe(true);
+
+    await history.undo(fakeDeps());
+    expect(useSceneStore.getState().scene.background).toBeUndefined();
+    expect(backgroundSource.heldPath()).toBeUndefined();
+
+    const deps = fakeDeps();
+    await history.redo(deps);
+    expect(useSceneStore.getState().scene.background).toEqual({
+      type: 'image',
+      sourcePath: '/bg.png',
+      sourceSize: [100, 100],
+    });
+    expect(deps.readFile).toHaveBeenCalledWith('/bg.png');
+    expect(backgroundSource.get('/bg.png')).toBeDefined();
+  });
+
+  it('undo of "image -> colour" re-decodes the image; an unreadable path flags missing instead of throwing', async () => {
+    setImage();
+    useSceneStore.getState().setBackgroundColor('#112233');
+    expect(backgroundSource.heldPath()).toBeUndefined();
+
+    await history.undo(fakeDeps());
+    expect(backgroundSource.get('/bg.png')).toBeDefined();
+
+    await history.redo(fakeDeps()); // back to colour
+    expect(backgroundSource.heldPath()).toBeUndefined();
+
+    const failing = {
+      readFile: vi.fn(async () => {
+        throw new Error('gone');
+      }),
+      decode: vi.fn(),
+    };
+    await history.undo(failing);
+    expect(useSceneStore.getState().scene.background?.type).toBe('image');
+    expect(backgroundSource.heldPath()).toBeUndefined();
+    expect(backgroundSource.useBackgroundSourceStore.getState().missing).toBe(true);
   });
 });

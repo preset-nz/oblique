@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as sources from '@/scene/sources';
 import type { PixelNode, Scene, SceneNode } from '@/scene/types';
@@ -133,6 +134,7 @@ beforeEach(() => {
   // clearAll only drops decoded bitmaps — the transient missing-flags store
   // needs its own reset or striped-placeholder state leaks between tests.
   sources.useSourceMissingStore.setState({ missing: {} });
+  backgroundSource.clear();
   resetCompositeCallCount();
 });
 
@@ -806,6 +808,87 @@ describe('document background colour (background-colour.md)', () => {
       expect(maskedCtx.fillStyle).toBe(unmaskedCtx.fillStyle);
     },
   );
+});
+
+describe('document background image (background-image.md)', () => {
+  const imageBackground = (sourceSize: [number, number] = [60, 40]) =>
+    ({ type: 'image', sourcePath: '/bg.png', sourceSize }) as const;
+
+  it('decode pending: draws nothing — no drawImage, no fillRect', () => {
+    const scene = makeScene([]);
+    scene.background = imageBackground();
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+    expect(ctx.drawImage).not.toHaveBeenCalled();
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+  });
+
+  it('a held bitmap for a different path never paints (no stale content)', () => {
+    backgroundSource.set('/other.png', fakeBitmap());
+    const scene = makeScene([]);
+    scene.background = imageBackground();
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+    expect(ctx.drawImage).not.toHaveBeenCalled();
+  });
+
+  it('draws at native size, top-left, source-over/full alpha, scaled to the level, before any node', () => {
+    const bg = fakeBitmap();
+    backgroundSource.set('/bg.png', bg);
+    cache.set('n1', 'working', fakeBitmap());
+    const scene = makeScene([makeNode('n1')]);
+    scene.background = imageBackground([60, 40]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'working');
+
+    // Native 60x40, NOT stretched to the 200x100 document; working = half.
+    expect(ctx.calls[0]).toEqual({ src: bg, destW: 30, destH: 20, alpha: 1, op: 'source-over' });
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, bg, 0, 0, 30, 20);
+    expect(ctx.calls).toHaveLength(2); // background, then the node
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+  });
+
+  it('full-resolution (baked) draw is the unscaled native size', () => {
+    const bg = fakeBitmap();
+    backgroundSource.set('/bg.png', bg);
+    const scene = makeScene([]);
+    scene.background = imageBackground([60, 40]);
+    const ctx = fakeCtx();
+    compositeScene(ctx, scene, 'baked');
+    expect(ctx.drawImage).toHaveBeenCalledWith(bg, 0, 0, 60, 40);
+  });
+
+  it('a mask anywhere in the stack leaves the background draw identical (structural half, as the colour story)', () => {
+    const bg = fakeBitmap();
+    backgroundSource.set('/bg.png', bg);
+    const content = makeNode('content');
+    cache.set('content', 'baked', fakeBitmap());
+    const mask = makeNode('mask', { output: 'mask' });
+    cache.set('mask', 'baked', fakeBitmap());
+
+    const unmasked = makeScene([content]);
+    unmasked.background = imageBackground();
+    const unmaskedCtx = fakeCtx();
+    compositeScene(unmaskedCtx, unmasked, 'baked');
+
+    const masked = makeScene([mask, content]); // mask span reaches the stack bottom
+    masked.background = imageBackground();
+    const maskedCtx = fakeCtx();
+    const { createScratch, scratches } = createFakeScratch();
+    compositeScene(maskedCtx, masked, 'baked', cache.get, createScratch);
+
+    // The background is the first draw on the MAIN ctx, before any scratch exists
+    // or any span logic runs, and is the same call with or without the mask.
+    expect(maskedCtx.calls[0]).toEqual(unmaskedCtx.calls[0]);
+    expect(maskedCtx.drawImage).toHaveBeenNthCalledWith(1, bg, 0, 0, 60, 40);
+    // The background is never drawn into a mask scratch (a scratch is only
+    // seeded from the main canvas, never from the held bitmap).
+    for (const scratch of scratches) {
+      expect(
+        (scratch.ctx.drawImage as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[0] === bg),
+      ).toBe(false);
+    }
+  });
 });
 
 describe('transform2d — compositing-only node transform (node-transform-2d.md)', () => {
