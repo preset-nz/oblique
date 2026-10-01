@@ -432,12 +432,18 @@ def test_hex_to_rgb01_falls_back_and_never_raises(value):
 def test_no_other_registered_op_emits_disabled_when():
     # `hatch` is disabled_when's first user (story 5 doc). Every other op's
     # list_ops payload must stay byte-identical. `cmyk_halftone.spill` is
-    # the one other annotated param (2026-10-01).
+    # the one other annotated param (2026-10-01); `colour_keep` greys its
+    # second band while `use_keep_2` is off.
+    annotated = {
+        ("cmyk_halftone", "spill"),
+        ("colour_keep", "keep_2"),
+        ("colour_keep", "hue_range_2"),
+    }
     for name, entry in OPS.items():
         if name == "hatch":
             continue
         for param in entry.to_dict()["params"]:
-            if (name, param["name"]) == ("cmyk_halftone", "spill"):
+            if (name, param["name"]) in annotated:
                 continue
             assert "disabledWhen" not in param, (
                 f"{name}.{param['name']} unexpectedly carries disabledWhen"
