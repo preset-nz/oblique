@@ -1,11 +1,11 @@
 import { useToolStateStore } from '@/canvas/toolState';
-import { useViewTransformStore } from '@/canvas/viewTransform';
 
 /**
  * Global keyboard shortcuts for the app shell.
  *
- * Cmd+0 -> fit document to window, Cmd+1 -> 100% zoom. These have no menu
- * item (view-only, no natural File/Edit home), so they stay here.
+ * Cmd+0 (Fit in Window) and Cmd+1 (Actual Size) used to be handled here;
+ * they are now View menu accelerators (view-menu-zoom.md), along with Zoom
+ * In/Out (Cmd+=, Cmd+-), for the same NSMenu-consumes-the-key reason as below.
  *
  * New/Open/Import/Save/Save As/Export PNG/Undo/Redo used to be handled here
  * too (Open was a combined Open-or-Import dialog before the roadmap
@@ -28,20 +28,8 @@ import { useViewTransformStore } from '@/canvas/viewTransform';
  */
 export function installShortcuts(): () => void {
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.metaKey) {
-      const key = e.key.toLowerCase();
-
-      if (key === '0') {
-        e.preventDefault();
-        useViewTransformStore.getState().fitToWindow();
-      } else if (key === '1') {
-        e.preventDefault();
-        useViewTransformStore.getState().reset100();
-      }
-      return;
-    }
-
-    if (e.ctrlKey || e.altKey || e.shiftKey) return;
+    // Every Cmd-chord is a menu accelerator now; nothing here claims one.
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
 
     const target = e.target;
     if (

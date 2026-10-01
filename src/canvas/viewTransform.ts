@@ -19,6 +19,56 @@ export interface ViewTransform {
 export const MIN_SCALE = 1 / 32;
 export const MAX_SCALE = 32;
 
+/**
+ * The fixed zoom ladder the View menu's Zoom In / Zoom Out step along
+ * (view-menu-zoom.md). Wheel/pinch zoom stays continuous; the menu snaps to
+ * the next stop so a wheel zoom to 73% steps to 100%, not 109.5%.
+ */
+export const ZOOM_STOPS: readonly number[] = [
+  1 / 32,
+  1 / 16,
+  1 / 8,
+  1 / 4,
+  1 / 3,
+  1 / 2,
+  2 / 3,
+  1,
+  1.5,
+  2,
+  3,
+  4,
+  6,
+  8,
+  12,
+  16,
+  24,
+  32,
+];
+
+/** Relative tolerance for "sitting exactly on a stop" (zoomAt multiplies, so drift is possible). */
+const STOP_EPSILON = 1e-9;
+
+/**
+ * The next stop on `ZOOM_STOPS` strictly above (`dir = 1`) or below
+ * (`dir = -1`) `scale`. Returns the end stop itself when there is nothing
+ * further that way, so callers can detect "no change" by comparing.
+ */
+export function nextZoomStop(scale: number, dir: 1 | -1): number {
+  const first = ZOOM_STOPS[0] as number;
+  const last = ZOOM_STOPS[ZOOM_STOPS.length - 1] as number;
+  if (dir === 1) {
+    for (const stop of ZOOM_STOPS) {
+      if (stop > scale * (1 + STOP_EPSILON)) return stop;
+    }
+    return last;
+  }
+  for (let i = ZOOM_STOPS.length - 1; i >= 0; i--) {
+    const stop = ZOOM_STOPS[i] as number;
+    if (stop < scale * (1 - STOP_EPSILON)) return stop;
+  }
+  return first;
+}
+
 export interface Point {
   x: number;
   y: number;
@@ -101,6 +151,17 @@ interface ViewTransformState {
   setCursorDoc: (cursor: Point | null) => void;
   fitToWindow: () => void;
   reset100: () => void;
+  /** Step to the next `ZOOM_STOPS` stop above, about the viewport centre. */
+  zoomIn: () => void;
+  /** Step to the next `ZOOM_STOPS` stop below, about the viewport centre. */
+  zoomOut: () => void;
+}
+
+/** Zoom one stop about the viewport centre; a no-op at either end of the ladder. */
+function stepZoom(view: ViewTransform, viewportW: number, viewportH: number, dir: 1 | -1) {
+  const target = nextZoomStop(view.scale, dir);
+  if (dir === 1 ? target <= view.scale : target >= view.scale) return view;
+  return zoomAt(view, { x: viewportW / 2, y: viewportH / 2 }, target / view.scale);
 }
 
 export const useViewTransformStore = create<ViewTransformState>((set, get) => ({
@@ -121,6 +182,16 @@ export const useViewTransformStore = create<ViewTransformState>((set, get) => ({
   reset100: () => {
     const { viewportW, viewportH, docW, docH } = get();
     set({ view: reset100Transform(viewportW, viewportH, docW, docH) });
+  },
+  zoomIn: () => {
+    const { view, viewportW, viewportH } = get();
+    const next = stepZoom(view, viewportW, viewportH, 1);
+    if (next !== view) set({ view: next });
+  },
+  zoomOut: () => {
+    const { view, viewportW, viewportH } = get();
+    const next = stepZoom(view, viewportW, viewportH, -1);
+    if (next !== view) set({ view: next });
   },
 }));
 

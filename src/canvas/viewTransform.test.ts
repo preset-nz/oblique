@@ -1,13 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clampScale,
   docToScreen,
   fitTransform,
   MAX_SCALE,
   MIN_SCALE,
+  nextZoomStop,
   reset100Transform,
   screenToDoc,
+  useViewTransformStore,
   type ViewTransform,
+  ZOOM_STOPS,
   zoomAt,
 } from './viewTransform';
 
@@ -124,5 +127,87 @@ describe('fitTransform / reset100Transform', () => {
     expect(view.scale).toBe(1);
     expect(view.tx).toBe(512);
     expect(view.ty).toBe(512);
+  });
+});
+
+describe('nextZoomStop', () => {
+  it('steps to the next stop strictly above or below an in-between scale', () => {
+    expect(nextZoomStop(0.73, 1)).toBe(1);
+    expect(nextZoomStop(0.73, -1)).toBe(2 / 3);
+    expect(nextZoomStop(1.09, 1)).toBe(1.5);
+  });
+
+  it('moves past a scale sitting exactly on a stop', () => {
+    expect(nextZoomStop(1, 1)).toBe(1.5);
+    expect(nextZoomStop(1, -1)).toBe(2 / 3);
+    expect(nextZoomStop(1 / 3, 1)).toBe(0.5);
+    expect(nextZoomStop(1 / 3, -1)).toBe(1 / 4);
+  });
+
+  it('treats float drift off a stop as sitting on it', () => {
+    expect(nextZoomStop(1 + 1e-12, 1)).toBe(1.5);
+    expect(nextZoomStop(1 - 1e-12, -1)).toBe(2 / 3);
+    expect(nextZoomStop(1 - 1e-12, 1)).toBe(1.5);
+  });
+
+  it('stays at the ends of the ladder', () => {
+    expect(nextZoomStop(MAX_SCALE, 1)).toBe(MAX_SCALE);
+    expect(nextZoomStop(MIN_SCALE, -1)).toBe(MIN_SCALE);
+    expect(nextZoomStop(MAX_SCALE * 2, 1)).toBe(MAX_SCALE);
+    expect(nextZoomStop(MIN_SCALE / 2, -1)).toBe(MIN_SCALE);
+  });
+
+  it('ladder spans exactly the scale clamp', () => {
+    expect(ZOOM_STOPS[0]).toBe(MIN_SCALE);
+    expect(ZOOM_STOPS[ZOOM_STOPS.length - 1]).toBe(MAX_SCALE);
+  });
+});
+
+describe('zoomIn / zoomOut store actions', () => {
+  const W = 800;
+  const H = 600;
+  const centre = { x: W / 2, y: H / 2 };
+
+  function setup(view: ViewTransform) {
+    useViewTransformStore.setState({ view, viewportW: W, viewportH: H, docW: 1000, docH: 1000 });
+  }
+
+  beforeEach(() => setup({ scale: 1, tx: 0, ty: 0 }));
+
+  it('lands on the ladder from a wheel-zoomed scale', () => {
+    setup({ scale: 0.73, tx: 10, ty: 20 });
+    useViewTransformStore.getState().zoomIn();
+    expect(useViewTransformStore.getState().view.scale).toBeCloseTo(1, 12);
+  });
+
+  it('steps 100% -> 150% and 100% -> 66.7%', () => {
+    useViewTransformStore.getState().zoomIn();
+    expect(useViewTransformStore.getState().view.scale).toBeCloseTo(1.5, 12);
+
+    setup({ scale: 1, tx: 0, ty: 0 });
+    useViewTransformStore.getState().zoomOut();
+    expect(useViewTransformStore.getState().view.scale).toBeCloseTo(2 / 3, 12);
+  });
+
+  it('keeps the viewport centre fixed in document space', () => {
+    setup({ scale: 0.73, tx: 37, ty: -91 });
+    const before = screenToDoc(useViewTransformStore.getState().view, centre);
+    for (let i = 0; i < 3; i++) useViewTransformStore.getState().zoomIn();
+    for (let i = 0; i < 5; i++) useViewTransformStore.getState().zoomOut();
+    const after = screenToDoc(useViewTransformStore.getState().view, centre);
+    expect(after.x).toBeCloseTo(before.x, 9);
+    expect(after.y).toBeCloseTo(before.y, 9);
+  });
+
+  it('does nothing at the ends of the ladder', () => {
+    const atMax: ViewTransform = { scale: MAX_SCALE, tx: 5, ty: 6 };
+    setup(atMax);
+    useViewTransformStore.getState().zoomIn();
+    expect(useViewTransformStore.getState().view).toBe(atMax);
+
+    const atMin: ViewTransform = { scale: MIN_SCALE, tx: 5, ty: 6 };
+    setup(atMin);
+    useViewTransformStore.getState().zoomOut();
+    expect(useViewTransformStore.getState().view).toBe(atMin);
   });
 });

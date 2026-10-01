@@ -1,7 +1,37 @@
+import { Minus, Plus } from 'lucide-react';
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { filenameOf } from '@/project/import';
 import { useProjectMetaStore } from '@/project/io';
+
+const ZOOM_BUTTON_CLASS =
+  'inline-flex h-4 items-center justify-center rounded px-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100';
+
+/** Icon-sized ghost button with a tooltip; `label` doubles as the aria-label minus the shortcut. */
+function ZoomButton(props: {
+  label: string;
+  shortcut: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={props.label}
+          className={props.className ?? ZOOM_BUTTON_CLASS}
+          onClick={props.onClick}
+        >
+          {props.children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{`${props.label} (${props.shortcut})`}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function StatusBar() {
   const scale = useViewTransformStore((state) => state.view.scale);
@@ -10,6 +40,7 @@ export function StatusBar() {
   const dirtySinceSave = useProjectMetaStore((state) => state.dirtySinceSave);
   const projectName = projectPath ? filenameOf(projectPath) : 'untitled';
 
+  const { zoomIn, zoomOut, fitToWindow } = useViewTransformStore.getState();
   const zoomPercent = Math.round(scale * 100);
 
   const cursorText =
@@ -30,8 +61,21 @@ export function StatusBar() {
       <Separator />
 
       {/* Zoom level */}
-      <div className="flex items-center gap-1 whitespace-nowrap">
-        <span>{zoomPercent}%</span>
+      <div className="flex items-center gap-0.5 whitespace-nowrap">
+        <ZoomButton label="Zoom Out" shortcut="⌘−" onClick={zoomOut}>
+          <Minus size={12} aria-hidden="true" />
+        </ZoomButton>
+        <ZoomButton
+          label="Fit in Window"
+          shortcut="⌘0"
+          onClick={fitToWindow}
+          className={`${ZOOM_BUTTON_CLASS} min-w-9 tabular-nums`}
+        >
+          {zoomPercent}%
+        </ZoomButton>
+        <ZoomButton label="Zoom In" shortcut="⌘=" onClick={zoomIn}>
+          <Plus size={12} aria-hidden="true" />
+        </ZoomButton>
       </div>
 
       <Separator />

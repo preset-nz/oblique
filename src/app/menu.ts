@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
@@ -21,7 +22,8 @@ import { commitActiveTextEdit } from '@/scene/textEditState';
  * Double-firing: on macOS, a menu item's accelerator is a native key
  * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
  * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
- * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z exclusively — `shortcuts.ts`'s keydown
+ * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
+ * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md) exclusively — `shortcuts.ts`'s keydown
  * branches for those keys were removed rather than kept as dead/duplicate
  * paths (this is the mainstream, expected behaviour, but wasn't
  * exercisable headlessly in this environment — see the story report for
@@ -73,6 +75,12 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
     const newId = await duplicateNode(selection.nodeId, tauriImportDeps);
     if (newId) useSelectionStore.getState().selectNode(newId);
   },
+  // View menu (view-menu-zoom.md): the same store actions the status-bar
+  // buttons call. Cmd+0/Cmd+1 used to be keydown branches in shortcuts.ts.
+  'menu://view/zoom-in': () => useViewTransformStore.getState().zoomIn(),
+  'menu://view/zoom-out': () => useViewTransformStore.getState().zoomOut(),
+  'menu://view/fit': () => useViewTransformStore.getState().fitToWindow(),
+  'menu://view/actual-size': () => useViewTransformStore.getState().reset100(),
   // Same reason: Replace's undo step must not swallow a half-finished text edit.
   'menu://type/replace-font': () => {
     commitActiveTextEdit();

@@ -2,7 +2,8 @@
 //! 2026-07-04): App submenu (About/Services/Hide/Quit — standard macOS
 //! chrome), File (New/Open/Import/Save/Save As/Export PNG), Edit (Undo/Redo
 //! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
-//! items).
+//! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md),
+//! Type.
 //!
 //! Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split
 //! Open vs Import", 2026-07-05): genuinely different flows, not one dialog
@@ -51,6 +52,10 @@ const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
 const EVT_EDIT_UNDO: &str = "menu://edit/undo";
 const EVT_EDIT_REDO: &str = "menu://edit/redo";
 const EVT_EDIT_DUPLICATE: &str = "menu://edit/duplicate";
+const EVT_VIEW_ZOOM_IN: &str = "menu://view/zoom-in";
+const EVT_VIEW_ZOOM_OUT: &str = "menu://view/zoom-out";
+const EVT_VIEW_FIT: &str = "menu://view/fit";
+const EVT_VIEW_ACTUAL_SIZE: &str = "menu://view/actual-size";
 const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
 const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
 
@@ -156,6 +161,29 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
 
+    // View menu (view-menu-zoom.md): zoom commands. Cmd+= rather than
+    // Cmd+Shift+= so Zoom In needs no Shift, as in every Mac editor.
+    let view_zoom_in =
+        MenuItem::with_id(app, "view-zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
+    let view_zoom_out =
+        MenuItem::with_id(app, "view-zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
+    let view_fit = MenuItem::with_id(app, "view-fit", "Fit in Window", true, Some("CmdOrCtrl+0"))?;
+    let view_actual =
+        MenuItem::with_id(app, "view-actual", "Actual Size", true, Some("CmdOrCtrl+1"))?;
+
+    let view_submenu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &view_zoom_in,
+            &view_zoom_out,
+            &PredefinedMenuItem::separator(app)?,
+            &view_fit,
+            &view_actual,
+        ],
+    )?;
+
     // Type menu (Epic 20): Replace Font… (story 6, no accelerator) and Convert to
     // Outlines (story 7, InDesign's Shift+Cmd+O).
     let type_replace_font = MenuItem::with_id(
@@ -181,7 +209,13 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(
         app,
-        &[&app_submenu, &file_submenu, &edit_submenu, &type_submenu],
+        &[
+            &app_submenu,
+            &file_submenu,
+            &edit_submenu,
+            &view_submenu,
+            &type_submenu,
+        ],
     )?;
     app.set_menu(menu)?;
 
@@ -197,6 +231,10 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "edit-undo" => EVT_EDIT_UNDO,
             "edit-redo" => EVT_EDIT_REDO,
             "edit-duplicate" => EVT_EDIT_DUPLICATE,
+            "view-zoom-in" => EVT_VIEW_ZOOM_IN,
+            "view-zoom-out" => EVT_VIEW_ZOOM_OUT,
+            "view-fit" => EVT_VIEW_FIT,
+            "view-actual" => EVT_VIEW_ACTUAL_SIZE,
             "type-replace-font" => EVT_TYPE_REPLACE_FONT,
             "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
             _ => return,
