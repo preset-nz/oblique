@@ -3,8 +3,11 @@ import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
+import { tauriImportDeps } from '@/project/import';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
+import { duplicateNode } from '@/scene/duplicateNode';
 import { redo, undo } from '@/scene/history';
+import { useSelectionStore } from '@/scene/selection';
 import { commitActiveTextEdit } from '@/scene/textEditState';
 
 /**
@@ -60,6 +63,15 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://edit/redo': () => {
     commitActiveTextEdit();
     return redo();
+  },
+  // Edit → Duplicate (Cmd+D, duplicate-node.md): an open text edit commits
+  // first; the copy becomes the selection so a second Cmd+D duplicates the copy.
+  'menu://edit/duplicate': async () => {
+    commitActiveTextEdit();
+    const selection = useSelectionStore.getState().selection;
+    if (selection.kind !== 'node') return;
+    const newId = await duplicateNode(selection.nodeId, tauriImportDeps);
+    if (newId) useSelectionStore.getState().selectNode(newId);
   },
   // Same reason: Replace's undo step must not swallow a half-finished text edit.
   'menu://type/replace-font': () => {

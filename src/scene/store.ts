@@ -6,19 +6,26 @@ import {
   marqueeToVectorPaths,
   useMarqueeStateStore,
 } from './marquee';
-import type {
-  BlendMode,
-  Modifier,
-  NodeOutput,
-  PixelNode,
-  Scene,
-  SceneNode,
-  TextNode,
-  Transform2D,
-  VectorMaskRef,
-  VectorNode,
-  VectorPath,
+import {
+  type BlendMode,
+  IDENTITY_TRANSFORM_2D,
+  isPixelNode,
+  isTextNode,
+  isVectorNode,
+  type Modifier,
+  type NodeOutput,
+  type PixelNode,
+  type Scene,
+  type SceneNode,
+  type TextNode,
+  type Transform2D,
+  type VectorMaskRef,
+  type VectorNode,
+  type VectorPath,
 } from './types';
+
+/** Document px a duplicate is offset from its original (x and y), so it doesn't hide exactly underneath it. */
+export const DUPLICATE_OFFSET_PX = 16;
 
 function makeEmptyScene(): Scene {
   return {
@@ -189,6 +196,14 @@ interface SceneState {
    */
   unlockNode: (nodeId: string) => void;
 
+  /**
+   * Tier-1 duplicate (duplicate-node.md): an independent copy of the node and
+   * its whole modifier stack, inserted at the original's own index (directly
+   * above it). Pure scene surgery — the decoded source bitmap is
+   * `scene/duplicateNode.ts`'s job. Returns the new node id, or `null` when
+   * `id` isn't in the scene.
+   */
+  duplicateNode: (id: string) => string | null;
   removeNode: (id: string) => void;
   reorderNode: (id: string, toIndex: number) => void;
   setNodeProp: (id: string, patch: NodePropPatch) => void;
@@ -368,6 +383,70 @@ function pruneMaskState(
   });
 
   return { nodes: clearedNodes, maskRefs: prunedRefs };
+}
+
+function copyPath(path: VectorPath): VectorPath {
+  return {
+    ...path,
+    anchors: path.anchors.map((a) => ({
+      ...a,
+      point: { ...a.point },
+      ...(a.handleIn ? { handleIn: { ...a.handleIn } } : {}),
+      ...(a.handleOut ? { handleOut: { ...a.handleOut } } : {}),
+    })),
+  };
+}
+
+/**
+ * Builds the independent copy for `duplicateNode`: fresh ids throughout, fresh
+ * params/path/font objects, masks re-keyed (same shape `nodeId`, new ref id).
+ * Returns the extended `maskRefs` table (or the input untouched when no
+ * modifier carried a resolvable mask).
+ */
+function copyNode(
+  original: SceneNode,
+  newId: string,
+  maskRefs: Scene['maskRefs'],
+): { node: SceneNode; maskRefs: Scene['maskRefs'] } {
+  let nextRefs = maskRefs;
+  const modifiers = original.modifiers.map((m): Modifier => {
+    const { maskId, ...rest } = m;
+    const copy: Modifier = { ...rest, id: crypto.randomUUID(), params: { ...m.params } };
+    const ref = maskId ? maskRefs?.[maskId] : undefined;
+    if (ref) {
+      // Same `nodeId`: both modifiers mask against one shape; feather/expand/invert stay per-ref.
+      const newMaskId = crypto.randomUUID();
+      nextRefs = { ...nextRefs, [newMaskId]: { ...ref, id: newMaskId } };
+      copy.maskId = newMaskId;
+    }
+    return copy; // a dangling maskId is dropped, as pruneMaskState does
+  });
+
+  const base = original.transform2d ?? IDENTITY_TRANSFORM_2D;
+  const node: SceneNode = {
+    ...original,
+    id: newId,
+    label: `${original.label} copy`,
+    state: 'active', // never 'locked': the bake belongs to the original's id
+    modifiers,
+    transform2d: {
+      ...base,
+      x: base.x + DUPLICATE_OFFSET_PX,
+      y: base.y + DUPLICATE_OFFSET_PX,
+    },
+    dirty: dirtyBoth(),
+  };
+  if (isVectorNode(original)) {
+    (node as VectorNode).paths = original.paths.map(copyPath);
+  } else if (isTextNode(original)) {
+    const text = node as TextNode;
+    text.font = { ...original.font };
+    text.position = { ...original.position };
+    text.stroke = original.stroke ? { ...original.stroke } : null;
+  } else if (isPixelNode(original)) {
+    (node as PixelNode).sourceSize = [...original.sourceSize];
+  }
+  return { node, maskRefs: nextRefs };
 }
 
 export const useSceneStore = create<SceneState>((set, get) => ({
@@ -595,6 +674,21 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
       return { scene: { ...s.scene, nodes } };
     });
+  },
+
+  duplicateNode: (id) => {
+    const original = get().scene.nodes.find((n) => n.id === id);
+    if (!original) return null;
+    const newId = crypto.randomUUID();
+    set((s) => {
+      const index = s.scene.nodes.findIndex((n) => n.id === id);
+      const source = s.scene.nodes[index];
+      const { node, maskRefs } = copyNode(source, newId, s.scene.maskRefs);
+      const nodes = [...s.scene.nodes];
+      nodes.splice(index, 0, node);
+      return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
+    });
+    return newId;
   },
 
   removeNode: (id) => {

@@ -50,6 +50,7 @@ const EVT_FILE_SAVE_AS: &str = "menu://file/save-as";
 const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
 const EVT_EDIT_UNDO: &str = "menu://edit/undo";
 const EVT_EDIT_REDO: &str = "menu://edit/redo";
+const EVT_EDIT_DUPLICATE: &str = "menu://edit/duplicate";
 const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
 const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
 
@@ -135,6 +136,9 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         Some("Shift+CmdOrCtrl+Z"),
     )?;
 
+    let edit_duplicate =
+        MenuItem::with_id(app, "edit-duplicate", "Duplicate", true, Some("CmdOrCtrl+D"))?;
+
     let edit_submenu = Submenu::with_items(
         app,
         "Edit",
@@ -142,6 +146,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         &[
             &edit_undo,
             &edit_redo,
+            &PredefinedMenuItem::separator(app)?,
+            &edit_duplicate,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::cut(app, None)?,
             &PredefinedMenuItem::copy(app, None)?,
@@ -190,6 +196,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "file-export-png" => EVT_FILE_EXPORT_PNG,
             "edit-undo" => EVT_EDIT_UNDO,
             "edit-redo" => EVT_EDIT_REDO,
+            "edit-duplicate" => EVT_EDIT_DUPLICATE,
             "type-replace-font" => EVT_TYPE_REPLACE_FONT,
             "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
             _ => return,
