@@ -3,7 +3,8 @@
 //! chrome), File (New/Open/Import/Save/Save As/Export PNG), Edit (Undo/Redo
 //! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
 //! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md),
-//! Type.
+//! Layer (Bring Forward/Send Backward/Bring to Front/Send to Back —
+//! drag-reorder.md), Type.
 //!
 //! Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split
 //! Open vs Import", 2026-07-05): genuinely different flows, not one dialog
@@ -56,6 +57,10 @@ const EVT_VIEW_ZOOM_IN: &str = "menu://view/zoom-in";
 const EVT_VIEW_ZOOM_OUT: &str = "menu://view/zoom-out";
 const EVT_VIEW_FIT: &str = "menu://view/fit";
 const EVT_VIEW_ACTUAL_SIZE: &str = "menu://view/actual-size";
+const EVT_LAYER_FORWARD: &str = "menu://layer/forward";
+const EVT_LAYER_BACKWARD: &str = "menu://layer/backward";
+const EVT_LAYER_FRONT: &str = "menu://layer/front";
+const EVT_LAYER_BACK: &str = "menu://layer/back";
 const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
 const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
 
@@ -184,6 +189,51 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
 
+    // Layer menu (drag-reorder.md): stacking order of the selected node, the
+    // keyboard path for the layer-row drag grip. Photoshop/Figma chords: Cmd+]
+    // forward, Cmd+[ backward, +Shift to the ends.
+    let layer_forward = MenuItem::with_id(
+        app,
+        "layer-forward",
+        "Bring Forward",
+        true,
+        Some("CmdOrCtrl+]"),
+    )?;
+    let layer_backward = MenuItem::with_id(
+        app,
+        "layer-backward",
+        "Send Backward",
+        true,
+        Some("CmdOrCtrl+["),
+    )?;
+    let layer_front = MenuItem::with_id(
+        app,
+        "layer-front",
+        "Bring to Front",
+        true,
+        Some("Shift+CmdOrCtrl+]"),
+    )?;
+    let layer_back = MenuItem::with_id(
+        app,
+        "layer-back",
+        "Send to Back",
+        true,
+        Some("Shift+CmdOrCtrl+["),
+    )?;
+
+    let layer_submenu = Submenu::with_items(
+        app,
+        "Layer",
+        true,
+        &[
+            &layer_forward,
+            &layer_backward,
+            &PredefinedMenuItem::separator(app)?,
+            &layer_front,
+            &layer_back,
+        ],
+    )?;
+
     // Type menu (Epic 20): Replace Font… (story 6, no accelerator) and Convert to
     // Outlines (story 7, InDesign's Shift+Cmd+O).
     let type_replace_font = MenuItem::with_id(
@@ -214,6 +264,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &file_submenu,
             &edit_submenu,
             &view_submenu,
+            &layer_submenu,
             &type_submenu,
         ],
     )?;
@@ -235,6 +286,10 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "view-zoom-out" => EVT_VIEW_ZOOM_OUT,
             "view-fit" => EVT_VIEW_FIT,
             "view-actual" => EVT_VIEW_ACTUAL_SIZE,
+            "layer-forward" => EVT_LAYER_FORWARD,
+            "layer-backward" => EVT_LAYER_BACKWARD,
+            "layer-front" => EVT_LAYER_FRONT,
+            "layer-back" => EVT_LAYER_BACK,
             "type-replace-font" => EVT_TYPE_REPLACE_FONT,
             "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
             _ => return,

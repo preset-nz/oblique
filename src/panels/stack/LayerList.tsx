@@ -1,6 +1,7 @@
 import {
   Eye,
   EyeOff,
+  GripVertical,
   Loader2,
   Lock,
   LockOpen,
@@ -30,6 +31,7 @@ import { useSceneStore } from '@/scene/store';
 import type { BlendMode, SceneNode, TextNode } from '@/scene/types';
 import { isTextNode, isVectorNode } from '@/scene/types';
 import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './lockUi';
+import { useDragReorder } from './useDragReorder';
 
 /**
  * Minimal layer list (03-compositor "Minimal layer list in the Stack tab").
@@ -39,6 +41,8 @@ import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './loc
  *
  * Reorder/visibility/opacity/blend all go through `setNodeProp`/`reorderNode`
  * — compositing-only mutations, no dirty flag, no recook (dirty rule 4).
+ * Reordering is a drag on the row's grip (`useDragReorder`, drag-reorder.md);
+ * the keyboard path is the Layer menu (`src/app/menu.ts`).
  * Modifier editing stays in the debug StackPanel until Epic 04.
  */
 
@@ -73,8 +77,9 @@ export function fitContain(
 
 /**
  * Target index for an up/down reorder nudge, or `null` if the row is
- * already at that edge (button should be disabled). Pure — mirrors the
- * debug panel's modifier reorder pattern (commit 32cb964).
+ * already at that edge (button should be disabled). Pure. No longer used by
+ * the layer rows (drag-reorder.md replaced their arrows with a grip), but
+ * `VectorsPanel`'s path list still nudges with it.
  */
 export function nudgeIndex(
   currentIndex: number,
@@ -151,26 +156,25 @@ const MEMBER_ROW_CLASS =
 function LayerRow({
   node,
   index,
-  length,
   selected,
   spanRole,
+  dragging,
+  gripProps,
   onSelect,
 }: {
   node: SceneNode;
   index: number;
-  length: number;
   selected: boolean;
   spanRole: SpanRole;
+  /** This row is the one being dragged — dimmed in place; the list doesn't reflow until the drop. */
+  dragging: boolean;
+  gripProps: ReturnType<typeof useDragReorder>['gripProps'];
   onSelect: () => void;
 }) {
   const setNodeProp = useSceneStore((s) => s.setNodeProp);
-  const reorderNode = useSceneStore((s) => s.reorderNode);
   const lockNode = useSceneStore((s) => s.lockNode);
   const unlockNode = useSceneStore((s) => s.unlockNode);
   const bakingNodeIds = useSceneStore((s) => s.bakingNodeIds);
-
-  const up = nudgeIndex(index, 'up', length);
-  const down = nudgeIndex(index, 'down', length);
 
   // Inline rename (rename-nodes.md). The in-progress string is transient —
   // local state, never scene state — so one setNodeProp call on commit is one
@@ -256,8 +260,25 @@ function LayerRow({
     // biome-ignore lint/a11y/noStaticElementInteractions: same — pointer-only convenience
     <div
       onClick={onSelect}
-      className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''} ${spanRole === 'member' ? MEMBER_ROW_CLASS : ''}`}
+      data-reorder-index={index}
+      className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''} ${spanRole === 'member' ? MEMBER_ROW_CLASS : ''} ${dragging ? 'opacity-40' : ''}`}
     >
+      {/* Drag grip (drag-reorder.md): the only drag origin, so row clicks and
+          the controls inside the row behave as before. Live on locked nodes —
+          layer order is compositing-only. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="Drag to reorder layer"
+            className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing"
+            {...gripProps(index)}
+          >
+            <GripVertical size={14} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Drag to reorder</TooltipContent>
+      </Tooltip>
       {editingLabel ? (
         <div className="flex flex-1 items-center gap-2 min-w-0">
           {rowLead}
@@ -378,28 +399,6 @@ function LayerRow({
                   : 'Lock layer — bakes full quality and freezes edits'}
             </TooltipContent>
           </Tooltip>
-          <button
-            type="button"
-            disabled={up === null}
-            aria-label="Move layer up"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (up !== null) reorderNode(node.id, up);
-            }}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            disabled={down === null}
-            aria-label="Move layer down"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (down !== null) reorderNode(node.id, down);
-            }}
-          >
-            ↓
-          </button>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -467,6 +466,16 @@ export function LayerList({
   onSelectNode: (id: string) => void;
 }) {
   const nodes = useSceneStore((s) => s.scene.nodes);
+  const reorderNode = useSceneStore((s) => s.reorderNode);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { draggingIndex, indicatorTop, gripProps } = useDragReorder({
+    containerRef,
+    // Layer display order is model order (index 0 = top), so no conversion.
+    onCommit: (from, to) => {
+      const node = nodes[from];
+      if (node) reorderNode(node.id, to);
+    },
+  });
 
   if (nodes.length === 0) return null;
   const roles = spanRoles(nodes);
@@ -474,18 +483,26 @@ export function LayerList({
   return (
     // data-layer-list: Viewport's Enter-to-edit-text shortcut recognises focus
     // here (text-tool-and-inspector.md) without importing across panels/canvas.
-    <div className="flex flex-col gap-1" data-layer-list="">
+    <div ref={containerRef} className="relative flex flex-col gap-1" data-layer-list="">
       {nodes.map((node, index) => (
         <LayerRow
           key={node.id}
           node={node}
           index={index}
-          length={nodes.length}
           selected={node.id === selectedNodeId}
           spanRole={roles[index] ?? 'none'}
+          dragging={draggingIndex === index}
+          gripProps={gripProps}
           onSelect={() => onSelectNode(node.id)}
         />
       ))}
+      {indicatorTop !== null && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 h-0.5 -translate-y-1/2 rounded bg-sky-500"
+          style={{ top: indicatorTop }}
+        />
+      )}
     </div>
   );
 }

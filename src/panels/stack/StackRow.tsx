@@ -6,6 +6,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  GripVertical,
   MoreVertical,
   RotateCcw,
   Spline,
@@ -26,28 +27,33 @@ import { opLabel } from '@/sidecar/opsCache';
 import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
 import { modifierScopeKey } from './modifierScope';
 import { useRowCollapseStore } from './rowCollapse';
-import { nudgeModelIndex } from './stackOrder';
+import type { useDragReorder } from './useDragReorder';
 
 interface StackRowProps {
   node: SceneNode;
   modifier: Modifier;
   /** This row's index in the DISPLAYED (bottom-to-top) list, not the scene-model array. */
   displayIndex: number;
-  /** Total row count — same in both orderings. */
-  length: number;
+  /** This row is the one being dragged — dimmed in place; the list doesn't reflow until the drop. */
+  dragging: boolean;
+  gripProps: ReturnType<typeof useDragReorder>['gripProps'];
   ops: OpDescriptor[];
 }
 
 /**
- * One modifier row: reorder nudge (drag handle icon, up/down — see the
- * story's fallback note: pointer-drag DnD is out of this story's budget,
- * so the reorder control reuses `LayerList`'s up/down nudge pattern),
+ * One modifier row: drag grip (reorder — `useDragReorder`, drag-reorder.md),
  * enabled toggle, label, expand chevron, overflow (duplicate/delete/reset).
  * The expanded region mounts `<PropertyPanel>` scoped to this modifier.
  */
-export function StackRow({ node, modifier, displayIndex, length, ops }: StackRowProps) {
+export function StackRow({
+  node,
+  modifier,
+  displayIndex,
+  dragging,
+  gripProps,
+  ops,
+}: StackRowProps) {
   const setModifierEnabled = useSceneStore((s) => s.setModifierEnabled);
-  const reorderModifier = useSceneStore((s) => s.reorderModifier);
   const removeModifier = useSceneStore((s) => s.removeModifier);
   const addModifier = useSceneStore((s) => s.addModifier);
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
@@ -76,10 +82,8 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   // expandable so the PropertyPanel empty state can explain itself.
   const expandable = !descriptor || descriptor.params.length > 0;
   const expanded = expandable && rowExpanded;
-  const up = nudgeModelIndex(displayIndex, 'up', length);
-  const down = nudgeModelIndex(displayIndex, 'down', length);
   // Locked node selected (lock-ui.md): every cook-dirtying control on this
-  // row goes inert — reorder, enable toggle, mask apply, duplicate/reset/
+  // row goes inert — the drag grip, enable toggle, mask apply, duplicate/reset/
   // delete, and the expanded PropertyPanel's own fields (via `readOnly`
   // below). The row still expands/collapses to inspect params read-only.
   const locked = stackControlsDisabled(node);
@@ -140,42 +144,29 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   }
 
   return (
-    <div className="rounded border border-neutral-800 bg-neutral-900/40">
+    <div
+      data-reorder-index={displayIndex}
+      className={`rounded border border-neutral-800 bg-neutral-900/40 ${dragging ? 'opacity-40' : ''}`}
+    >
       <div
         className={`flex items-center gap-1.5 px-1.5 py-1 ${modifier.enabled ? '' : 'opacity-40'}`}
       >
-        <div className="flex flex-col text-neutral-500">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                disabled={up === null || locked}
-                aria-label="Move modifier up (applies later)"
-                className="leading-none disabled:opacity-30"
-                onClick={() => up !== null && !locked && reorderModifier(node.id, modifier.id, up)}
-              >
-                ▲
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{locked ? LOCKED_HINT : 'Applies later'}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                disabled={down === null || locked}
-                aria-label="Move modifier down (applies earlier)"
-                className="leading-none disabled:opacity-30"
-                onClick={() =>
-                  down !== null && !locked && reorderModifier(node.id, modifier.id, down)
-                }
-              >
-                ▼
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{locked ? LOCKED_HINT : 'Applies earlier'}</TooltipContent>
-          </Tooltip>
-        </div>
+        {/* Drag grip (drag-reorder.md): the only drag origin. Inert on a locked
+            node — modifier order changes the cook, which locking forbids. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              disabled={locked}
+              aria-label="Drag to reorder modifier"
+              className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing disabled:cursor-default disabled:opacity-30 disabled:hover:text-neutral-500"
+              {...(locked ? {} : gripProps(displayIndex))}
+            >
+              <GripVertical size={14} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{locked ? LOCKED_HINT : 'Drag to reorder'}</TooltipContent>
+        </Tooltip>
 
         <Tooltip>
           <TooltipTrigger asChild>

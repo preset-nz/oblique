@@ -3,12 +3,14 @@ import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
+import { type LayerMove, layerMoveTarget } from '@/panels/stack/dragReorder';
 import { exportPng } from '@/project/export';
 import { tauriImportDeps } from '@/project/import';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
 import { duplicateNode } from '@/scene/duplicateNode';
 import { redo, undo } from '@/scene/history';
 import { useSelectionStore } from '@/scene/selection';
+import { useSceneStore } from '@/scene/store';
 import { commitActiveTextEdit } from '@/scene/textEditState';
 
 /**
@@ -23,7 +25,8 @@ import { commitActiveTextEdit } from '@/scene/textEditState';
  * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
  * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
  * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
- * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md) exclusively — `shortcuts.ts`'s keydown
+ * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md) and the Layer menu's
+ * Cmd+]/Cmd+[ (+Shift, drag-reorder.md) exclusively — `shortcuts.ts`'s keydown
  * branches for those keys were removed rather than kept as dead/duplicate
  * paths (this is the mainstream, expected behaviour, but wasn't
  * exercisable headlessly in this environment — see the story report for
@@ -46,6 +49,25 @@ import { commitActiveTextEdit } from '@/scene/textEditState';
  * window-scoped listener receives it exactly the same as the top-level one
  * would.
  */
+
+/**
+ * Layer menu (drag-reorder.md): Bring Forward / Send Backward / Bring to Front /
+ * Send to Back act on the selected node — the keyboard path for what the layer
+ * grip does with the pointer. An open text edit commits first, like its
+ * neighbours; no selection or the stack edge is a no-op (no store write, so no
+ * undo step). Index 0 is the top of the stack.
+ */
+function moveSelectedLayer(move: LayerMove): void {
+  commitActiveTextEdit();
+  const selection = useSelectionStore.getState().selection;
+  if (selection.kind !== 'node') return;
+  const { nodes } = useSceneStore.getState().scene;
+  const from = nodes.findIndex((n) => n.id === selection.nodeId);
+  const to = layerMoveTarget(from, nodes.length, move);
+  if (to === null) return;
+  useSceneStore.getState().reorderNode(selection.nodeId, to);
+}
+
 const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://app/settings': () => openSettingsDialog(),
   'menu://file/new': () => newProject(),
@@ -81,6 +103,11 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://view/zoom-out': () => useViewTransformStore.getState().zoomOut(),
   'menu://view/fit': () => useViewTransformStore.getState().fitToWindow(),
   'menu://view/actual-size': () => useViewTransformStore.getState().reset100(),
+  // Layer menu (drag-reorder.md): Cmd+] / Cmd+[ and the Shift variants.
+  'menu://layer/forward': () => moveSelectedLayer('forward'),
+  'menu://layer/backward': () => moveSelectedLayer('backward'),
+  'menu://layer/front': () => moveSelectedLayer('front'),
+  'menu://layer/back': () => moveSelectedLayer('back'),
   // Same reason: Replace's undo step must not swallow a half-finished text edit.
   'menu://type/replace-font': () => {
     commitActiveTextEdit();
