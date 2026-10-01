@@ -6,6 +6,7 @@ import {
   PenTool as PenToolIcon,
   Pipette,
   Square,
+  Type as TypeIcon,
   Wand2,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -49,6 +50,7 @@ const TOOLS: ToolButtonSpec[] = [
     disabledHint: 'Colour select — Sidecar not running',
   },
   { tool: 'pen', label: 'Pen', icon: PenToolIcon },
+  { tool: 'text', label: 'Text (T)', icon: TypeIcon },
 ];
 
 /**

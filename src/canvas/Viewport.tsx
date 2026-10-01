@@ -13,7 +13,7 @@ import {
 import { usePathEditStateStore } from '@/scene/pathEditState';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
-import { IDENTITY_TRANSFORM_2D, isVectorNode } from '@/scene/types';
+import { IDENTITY_TRANSFORM_2D, isTextNode, isVectorNode } from '@/scene/types';
 import { ColourSelectOverlay } from './colourSelect/ColourSelectOverlay';
 import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel';
 import { ColourSelectStatusPanel } from './colourSelect/ColourSelectStatusPanel';
@@ -46,6 +46,10 @@ import { SmartSelectOverlay } from './smartSelect/SmartSelectOverlay';
 import { SmartSelectStatusPanel } from './smartSelect/SmartSelectStatusPanel';
 import { useSmartSelectStore } from './smartSelect/state';
 import { TransformBox } from './TransformBox';
+import { TextBounds } from './text/TextBounds';
+import { TextEditor } from './text/TextEditor';
+import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from './text/textEditState';
+import { type ClickRecord, isDoubleClick } from './text/textFrame';
 import { useToolStateStore } from './toolState';
 import { applyMove, type Point } from './transform2d';
 import { usePanZoom } from './usePanZoom';
@@ -77,6 +81,17 @@ const PEN_CLOSE_SCREEN_PX = 8;
 /** Screen-space movement threshold that tells a plain click (corner anchor) apart from a click-drag (smooth anchor, pen-tool.md). */
 const PEN_DRAG_SCREEN_PX = 3;
 
+/**
+ * Whether an Enter keydown aimed at `target` may open the text editor: focus
+ * on nothing in particular (body) or on the layer list, never on another
+ * control that wants Enter for itself.
+ */
+function canEditTextFrom(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return true;
+  if (target === document.body) return true;
+  return target.closest('[data-layer-list]') !== null;
+}
+
 function isImagePath(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
   return IMAGE_EXTENSIONS.has(ext);
@@ -95,6 +110,11 @@ export function Viewport() {
   // every pan/zoom tick (architecture.md §Compositor: "pan/zoom never
   // triggers a recomposite").
   const bufferRef = useRef<OffscreenCanvas | null>(null);
+  // Last primary pointerdown on a node under the move tool, for double-click
+  // detection from Pointer Events alone (no `dblclick`). A ref, not a local in
+  // the pointer effect: that effect re-runs on selection/tool changes, and the
+  // first click's own `selectNode` would wipe a local.
+  const lastClickRef = useRef<ClickRecord | null>(null);
 
   usePanZoom(canvasRef);
 
@@ -335,6 +355,18 @@ export function Viewport() {
         return;
       }
 
+      // Enter re-opens the selected, unlocked text node's overlay editor
+      // (text-tool-and-inspector.md) — the only way into mask-output text,
+      // which hit-testing skips. Only when focus is on the canvas side or the
+      // layer list, so Enter still activates other focused buttons.
+      if (e.key === 'Enter' && !e.repeat && !isEditableTarget && canEditTextFrom(target)) {
+        const currentSelection = useSelectionStore.getState().selection;
+        if (currentSelection.kind === 'node' && beginReEdit(currentSelection.nodeId)) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       // Delete/Backspace removes the active anchor (path-editing.md), or
       // failing that clears the active marquee (marquees.md — "no orphaned
       // overlay state"). Node deletion outside these two isn't bound to a
@@ -524,10 +556,50 @@ export function Viewport() {
         return;
       }
 
+      // Text tool (text-tool-and-inspector.md): commit any open edit first (the
+      // TextEditor's capture-phase listener has normally done it already — it
+      // is idempotent), then re-edit the unlocked text under the pointer, or
+      // place a new blank node. preventDefault so this pointerdown can't pull
+      // focus back out of the textarea the edit is about to mount.
+      if (tool === 'text') {
+        e.preventDefault();
+        commitActiveTextEdit();
+        const docPt = toDoc(e.clientX, e.clientY);
+        const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
+        if (hit && isTextNode(hit) && hit.state !== 'locked') {
+          beginReEdit(hit.id);
+        } else {
+          beginNewTextAt(docPt);
+        }
+        return;
+      }
+
       if (tool !== 'move') return;
 
       const docPt = toDoc(e.clientX, e.clientY);
       const hit = topmostNodeAt(useSceneStore.getState().scene, docPt);
+
+      // Double-click on unlocked text re-edits it. Checked BEFORE the drag
+      // branch below: its beginTransaction() would otherwise flush the edit's
+      // own transaction. A locked node falls through (and does nothing here).
+      const click: ClickRecord | null = hit
+        ? { t: e.timeStamp, x: e.clientX, y: e.clientY, nodeId: hit.id }
+        : null;
+      const previousClick = lastClickRef.current;
+      lastClickRef.current = click;
+      if (
+        hit &&
+        click &&
+        isTextNode(hit) &&
+        hit.state !== 'locked' &&
+        isDoubleClick(previousClick, click)
+      ) {
+        lastClickRef.current = null;
+        e.preventDefault();
+        beginReEdit(hit.id);
+        return;
+      }
+
       if (!hit) {
         // De-select: click on empty canvas with the move tool active
         // (tool-state.md). UI-only, never touches the scene store.
@@ -945,6 +1017,7 @@ export function Viewport() {
           {tool === 'move' &&
             selectedNode &&
             selectedNode.state !== 'locked' &&
+            !isTextNode(selectedNode) &&
             (isVectorNode(selectedNode) ? (
               <PathEditor
                 node={selectedNode}
@@ -965,6 +1038,17 @@ export function Viewport() {
                 />
               )
             ))}
+          {/* A TEXT node gets TextBounds (its glyph bounds) INSTEAD of
+              TransformBox, which would frame the whole document-sized
+              raster (text-tool-and-inspector.md). Scale/rotate is done with
+              font size or Convert to Outlines; moving still works through
+              the body drag above. Shown under the text tool too. */}
+          {(tool === 'move' || tool === 'text') &&
+            selectedNode &&
+            isTextNode(selectedNode) &&
+            selectedNode.state !== 'locked' && (
+              <TextBounds node={selectedNode} viewScale={view.scale} documentSize={documentSize} />
+            )}
           {marquee?.kind === 'rect' && (
             <RectMarquee rect={marquee.rect} viewScale={view.scale} toDoc={toDoc} />
           )}
@@ -997,6 +1081,7 @@ export function Viewport() {
           )}
         </g>
       </svg>
+      <TextEditor />
       <MarqueeToolbar />
       {tool === 'select-smart' && <SmartSelectStatusPanel />}
       {tool === 'select-colour' && <ColourSelectStatusPanel />}

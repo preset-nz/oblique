@@ -436,7 +436,9 @@ export function LayerList({
   if (nodes.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-1">
+    // data-layer-list: Viewport's Enter-to-edit-text shortcut recognises focus
+    // here (text-tool-and-inspector.md) without importing across panels/canvas.
+    <div className="flex flex-col gap-1" data-layer-list="">
       {nodes.map((node, index) => (
         <LayerRow
           key={node.id}

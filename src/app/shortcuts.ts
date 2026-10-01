@@ -20,7 +20,7 @@ import { useViewTransformStore } from '@/canvas/viewTransform';
  * proved wrong. See `src/app/menu.ts`'s doc comment for the reasoning and
  * the manual click-test that verifies it.
  *
- * `V`/`M` (tool-state.md) are plain, unmodified keys — checked against every
+ * `V`/`M`/`T` (tool-state.md, text-tool-and-inspector.md) are plain, unmodified keys — checked against every
  * existing accelerator in this file and `app/menu.ts` before wiring: all of
  * those are Cmd-based, so bare `v`/`m` are free. Guarded by the same
  * editable-target check as the Viewport nudge handler so typing in a text
@@ -58,6 +58,9 @@ export function installShortcuts(): () => void {
     } else if (key === 'm') {
       e.preventDefault();
       useToolStateStore.getState().setTool('select-rect');
+    } else if (key === 't') {
+      e.preventDefault();
+      useToolStateStore.getState().setTool('text');
     }
   };
 

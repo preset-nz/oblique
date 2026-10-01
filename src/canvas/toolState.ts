@@ -23,6 +23,10 @@ import { create } from 'zustand';
  * wand — click/Alt-click/Shift-click seeds the sidecar's pure-NumPy
  * `select_colour`; its in-progress prompt state lives in
  * `canvas/colourSelect/state.ts`, same separation again.
+ *
+ * `text` (Epic 20 story 4, text-tool-and-inspector.md): click to place point
+ * text, click existing text to re-edit it. The open edit lives in
+ * `canvas/text/textEditState.ts`, same separation as pen/marquees.
  */
 export type Tool =
   | 'pan'
@@ -32,7 +36,8 @@ export type Tool =
   | 'select-lasso'
   | 'select-smart'
   | 'select-colour'
-  | 'pen';
+  | 'pen'
+  | 'text';
 
 interface ToolStateStore {
   tool: Tool;

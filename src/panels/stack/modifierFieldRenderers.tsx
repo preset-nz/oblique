@@ -36,7 +36,10 @@ const ModifierNumberRenderer: FieldRenderer<ModifierNumberFieldDef> = ({
   const step = field.step ?? 1;
   const numeric = typeof value === 'number' ? value : Number(value) || 0;
   const wrapped = wrapIntegerAware(onChange, step, field.integerStep);
-  return (
+  // Optional tooltip for number fields that carry a unit note (the Text
+  // inspector's tracking: "1/1000 em"). Extra props aren't type-checked by facets.
+  const hint = (field as { hint?: string }).hint;
+  const input = (
     <InputNumber
       label={field.label ?? field.id}
       value={numeric}
@@ -53,6 +56,7 @@ const ModifierNumberRenderer: FieldRenderer<ModifierNumberFieldDef> = ({
       onDragEnd={endTransaction}
     />
   );
+  return hint ? <div title={hint}>{input}</div> : input;
 };
 
 const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({

@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { commitActiveTextEdit } from '@/canvas/text/textEditState';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { exportPng } from '@/project/export';
 import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
@@ -46,8 +47,18 @@ const MENU_EVENTS: Record<string, () => void | Promise<void>> = {
   'menu://file/save': () => saveProject({ as: false }),
   'menu://file/save-as': () => saveProject({ as: true }),
   'menu://file/export-png': () => exportPng(),
-  'menu://edit/undo': () => undo(),
-  'menu://edit/redo': () => redo(),
+  // The native menu owns Cmd+Z even while the text overlay's <textarea> has
+  // focus, so an open text edit (an open history transaction) must be
+  // committed first — otherwise undo() would flush a half-finished edit or
+  // leave a new blank node orphaned (text-tool-and-inspector.md).
+  'menu://edit/undo': () => {
+    commitActiveTextEdit();
+    return undo();
+  },
+  'menu://edit/redo': () => {
+    commitActiveTextEdit();
+    return redo();
+  },
 };
 
 /** Installs all menu-event listeners; returns a teardown that unlistens everything. */

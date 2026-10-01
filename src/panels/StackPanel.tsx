@@ -10,8 +10,10 @@ import { LayerList } from '@/panels/stack/LayerList';
 import { LOCKED_HINT, stackControlsDisabled } from '@/panels/stack/lockUi';
 import { StackRow } from '@/panels/stack/StackRow';
 import { toDisplayOrder } from '@/panels/stack/stackOrder';
+import { TextInspector } from '@/panels/text/TextInspector';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
+import { isTextNode } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 
 /**
@@ -81,6 +83,8 @@ export function StackPanel() {
             {LOCKED_HINT}
           </div>
         )}
+
+        {isTextNode(node) && <TextInspector node={node} />}
 
         <AddModifier nodeId={node.id} ops={ops} disabled={locked} />
 
