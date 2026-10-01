@@ -2,6 +2,7 @@ import { Minus, Plus } from 'lucide-react';
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { formatCookMs, SLOW_COOK_MS, useLastCookStore } from '@/cook/lastCook';
 import { filenameOf } from '@/project/import';
 import { useProjectMetaStore } from '@/project/io';
 
@@ -29,6 +30,26 @@ function ZoomButton(props: {
         </button>
       </TooltipTrigger>
       <TooltipContent>{`${props.label} (${props.shortcut})`}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Last successful cook's total time; amber from 250 ms. Reads `cook/` through its store only. */
+function CookReadout() {
+  const last = useLastCookStore((state) => state.last);
+  if (!last) return <span className="text-neutral-500">Cook —</span>;
+  const tooltip = `${last.nodeLabel} · ${last.level} · ${last.width}×${last.height} · sidecar ${Math.round(last.sidecarMs)} ms`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-testid="cook-readout"
+          className={`tabular-nums ${last.totalMs >= SLOW_COOK_MS ? 'text-amber-400' : 'text-neutral-500'}`}
+        >
+          Cook {formatCookMs(last.totalMs)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -83,6 +104,13 @@ export function StatusBar() {
       {/* Cursor position */}
       <div className="flex items-center gap-1 whitespace-nowrap">
         <span>{cursorText}</span>
+      </div>
+
+      <Separator />
+
+      {/* Last cook time */}
+      <div className="flex items-center gap-1 whitespace-nowrap" aria-live="off">
+        <CookReadout />
       </div>
 
       {/* Spacer */}

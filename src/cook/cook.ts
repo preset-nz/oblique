@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { useLastCookStore } from '@/cook/lastCook';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
@@ -472,6 +473,7 @@ export async function cookNodeFullRes(
   const nodeExtent = node.type === 'pixel' ? node.sourceSize : deps.getDocumentSize();
   const [width, height] = computeTargetSize(nodeExtent, factor);
 
+  const t0 = performance.now();
   let resultBytes =
     node.type === 'pixel'
       ? deps.downscale(source as ImageBitmap, width, height)
@@ -492,6 +494,7 @@ export async function cookNodeFullRes(
   );
   const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
 
+  const tDownscale = performance.now();
   if (cookModifiers.length > 0) {
     const runs = partitionRuns(cookModifiers);
     for (const run of runs) {
@@ -503,7 +506,18 @@ export async function cookNodeFullRes(
     }
   }
 
-  return deps.encode(resultBytes, width, height);
+  const tSidecar = performance.now();
+
+  const bitmap = await deps.encode(resultBytes, width, height);
+  useLastCookStore.getState().publish({
+    nodeLabel: node.label,
+    level: 'baked',
+    totalMs: performance.now() - t0,
+    sidecarMs: tSidecar - tDownscale,
+    width,
+    height,
+  });
+  return bitmap;
 }
 
 /**
@@ -636,6 +650,16 @@ export async function cookNode(
         `encode ${(tEncode - tSidecar).toFixed(1)})`,
     );
     deps.setCache(nodeId, level, bitmap);
+    // Success only: the status bar's "last cook" readout (cook-time-readout.md).
+    // A throw anywhere above lands in the catch and publishes nothing.
+    useLastCookStore.getState().publish({
+      nodeLabel: node.label,
+      level,
+      totalMs: tEncode - t0,
+      sidecarMs: tSidecar - tDownscale,
+      width,
+      height,
+    });
 
     const current = deps.getNode(nodeId);
     const textInputsUnchanged =

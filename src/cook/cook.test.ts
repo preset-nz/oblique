@@ -21,6 +21,7 @@ import {
   resetCookErrorBurst,
   resolutionFactor,
 } from './cook';
+import { useLastCookStore } from './lastCook';
 
 function fakeBitmap(): ImageBitmap {
   return {} as unknown as ImageBitmap;
@@ -649,6 +650,52 @@ describe('cookNode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetCookErrorBurst();
+    useLastCookStore.setState({ last: null });
+  });
+
+  it('a successful cook publishes once with the node label and level', async () => {
+    const nodeRef = { current: makeNode({ label: 'Portrait', sourceSize: [800, 400] }) };
+    const deps = makeDeps(nodeRef);
+    const seen: unknown[] = [];
+    const unsubscribe = useLastCookStore.subscribe((state) => seen.push(state.last));
+
+    await cookNode('node-1', 'working', deps);
+    unsubscribe();
+
+    expect(seen).toHaveLength(1);
+    expect(useLastCookStore.getState().last).toMatchObject({
+      nodeLabel: 'Portrait',
+      level: 'working',
+      width: 400,
+      height: 200,
+    });
+    expect(useLastCookStore.getState().last?.totalMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('a failing cook publishes nothing and leaves the previous value in place', async () => {
+    const previous = {
+      nodeLabel: 'Earlier',
+      level: 'draft' as const,
+      totalMs: 5,
+      sidecarMs: 3,
+      width: 10,
+      height: 10,
+    };
+    useLastCookStore.setState({ last: previous });
+    const nodeRef = {
+      current: makeNode({
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      }),
+    };
+    const deps = makeDeps(nodeRef, {
+      runPython: vi.fn(async () => {
+        throw new Error('sidecar down');
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(useLastCookStore.getState().last).toBe(previous);
   });
 
   it('zero enabled modifiers: skips the sidecar entirely', async () => {
@@ -969,6 +1016,32 @@ describe('cookNodeFullRes', () => {
       ...overrides,
     };
   }
+
+  it("publishes a 'baked' cook on success and nothing on failure", async () => {
+    useLastCookStore.setState({ last: null });
+    const nodeRef = { current: makeNode({ label: 'Plate', sourceSize: [800, 400] }) };
+
+    await cookNodeFullRes('node-1', makeFullResDeps(nodeRef));
+    expect(useLastCookStore.getState().last).toMatchObject({
+      nodeLabel: 'Plate',
+      level: 'baked',
+      width: 800,
+      height: 400,
+    });
+
+    const before = useLastCookStore.getState().last;
+    await expect(
+      cookNodeFullRes(
+        'node-1',
+        makeFullResDeps(nodeRef, {
+          encode: vi.fn(async () => {
+            throw new Error('encode failed');
+          }),
+        }),
+      ),
+    ).rejects.toThrow('encode failed');
+    expect(useLastCookStore.getState().last).toBe(before);
+  });
 
   it("cooks at the node's own sourceSize (factor 1) — no downscale", async () => {
     const nodeRef = { current: makeNode({ sourceSize: [800, 400] }) };
