@@ -318,3 +318,58 @@ mod tests {
         );
     }
 }
+
+/// Signed area of a contour's control polygon (anchor, handle_out, next
+/// handle_in, next anchor, …) in anchor space (y down). The control polygon's
+/// sign matches the curve's for real glyph outlines, which is all orientation
+/// needs.
+pub fn signed_area(contour: &Contour) -> f32 {
+    let mut pts: Vec<&Point> = Vec::new();
+    let n = contour.anchors.len();
+    for i in 0..n {
+        let a = &contour.anchors[i];
+        pts.push(&a.point);
+        if i + 1 < n || contour.closed {
+            let b = &contour.anchors[(i + 1) % n];
+            if let Some(h) = &a.handle_out {
+                pts.push(h);
+            }
+            if let Some(h) = &b.handle_in {
+                pts.push(h);
+            }
+        }
+    }
+    let m = pts.len();
+    let mut twice = 0.0;
+    for i in 0..m {
+        let (p, q) = (pts[i], pts[(i + 1) % m]);
+        twice += p.x * q.y - q.x * p.y;
+    }
+    twice / 2.0
+}
+
+/// Reverse a contour's direction: anchors in reverse order, each anchor's
+/// handles swapped (what was its incoming handle is now outgoing).
+pub fn reverse(contour: &mut Contour) {
+    contour.anchors.reverse();
+    for a in &mut contour.anchors {
+        std::mem::swap(&mut a.handle_in, &mut a.handle_out);
+    }
+}
+
+/// Give one glyph's contours a canonical orientation: its largest contour
+/// (the outer) runs positive. Reversing the whole glyph keeps its own
+/// outer/counter relationship intact, so every glyph unions with its
+/// neighbours under nonzero fill instead of cancelling where tracking makes
+/// them overlap.
+pub fn normalise_glyph(contours: &mut [Contour]) {
+    let largest = contours
+        .iter()
+        .map(signed_area)
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()));
+    if matches!(largest, Some(a) if a < 0.0) {
+        for c in contours.iter_mut() {
+            reverse(c);
+        }
+    }
+}

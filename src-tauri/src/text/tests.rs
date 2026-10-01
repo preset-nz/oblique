@@ -160,3 +160,31 @@ fn bounds_and_metrics_are_sane() {
         assert!(a.point.y >= b.y - 0.01 && a.point.y <= b.y + b.h + 0.01);
     }
 }
+
+
+/// Glyphs in some fonts wind in opposite directions (HelveticaNeue-CondensedBold:
+/// H's outer is anticlockwise, A's clockwise), so tight tracking punched holes
+/// where letters overlapped under nonzero fill. Every glyph's largest contour
+/// must come out with the same orientation (Epic 20 dogfood, 2026-10-01).
+#[test]
+fn every_glyph_outer_has_the_same_orientation() {
+    let db = crate::fonts::database();
+    for ps in ["Helvetica", "HelveticaNeue-CondensedBold"] {
+        if !db.faces().any(|f| f.post_script_name == ps) {
+            eprintln!("skipping: {ps} is not installed");
+            continue;
+        }
+        for ch in ["H", "O", "A", "V", "e", "B"] {
+            let mut s = spec(ch);
+            s.postscript_name = ps.into();
+            let g = layout(db, &s).unwrap();
+            let largest = g
+                .paths
+                .iter()
+                .map(outline::signed_area)
+                .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+                .unwrap();
+            assert!(largest > 0.0, "{ps} {ch}: outer contour area {largest}");
+        }
+    }
+}

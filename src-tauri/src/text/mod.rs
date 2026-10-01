@@ -170,7 +170,9 @@ fn layout_face(data: &[u8], index: u32, spec: &TextSpec) -> Result<TextGeometry,
             let Some(bbox) = face.outline_glyph(glyph, &mut builder) else {
                 continue;
             };
-            paths.extend(builder.finish());
+            let mut glyph_paths = builder.finish();
+            outline::normalise_glyph(&mut glyph_paths);
+            paths.extend(glyph_paths);
             let gx0 = x_start + origin_x + bbox.x_min as f32 * scale;
             let gx1 = x_start + origin_x + bbox.x_max as f32 * scale;
             let gy0 = baseline_y - y_offset - bbox.y_max as f32 * scale;
