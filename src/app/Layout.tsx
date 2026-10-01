@@ -7,6 +7,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DocumentSetup } from '@/panels/document/DocumentSetup';
+import { ExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { MissingFontsDialog } from '@/panels/fonts/MissingFontsDialog';
 import { ReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { NotesPanel } from '@/panels/notes/NotesPanel';
@@ -83,6 +84,7 @@ export function Layout() {
       </div>
       <Toaster />
       <SettingsDialog />
+      <ExportProofDialog />
       <MissingFontsDialog />
       <ReplaceFontDialog />
     </TooltipProvider>

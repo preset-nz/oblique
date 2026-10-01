@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
+import { openExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { type LayerMove, layerMoveTarget } from '@/panels/stack/dragReorder';
@@ -25,7 +26,7 @@ import { commitActiveTextEdit } from '@/scene/textEditState';
  * Double-firing: on macOS, a menu item's accelerator is a native key
  * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
  * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
- * Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
+ * Shift+Cmd+E/Alt+Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
  * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md), View → Snap to Layers
  * (Cmd+;, snapping.md — a check item, see its handler below) and the Layer menu's
  * Cmd+]/Cmd+[ (+Shift, drag-reorder.md) exclusively — `shortcuts.ts`'s keydown
@@ -78,6 +79,9 @@ const MENU_EVENTS: Record<string, (payload: unknown) => void | Promise<void>> = 
   'menu://file/save': () => saveProject({ as: false }),
   'menu://file/save-as': () => saveProject({ as: true }),
   'menu://file/export-png': () => exportPng(),
+  // File → Export Proof… (Alt+Shift+Cmd+E, registration-marks-and-colour-bars.md): opens the
+  // options dialog; its Export… button runs `exportProof`. Plain Export PNG stays plain.
+  'menu://file/export-proof': () => openExportProofDialog(),
   // The native menu owns Cmd+Z even while the inspector's Text field has
   // focus, so an open text edit (an open history transaction) must be
   // committed first — otherwise undo() would flush a half-finished edit or

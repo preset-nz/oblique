@@ -1,6 +1,6 @@
 //! Native macOS menu bar (roadmap gap "Native app menu + New command",
 //! 2026-07-04): App submenu (About/Services/Hide/Quit — standard macOS
-//! chrome), File (New/Open/Import/Save/Save As/Export PNG), Edit (Undo/Redo
+//! chrome), File (New/Open/Import/Save/Save As/Export PNG/Export Proof), Edit (Undo/Redo
 //! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
 //! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md;
 //! Snap to Layers check item — snapping.md),
@@ -51,6 +51,7 @@ const EVT_FILE_IMPORT: &str = "menu://file/import";
 const EVT_FILE_SAVE: &str = "menu://file/save";
 const EVT_FILE_SAVE_AS: &str = "menu://file/save-as";
 const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
+const EVT_FILE_EXPORT_PROOF: &str = "menu://file/export-proof";
 const EVT_EDIT_UNDO: &str = "menu://edit/undo";
 const EVT_EDIT_REDO: &str = "menu://edit/redo";
 const EVT_EDIT_DUPLICATE: &str = "menu://edit/duplicate";
@@ -120,6 +121,13 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         true,
         Some("Shift+CmdOrCtrl+E"),
     )?;
+    let file_export_proof = MenuItem::with_id(
+        app,
+        "file-export-proof",
+        "Export Proof…",
+        true,
+        Some("Alt+Shift+CmdOrCtrl+E"),
+    )?;
 
     let file_submenu = Submenu::with_items(
         app,
@@ -134,6 +142,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &file_save_as,
             &PredefinedMenuItem::separator(app)?,
             &file_export_png,
+            &file_export_proof,
         ],
     )?;
 
@@ -295,6 +304,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "file-save" => EVT_FILE_SAVE,
             "file-save-as" => EVT_FILE_SAVE_AS,
             "file-export-png" => EVT_FILE_EXPORT_PNG,
+            "file-export-proof" => EVT_FILE_EXPORT_PROOF,
             "edit-undo" => EVT_EDIT_UNDO,
             "edit-redo" => EVT_EDIT_REDO,
             "edit-duplicate" => EVT_EDIT_DUPLICATE,

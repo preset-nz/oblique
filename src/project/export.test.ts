@@ -27,7 +27,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 import { toast } from 'sonner';
 import * as backgroundSource from '@/scene/backgroundSource';
 import type { ExportCanvas, ExportDeps } from './export';
-import { exportableNodes, exportPng, suggestedExportName } from './export';
+import { exportableNodes, exportPng, exportProof, suggestedExportName } from './export';
 
 function fakeBitmap(): ImageBitmap {
   return { close: vi.fn() } as unknown as ImageBitmap;
@@ -292,5 +292,62 @@ describe('exportPng', () => {
     await exportPng(deps);
 
     expect(bitmap.close).toHaveBeenCalled();
+  });
+});
+
+describe('exportProof', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const proofOptions = {
+    margin: 10 as number | null,
+    paper: 'white' as const,
+    marks: true,
+    edgeMarks: false,
+    bars: true,
+    steps: 5 as const,
+    barEdge: 'bottom' as const,
+  };
+
+  it('renders the same composite, then wraps it in a margin canvas and writes it', async () => {
+    const work = fakeCtx();
+    const sheet = Object.assign(fakeCtx(), { arc: vi.fn() });
+    const workCanvas: ExportCanvas = {
+      getContext: () => work,
+      convertToBlob: vi.fn(async () => new Blob(['work'])),
+    };
+    const sheetCanvas: ExportCanvas = {
+      getContext: () => sheet,
+      convertToBlob: vi.fn(async () => new Blob(['sheet'])),
+    };
+    const createCanvas = vi.fn((w: number, h: number) =>
+      w === 200 && h === 100 ? workCanvas : sheetCanvas,
+    );
+    const deps = makeDeps(makeScene([pixelNode('a')]), { createCanvas });
+
+    await exportProof(proofOptions, deps);
+
+    expect(createCanvas).toHaveBeenCalledWith(200, 100); // plain-export size
+    expect(createCanvas).toHaveBeenCalledWith(220, 120); // + 2 × margin
+    const proofDraws = (sheet.drawImage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(proofDraws).toEqual([[workCanvas, 10, 10]]); // once, native size, no size args
+    expect(sheetCanvas.convertToBlob).toHaveBeenCalled();
+    expect(workCanvas.convertToBlob).not.toHaveBeenCalled();
+    expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('defaults a null margin to 8% of the short edge', async () => {
+    const deps = makeDeps(makeScene([pixelNode('a')], [200, 100]));
+    await exportProof({ ...proofOptions, margin: null }, deps);
+    expect(deps.createCanvas).toHaveBeenCalledWith(216, 116); // round(100 × 0.08) = 8
+  });
+
+  it('writes nothing when the save dialog is cancelled', async () => {
+    const deps = makeDeps(makeScene([pixelNode('a')]), { pickSavePath: vi.fn(async () => null) });
+    await exportProof(proofOptions, deps);
+    expect(deps.cookFullRes).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
   });
 });
