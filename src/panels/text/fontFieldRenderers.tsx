@@ -284,7 +284,8 @@ export function FontStyleField({
         <SelectContent>
           {faces.map((f) => (
             <SelectItem key={f.postscriptName} value={f.postscriptName} className="text-xs">
-              {f.style}
+              {/* A face with no decodable style name still needs a visible label. */}
+              {f.style || f.postscriptName}
             </SelectItem>
           ))}
         </SelectContent>

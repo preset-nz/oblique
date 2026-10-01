@@ -82,6 +82,33 @@ fn covers_basic_latin(face: &ttf_parser::Face) -> bool {
     ('A'..='Z').chain('a'..='z').all(|c| face.glyph_index(c).is_some())
 }
 
+/// Mac OS Roman bytes 0x80–0xFF. ASCII maps to itself.
+const MAC_ROMAN_HIGH: &str = "ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø¿¡¬√ƒ≈∆«»…\u{00a0}ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›ﬁﬂ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔ\u{f8ff}ÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ";
+
+/// Decodes a Macintosh-platform, Roman-encoded name record (platform 1, encoding 0).
+/// `ttf_parser::Name::to_string` only handles Unicode records, and some Apple system
+/// fonts (American Typewriter, 2026-10-02) carry nothing else, so their style names
+/// came back empty.
+fn mac_roman(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| {
+            if b < 0x80 {
+                b as char
+            } else {
+                MAC_ROMAN_HIGH.chars().nth(usize::from(b - 0x80)).unwrap_or('\u{fffd}')
+            }
+        })
+        .collect()
+}
+
+fn decode_name(name: &ttf_parser::name::Name) -> Option<String> {
+    name.to_string().or_else(|| {
+        (name.platform_id == ttf_parser::PlatformId::Macintosh && name.encoding_id == 0)
+            .then(|| mac_roman(name.name))
+    })
+}
+
 /// English (US) record for `id` if present, else the first decodable record with that ID.
 fn name_string(face: &ttf_parser::Face, id: u16) -> Option<String> {
     let mut first: Option<String> = None;
@@ -89,7 +116,7 @@ fn name_string(face: &ttf_parser::Face, id: u16) -> Option<String> {
         if name.name_id != id {
             continue;
         }
-        let Some(s) = name.to_string() else { continue };
+        let Some(s) = decode_name(&name) else { continue };
         if s.is_empty() {
             continue;
         }
@@ -159,6 +186,27 @@ fn finalise(mut faces: Vec<FontFace>) -> Vec<FontFace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mac_roman_decodes_ascii_and_high_bytes() {
+        assert_eq!(mac_roman(b"Condensed Bold"), "Condensed Bold");
+        assert_eq!(mac_roman(&[0x8E, 0x87, 0xA5, 0xDB]), "éá•€");
+    }
+
+    /// American Typewriter ships Mac-Roman-only name records; every face must
+    /// still get a style name. Skipped where the font isn't installed.
+    #[test]
+    fn american_typewriter_faces_have_styles() {
+        let faces: Vec<_> = scan_system_fonts()
+            .into_iter()
+            .filter(|f| f.family == "American Typewriter")
+            .collect();
+        if faces.is_empty() {
+            return;
+        }
+        assert!(faces.iter().all(|f| !f.style.is_empty()), "{faces:?}");
+        assert!(faces.iter().any(|f| f.style == "Condensed Bold"));
+    }
 
     #[test]
     fn family_class_decoding() {
