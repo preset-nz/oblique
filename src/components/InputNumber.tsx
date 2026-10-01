@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { applyDelta, applyKeyStep, parseCommit, roundToStep } from '@/components/inputNumberMath';
+import { LabelTip } from '@/components/LabelTip';
 import { cn } from '@/lib/utils';
 
 /** Pixels of horizontal movement before a label pointerdown counts as a scrub-drag rather than a click. */
@@ -14,6 +15,8 @@ export interface InputNumberProps {
   /** @default 1 */
   step?: number;
   label: string;
+  /** Optional hover text for the label (a tooltip after a short delay). */
+  description?: string;
   disabled?: boolean;
   className?: string;
   /**
@@ -59,6 +62,7 @@ export function InputNumber({
   max,
   step = 1,
   label,
+  description,
   disabled = false,
   className,
   allowTypedOverMax = false,
@@ -191,18 +195,20 @@ export function InputNumber({
 
   return (
     <div className={cn('flex items-center gap-2 text-sm', className)}>
-      <span
-        className={cn(
-          'select-none whitespace-nowrap text-foreground/60',
-          disabled ? 'cursor-not-allowed opacity-50' : 'cursor-ew-resize hover:text-foreground',
-        )}
-        onPointerDown={handleLabelPointerDown}
-        onPointerMove={handleLabelPointerMove}
-        onPointerUp={handleLabelPointerUp}
-        onPointerCancel={handleLabelPointerCancel}
-      >
-        {label}
-      </span>
+      <LabelTip description={description}>
+        <span
+          className={cn(
+            'select-none whitespace-nowrap text-foreground/60',
+            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-ew-resize hover:text-foreground',
+          )}
+          onPointerDown={handleLabelPointerDown}
+          onPointerMove={handleLabelPointerMove}
+          onPointerUp={handleLabelPointerUp}
+          onPointerCancel={handleLabelPointerCancel}
+        >
+          {label}
+        </span>
+      </LabelTip>
       <input
         ref={inputRef}
         type="text"

@@ -351,6 +351,48 @@ def test_color_param_spec_to_dict_is_exactly_name_type_default_scale():
     }
 
 
+# --- param label + description (Epic 04, param-labels story) ------------
+
+
+def test_param_spec_to_dict_emits_label_and_description_only_when_set():
+    bare = ParamSpec("cell_size", "int", default=8).to_dict()
+    assert "label" not in bare
+    assert "description" not in bare
+
+    annotated = ParamSpec(
+        "cell_size",
+        "int",
+        default=8,
+        label="Cell size",
+        description="Size of each mosaic cell in document pixels.",
+    ).to_dict()
+    assert annotated["label"] == "Cell size"
+    assert annotated["description"] == "Size of each mosaic cell in document pixels."
+
+
+def test_list_ops_round_trips_param_label_and_description():
+    header, _payload = dispatch({"id": "list", "op": "list_ops"}, b"")
+
+    pixelate = next(o for o in header["ops"] if o["name"] == "pixelate")
+    cell_size = next(p for p in pixelate["params"] if p["name"] == "cell_size")
+    assert cell_size["label"] == OPS["pixelate"].params[0].label == "Cell size"
+    assert cell_size["description"] == OPS["pixelate"].params[0].description
+
+
+def test_every_registered_param_has_a_label_and_description():
+    # Guard: a new op (or param) cannot ship without presentation metadata.
+    # `debug_echo` has no params, so it passes vacuously.
+    missing = [
+        f"{name}.{param.name}"
+        for name, entry in OPS.items()
+        if not name.startswith("temp_test_")
+        for param in entry.params
+        if not (param.label and param.label.strip())
+        or not (param.description and param.description.strip())
+    ]
+    assert missing == []
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [

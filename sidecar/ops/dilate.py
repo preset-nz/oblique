@@ -27,6 +27,8 @@ from ops._morphology import apply_morphology
             default=2.0,
             step=0.5,
             scale="spatial",
+            label="Radius",
+            description="How far the shape grows outward, in document pixels. 0 does nothing.",
         ),
     ],
 )

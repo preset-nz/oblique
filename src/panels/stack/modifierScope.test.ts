@@ -354,3 +354,92 @@ describe('PropertyPanel rendering a hatch-like descriptor', () => {
     expect(fieldIsDisabled(markup, 'seed')).toBe(false);
   });
 });
+
+// --- label + description (Epic 04, param-labels story) ---------------------
+
+describe('paramToField label and description', () => {
+  function fieldFor(spec: OpParamSpec) {
+    return opParamsToSchema({ name: 'labels_test', backend: 'python', params: [spec] }).groups[0]
+      .rows[0] as ModifierNumberFieldDef & { description?: string };
+  }
+
+  it('uses spec.label when present and falls back to spec.name when not', () => {
+    const labelled = fieldFor({
+      name: 'cell_size',
+      type: 'int',
+      default: 8,
+      scale: 'spatial',
+      label: 'Cell size',
+    });
+    expect(labelled.label).toBe('Cell size');
+
+    const bare = fieldFor({ name: 'cell_size', type: 'int', default: 8, scale: 'spatial' });
+    expect(bare.label).toBe('cell_size');
+    expect('description' in bare).toBe(false);
+  });
+
+  it.each([
+    ['float', { name: 'a', type: 'float', default: 0, scale: 'none' }],
+    ['int', { name: 'a', type: 'int', default: 0, scale: 'none', widget: 'slider' }],
+    ['enum', { name: 'a', type: 'enum', default: 'x', scale: 'none', choices: ['x', 'y'] }],
+    ['color', { name: 'a', type: 'color', default: '#000000', scale: 'none' }],
+  ] as [string, OpParamSpec][])('carries description on a %s field', (_kind, spec) => {
+    const field = fieldFor({ ...spec, description: 'Does a thing.' });
+    expect(field.description).toBe('Does a thing.');
+  });
+
+  it('gives bool params the label but no description (builtin checkbox renderer)', () => {
+    const field = fieldFor({
+      name: 'paper_is_alpha',
+      type: 'bool',
+      default: false,
+      scale: 'none',
+      label: 'Paper is transparent',
+      description: 'Makes the paper transparent.',
+    });
+    expect(field.label).toBe('Paper is transparent');
+    expect('description' in field).toBe(false);
+  });
+
+  it('renders the label in the panel, and the raw name for an unannotated op', () => {
+    registerBuiltinRenderers();
+    registerModifierFieldRenderers();
+    const descriptor: OpDescriptor = {
+      name: 'labels_panel_test',
+      backend: 'python',
+      params: [
+        {
+          name: 'cell_size',
+          type: 'int',
+          default: 8,
+          min: 1,
+          max: 64,
+          step: 1,
+          scale: 'spatial',
+          widget: 'slider',
+          label: 'Cell size',
+          description: 'Size of each mosaic cell in document pixels. Larger is blockier.',
+        },
+        { name: 'plain_param', type: 'float', default: 0.5, min: 0, max: 1, scale: 'none' },
+      ],
+    };
+    const scopeKey = modifierScopeKey(descriptor.name);
+    registerScope(scopeKey, buildModifierScope(descriptor));
+    const node = pixelNode('node-1', {
+      modifiers: [modifier('mod-1', { type: descriptor.name })],
+    });
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [node] } }));
+
+    const markup = renderToStaticMarkup(
+      createElement(PropertyPanel, {
+        scopeKey,
+        selection: { nodeId: 'node-1', modId: 'mod-1' },
+        ctx: {},
+      }),
+    );
+
+    expect(markup).toContain('>Cell size<');
+    expect(markup).not.toContain('>cell_size<');
+    expect(markup).toContain('>plain_param<');
+  });
+});

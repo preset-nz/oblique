@@ -83,6 +83,8 @@ from ops._blur import soften
             default=0.7,
             step=0.01,
             scale="none",
+            label="Threshold",
+            description="Brightness above which pixels glow, 0 to 1. Lower lets more of the image bloom.",
         ),
         P(
             "radius",
@@ -92,6 +94,8 @@ from ops._blur import soften
             default=24.0,
             step=0.5,
             scale="spatial",
+            label="Radius",
+            description="How far the glow spreads, in document pixels. Larger is a wider, softer glow.",
         ),
         P(
             "intensity",
@@ -101,9 +105,24 @@ from ops._blur import soften
             default=0.8,
             step=0.01,
             scale="none",
+            label="Intensity",
+            description="Strength of the glow. Higher is brighter; 0 turns it off.",
         ),
-        P("blend", "enum", default="screen", choices=("screen", "add")),
-        P("spill", "bool", default=False),
+        P(
+            "blend",
+            "enum",
+            default="screen",
+            choices=("screen", "add"),
+            label="Blend",
+            description="How the glow combines with the image: screen only lightens, add blows out to white faster.",
+        ),
+        P(
+            "spill",
+            "bool",
+            default=False,
+            label="Glow past edge",
+            description="Lets the glow spread beyond the layer's edge into transparent areas.",
+        ),
     ],
 )
 def bloom(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:

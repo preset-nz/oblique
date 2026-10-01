@@ -16,6 +16,12 @@ export interface OpParamSpec {
   scale: 'spatial' | 'none';
   choices?: string[]; // enum type only
   widget?: 'slider'; // UI hint from the op's home backend — favours the slider kind over plain number
+  /** Short sentence-case panel label ("Cell size"). Presentation metadata from
+   * the op's home backend; the panel falls back to `name` when absent. */
+  label?: string;
+  /** One plain sentence on what the param does and which way is "more",
+   * shown as a hover tooltip on the label. Absent for unannotated params. */
+  description?: string;
   /** Disables this param in the panel when another of the same op's params
    * matches a condition (Epic 18 story 5). Wire keys verbatim, no
    * translation layer — the type is `@preset.nz/facets`'s own, imported

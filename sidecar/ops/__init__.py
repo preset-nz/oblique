@@ -53,6 +53,13 @@ class ParamSpec:
     # through as `disabledWhen` with no translation layer. Validated at
     # registration — see `_validate_disabled_when`.
     disabled_when: dict[str, Any] | None = None
+    # Presentation metadata for the panel, owned by the op's home backend
+    # like everything else here. `label` is a short sentence-case name
+    # ("Cell size"); `description` is one plain sentence — what the param
+    # does and which way is "more" — shown as a hover tooltip. Both are
+    # optional on the wire: the UI falls back to `name` when absent.
+    label: str | None = None
+    description: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -71,6 +78,10 @@ class ParamSpec:
             d["choices"] = list(self.choices)
         if self.widget is not None:
             d["widget"] = self.widget
+        if self.label is not None:
+            d["label"] = self.label
+        if self.description is not None:
+            d["description"] = self.description
         if self.disabled_when is not None:
             # Fresh dict, not a reference to `self.disabled_when` — a caller
             # holding the wire payload must not be able to mutate the spec

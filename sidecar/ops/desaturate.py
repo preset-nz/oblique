@@ -30,6 +30,8 @@ from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, op
             default=1.0,
             step=0.05,
             widget="slider",
+            label="Amount",
+            description="How far colour is pulled toward greyscale. 0 leaves the image unchanged; 1 is full greyscale.",
         ),
     ],
 )

@@ -21,7 +21,16 @@ _MAX_STD = 128.0
     label="Grain",
     description="Seeded, chunky film-grain noise added to the RGB channels.",
     params=[
-        P("amount", "float", min=0.0, max=1.0, default=0.1, step=0.01),
+        P(
+            "amount",
+            "float",
+            min=0.0,
+            max=1.0,
+            default=0.1,
+            step=0.01,
+            label="Amount",
+            description="Strength of the noise. Higher is grainier; 0 leaves the image unchanged.",
+        ),
         P(
             "size",
             "int",
@@ -31,8 +40,19 @@ _MAX_STD = 128.0
             step=1,
             scale="spatial",
             widget="slider",
+            label="Grain size",
+            description="Size of each grain speck in document pixels. Larger is chunkier.",
         ),
-        P("seed", "int", min=0, max=2**31 - 1, default=0, step=1),
+        P(
+            "seed",
+            "int",
+            min=0,
+            max=2**31 - 1,
+            default=0,
+            step=1,
+            label="Seed",
+            description="Changes the random pattern without changing its character.",
+        ),
     ],
 )
 def grain(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:

@@ -28,6 +28,8 @@ from ops import P, op
             default=4.0,
             step=0.1,
             scale="spatial",
+            label="Radius",
+            description="Blur radius in document pixels. Larger is softer; 0 does nothing.",
         ),
     ],
 )

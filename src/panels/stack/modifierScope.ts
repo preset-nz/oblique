@@ -23,10 +23,21 @@ import type { OpDescriptor, OpParamSpec } from '@/sidecar/opsCache';
  */
 export interface ModifierNumberFieldDef extends NumberFieldDef {
   integerStep?: boolean;
+  /** Hover text for the label, from the op's `ParamSpec.description`. */
+  description?: string;
 }
 
 export interface ModifierSliderFieldDef extends SliderFieldDef {
   integerStep?: boolean;
+  description?: string;
+}
+
+export interface ModifierSelectFieldDef extends SelectFieldDef {
+  description?: string;
+}
+
+export interface ModifierColorFieldDef extends ColorFieldDef {
+  description?: string;
 }
 
 /** The selected stack row: one modifier instance on one scene node. */
@@ -39,31 +50,38 @@ function paramToField(spec: OpParamSpec): FieldDef {
   const base = {
     id: spec.name,
     path: spec.name,
-    label: spec.name,
+    label: spec.label ?? spec.name,
     // Presentation-only greying (Epic 18 story 5) — no per-op special-casing,
     // this is a straight pass-through of whatever the op's home backend sent.
     ...(spec.disabledWhen ? { disabledWhen: spec.disabledWhen } : {}),
   };
+
+  // Oblique's own number/slider/select/colour renderers show this as a label
+  // tooltip. Builtin `checkbox` params keep the plain facets renderer (its
+  // `BaseField` has no description; a shared package), so bools get the label only.
+  const described = spec.description ? { description: spec.description } : {};
 
   switch (spec.type) {
     case 'bool':
       return { ...base, kind: 'checkbox' } satisfies CheckboxFieldDef;
 
     case 'color':
-      return { ...base, kind: 'color' } satisfies ColorFieldDef;
+      return { ...base, ...described, kind: 'color' } satisfies ModifierColorFieldDef;
 
     case 'enum':
       return {
         ...base,
+        ...described,
         kind: 'select',
         options: (spec.choices ?? []).map((choice) => ({ value: choice, label: choice })),
-      } satisfies SelectFieldDef;
+      } satisfies ModifierSelectFieldDef;
 
     case 'int':
     case 'float': {
       const integerStep = spec.type === 'int';
       const shared = {
         ...base,
+        ...described,
         min: spec.min,
         max: spec.max,
         step: spec.step ?? (integerStep ? 1 : 0.1),

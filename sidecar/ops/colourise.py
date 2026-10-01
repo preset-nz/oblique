@@ -24,7 +24,13 @@ _DEFAULT_COLOUR_RGB01 = hex_to_rgb01(_DEFAULT_COLOUR, (0.0, 0.0, 0.0))
     label="Colourise",
     description="Tint the image with a single ink, keeping the source luminance.",
     params=[
-        P("colour", "color", default=_DEFAULT_COLOUR),
+        P(
+            "colour",
+            "color",
+            default=_DEFAULT_COLOUR,
+            label="Colour",
+            description="The ink the image is tinted with.",
+        ),
         P(
             "amount",
             "float",
@@ -33,8 +39,16 @@ _DEFAULT_COLOUR_RGB01 = hex_to_rgb01(_DEFAULT_COLOUR, (0.0, 0.0, 0.0))
             default=1.0,
             step=0.05,
             widget="slider",
+            label="Amount",
+            description="Strength of the tint. 0 leaves the image unchanged; 1 is fully tinted.",
         ),
-        P("preserve_luma", "bool", default=True),
+        P(
+            "preserve_luma",
+            "bool",
+            default=True,
+            label="Keep brightness",
+            description="Rescales the tinted result so each pixel keeps its original brightness. Off gives a darker, classic tint.",
+        ),
     ],
 )
 def colourise(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:

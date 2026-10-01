@@ -55,6 +55,8 @@ from ops import P, op
             step=1,
             scale="spatial",
             widget="slider",
+            label="Cell size",
+            description="Size of each mosaic cell in document pixels. Larger is blockier.",
         ),
     ],
 )

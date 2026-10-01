@@ -1,16 +1,16 @@
-import {
-  type ColorFieldDef,
-  type FieldDef,
-  type FieldRenderer,
-  registerFieldRenderer,
-  type SelectFieldDef,
-} from '@preset.nz/facets';
+import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
 import { InputNumber } from '@/components/InputNumber';
+import { LabelTip } from '@/components/LabelTip';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { snapToIntegerStep } from './integerStepFix';
-import type { ModifierNumberFieldDef, ModifierSliderFieldDef } from './modifierScope';
+import type {
+  ModifierColorFieldDef,
+  ModifierNumberFieldDef,
+  ModifierSelectFieldDef,
+  ModifierSliderFieldDef,
+} from './modifierScope';
 
 /**
  * Wraps a field's `onChange` so int-typed (`integerStep`) fields always
@@ -42,6 +42,7 @@ const ModifierNumberRenderer: FieldRenderer<ModifierNumberFieldDef> = ({
   const input = (
     <InputNumber
       label={field.label ?? field.id}
+      description={field.description}
       value={numeric}
       onChange={wrapped ?? (() => {})}
       min={field.min}
@@ -71,14 +72,16 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
   const readOnly = disabled || !wrapped;
   return (
     <div className="flex flex-col gap-1">
-      <span
-        className={cn(
-          'text-[11px] font-medium text-muted-foreground tracking-wide',
-          readOnly && 'opacity-50',
-        )}
-      >
-        {field.label ?? field.id}
-      </span>
+      <LabelTip description={field.description}>
+        <span
+          className={cn(
+            'w-fit text-[11px] font-medium text-muted-foreground tracking-wide',
+            readOnly && 'opacity-50',
+          )}
+        >
+          {field.label ?? field.id}
+        </span>
+      </LabelTip>
       <div className="flex items-center gap-2">
         <input
           type="range"
@@ -124,7 +127,7 @@ const ModifierSliderRenderer: FieldRenderer<ModifierSliderFieldDef> = ({
  * shared package's plain `<Select>` builtin the same way the number/slider
  * renderers override theirs.
  */
-const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
+const ModifierSelectRenderer: FieldRenderer<ModifierSelectFieldDef> = ({
   field,
   value,
   disabled,
@@ -135,14 +138,16 @@ const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
   const readOnly = disabled || !onChange;
   return (
     <div className="flex flex-col gap-1">
-      <span
-        className={cn(
-          'text-[11px] font-medium text-muted-foreground tracking-wide',
-          readOnly && 'opacity-50',
-        )}
-      >
-        {field.label ?? field.id}
-      </span>
+      <LabelTip description={field.description}>
+        <span
+          className={cn(
+            'w-fit text-[11px] font-medium text-muted-foreground tracking-wide',
+            readOnly && 'opacity-50',
+          )}
+        >
+          {field.label ?? field.id}
+        </span>
+      </LabelTip>
       <ToggleGroup
         type="single"
         size="sm"
@@ -171,7 +176,7 @@ const ModifierSelectRenderer: FieldRenderer<SelectFieldDef> = ({
  * `color` kind, overriding that builtin the same way the number/slider/select
  * renderers override theirs.
  */
-const ModifierColorRenderer: FieldRenderer<ColorFieldDef> = ({
+const ModifierColorRenderer: FieldRenderer<ModifierColorFieldDef> = ({
   field,
   value,
   disabled,
@@ -181,14 +186,16 @@ const ModifierColorRenderer: FieldRenderer<ColorFieldDef> = ({
   const readOnly = disabled || !onChange;
   return (
     <div className="flex flex-col gap-1">
-      <span
-        className={cn(
-          'text-[11px] font-medium text-muted-foreground tracking-wide',
-          readOnly && 'opacity-50',
-        )}
-      >
-        {field.label ?? field.id}
-      </span>
+      <LabelTip description={field.description}>
+        <span
+          className={cn(
+            'w-fit text-[11px] font-medium text-muted-foreground tracking-wide',
+            readOnly && 'opacity-50',
+          )}
+        >
+          {field.label ?? field.id}
+        </span>
+      </LabelTip>
       <div className={cn('flex items-center gap-2', readOnly && 'opacity-50')}>
         <input
           type="color"
