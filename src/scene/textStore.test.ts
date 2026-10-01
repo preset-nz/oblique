@@ -194,3 +194,65 @@ describe('setTextProps', () => {
     expect(c?.dirty).toEqual({ draft: true, working: true });
   });
 });
+
+describe('a text node as a modifier-mask target (text-modifier-masks.md)', () => {
+  const nodeById = (id: string) => state().scene.nodes.find((n) => n.id === id);
+
+  function maskedConsumer(textId: string): { consumerId: string; maskId: string } {
+    const consumerId = state().addPixelNode({ sourcePath: '/a.png', sourceSize: [100, 100] });
+    state().addModifier(consumerId, 'grain', {});
+    const modId = (nodeById(consumerId) as PixelNode).modifiers[0].id;
+    const maskId = state().setModifierVectorMask(consumerId, modId, textId, {
+      featherPx: 0,
+      expand: 0,
+      invert: false,
+    }) as string;
+    state().clearDirty(consumerId, 'draft');
+    state().clearDirty(consumerId, 'working');
+    return { consumerId, maskId };
+  }
+
+  it('records the text node as the ref target', () => {
+    const textId = addText();
+    const { maskId } = maskedConsumer(textId);
+    expect(state().scene.maskRefs?.[maskId]).toMatchObject({ nodeId: textId });
+  });
+
+  it('a setTextProps content change on the mask source dirties the consumer', () => {
+    const textId = addText();
+    const { consumerId } = maskedConsumer(textId);
+    state().setTextProps(textId, { content: 'ROTTEN' });
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('moving the mask source (setNodeTransform) dirties the consumer', () => {
+    const textId = addText();
+    const { consumerId } = maskedConsumer(textId);
+    state().setNodeTransform(textId, { x: 20, y: 5, scaleX: 1, scaleY: 1, rotation: 0 });
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('changing text position (setTextProps) dirties the consumer', () => {
+    const textId = addText();
+    const { consumerId } = maskedConsumer(textId);
+    state().setTextProps(textId, { position: { x: 99, y: 99 } });
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('a text node that nothing masks with does not dirty unrelated nodes', () => {
+    const textId = addText();
+    const otherId = state().addPixelNode({ sourcePath: '/b.png', sourceSize: [10, 10] });
+    state().clearDirty(otherId, 'draft');
+    state().clearDirty(otherId, 'working');
+    state().setTextProps(textId, { content: 'X' });
+    expect(nodeById(otherId)?.dirty).toEqual(clean);
+  });
+
+  it('deleting the text node prunes the ref and clears the modifier maskId', () => {
+    const textId = addText();
+    const { consumerId, maskId } = maskedConsumer(textId);
+    state().removeNode(textId);
+    expect(state().scene.maskRefs?.[maskId]).toBeUndefined();
+    expect((nodeById(consumerId) as PixelNode).modifiers[0].maskId).toBeUndefined();
+  });
+});

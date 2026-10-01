@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { effectiveFontFor } from '@/fonts/effectiveFont';
 import { textOutlines } from '@/fonts/fontsIpc';
 import type { TextGeometry, TextSpec } from '@/fonts/textGeometry';
-import type { TextNode } from './types';
+import type { AnchorPoint, Point2D, TextNode, VectorPath } from './types';
 
 /**
  * Module-scope text geometry cache (text-node-model.md), same pattern as
@@ -56,6 +56,27 @@ export function textCookKey(node: TextNode): string {
     specKey(specFor(node)) +
     JSON.stringify({ position: node.position, fill: node.fill, stroke: node.stroke })
   );
+}
+
+/**
+ * A text node's glyph paths in DOCUMENT space (text-modifier-masks.md): every
+ * anchor point and handle translated by `node.position`. Pure — `geometry` is
+ * the anchor-space result from the cache/Rust, so moving the text never needs
+ * Rust. Handles are absolute coordinates (AnchorPoint's contract), so they
+ * translate exactly like points.
+ */
+export function documentPathsFor(node: TextNode, geometry: TextGeometry): VectorPath[] {
+  const { x: dx, y: dy } = node.position;
+  const shift = (p: Point2D): Point2D => ({ x: p.x + dx, y: p.y + dy });
+  return geometry.paths.map((path) => ({
+    closed: path.closed,
+    anchors: path.anchors.map((a): AnchorPoint => {
+      const out: AnchorPoint = { point: shift(a.point) };
+      if (a.handleIn) out.handleIn = shift(a.handleIn);
+      if (a.handleOut) out.handleOut = shift(a.handleOut);
+      return out;
+    }),
+  }));
 }
 
 function insert(key: string, geometry: TextGeometry): void {

@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Spline,
   Trash2,
+  Type,
 } from 'lucide-react';
 import { useState } from 'react';
 import { InputNumber } from '@/components/InputNumber';
@@ -19,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { beginTransaction, endTransaction } from '@/scene/history';
 import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';
-import { isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
+import { isTextNode, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
 import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
@@ -57,7 +58,7 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
   // returning a fresh array per call trips React 19's getSnapshot-must-be-
   // cached invariant and loops forever.
   const sceneNodes = useSceneStore((s) => s.scene.nodes);
-  const vectorNodes = sceneNodes.filter(isVectorNode);
+  const maskSourceNodes = sceneNodes.filter((n) => isVectorNode(n) || isTextNode(n));
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const maskParams = useMarqueeStateStore((s) => s.params);
   const setMaskParams = useMarqueeStateStore((s) => s.setParams);
@@ -254,12 +255,14 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
             </button>
             <button
               type="button"
-              disabled={locked || vectorNodes.length === 0}
+              disabled={locked || maskSourceNodes.length === 0}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={() => !locked && setVectorPickerOpen((open) => !open)}
             >
               <Spline size={12} />{' '}
-              {modifier.maskId ? 'Replace mask from vector node' : 'Mask from vector node'}
+              {modifier.maskId
+                ? 'Replace mask from vector or text layer'
+                : 'Mask from vector or text layer'}
             </button>
             {vectorPickerOpen && !locked && (
               <div className="ml-4 flex flex-col gap-1 border-l border-neutral-800 pl-2">
@@ -296,14 +299,18 @@ export function StackRow({ node, modifier, displayIndex, length, ops }: StackRow
                   />
                   Invert
                 </label>
-                {vectorNodes.map((v) => (
+                {maskSourceNodes.map((v) => (
                   <button
                     key={v.id}
                     type="button"
                     className="truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
                     onClick={() => maskFromVectorNode(v.id)}
                   >
-                    <Spline size={12} className="mr-1 inline" />
+                    {isTextNode(v) ? (
+                      <Type size={12} className="mr-1 inline" />
+                    ) : (
+                      <Spline size={12} className="mr-1 inline" />
+                    )}
                     {v.label}
                   </button>
                 ))}

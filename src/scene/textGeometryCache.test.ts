@@ -6,6 +6,7 @@ vi.mock('@/fonts/fontsIpc', () => ({ textOutlines: vi.fn(), listFonts: vi.fn() }
 import { textOutlines } from '@/fonts/fontsIpc';
 import {
   clearAll,
+  documentPathsFor,
   ensureGeometry,
   getGeometry,
   specFor,
@@ -131,5 +132,46 @@ describe('ensureGeometry / getGeometry', () => {
     expect(getGeometry(nodes[1])).toBeUndefined();
     expect(getGeometry(nodes[0])).toBeDefined();
     expect(getGeometry(nodes[128])).toBeDefined();
+  });
+});
+
+describe('documentPathsFor', () => {
+  it('translates every anchor point and handle by position, leaving closed and the input alone', () => {
+    const geometry: TextGeometry = {
+      paths: [
+        {
+          closed: true,
+          anchors: [
+            { point: { x: 1, y: 2 }, handleOut: { x: 3, y: 4 } },
+            { point: { x: 5, y: 6 }, handleIn: { x: 7, y: 8 }, handleOut: { x: 9, y: 10 } },
+          ],
+        },
+        { closed: false, anchors: [{ point: { x: 0, y: 0 } }] },
+      ],
+      lines: [],
+      ascent: 0,
+      descent: 0,
+      bounds: null,
+    };
+    const before = JSON.stringify(geometry);
+    const out = documentPathsFor(textNode({ position: { x: 100, y: 200 } }), geometry);
+
+    expect(out).toEqual([
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 101, y: 202 }, handleOut: { x: 103, y: 204 } },
+          {
+            point: { x: 105, y: 206 },
+            handleIn: { x: 107, y: 208 },
+            handleOut: { x: 109, y: 210 },
+          },
+        ],
+      },
+      { closed: false, anchors: [{ point: { x: 100, y: 200 } }] },
+    ]);
+    // absent handles stay absent (a corner, not a handle at the position)
+    expect(out[0].anchors[0]).not.toHaveProperty('handleIn');
+    expect(JSON.stringify(geometry)).toBe(before);
   });
 });

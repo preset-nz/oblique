@@ -4,7 +4,7 @@ import * as cache from '@/scene/cache';
 import { rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
-import { ensureGeometry, textCookKey } from '@/scene/textGeometryCache';
+import { documentPathsFor, ensureGeometry, textCookKey } from '@/scene/textGeometryCache';
 import { rasterizeText } from '@/scene/textRasterize';
 import {
   IDENTITY_TRANSFORM_2D,
@@ -266,14 +266,43 @@ async function realRunPython(
 }
 
 /**
- * `Modifier.maskId` resolution (vector-modifier-masks.md): resolves against
- * `Scene.maskRefs` (a live vector reference). A hit whose target node has
- * since gone missing or isn't a vector any more (shouldn't happen post-
- * `pruneMaskState`, but this is the last line of defence) resolves to "no
- * mask" rather than throwing — same posture as an unresolved id today.
+ * Text-mask geometry prefetch (text-modifier-masks.md). `makeRasterizeFor` is
+ * synchronous (it runs inside `buildCookModifiers`) but a text node's glyph
+ * geometry is async (Rust on a cache miss), so every text mask target is
+ * resolved up front. Keyed by the TARGET text node's id. A ref that doesn't
+ * resolve, or whose target isn't a text node, contributes nothing — the same
+ * "no mask" posture as `makeRasterizeFor`. Callers sit this inside their
+ * failure `try`: a rejection here is a cook failure like any other.
+ */
+async function prefetchMaskTextGeometry(
+  node: SceneNode,
+  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef' | 'getTextGeometry'>,
+): Promise<Map<string, TextGeometry>> {
+  const out = new Map<string, TextGeometry>();
+  for (const modifier of node.modifiers) {
+    if (!modifier.maskId) continue;
+    const ref = deps.getVectorMaskRef(modifier.maskId);
+    if (!ref || out.has(ref.nodeId)) continue;
+    const target = deps.getNode(ref.nodeId);
+    if (!target || !isTextNode(target)) continue;
+    out.set(target.id, await deps.getTextGeometry(target));
+  }
+  return out;
+}
+
+/**
+ * `Modifier.maskId` resolution (vector-modifier-masks.md,
+ * text-modifier-masks.md): resolves against `Scene.maskRefs` (a live vector or
+ * text reference). A hit whose target node has since gone missing or is
+ * neither a vector nor a text node (shouldn't happen post-`pruneMaskState`, but
+ * this is the last line of defence) resolves to "no mask" rather than
+ * throwing — same posture as an unresolved id today. A text target is filled
+ * from its prefetched glyph geometry, `nonzero`, translated into document
+ * space; fill/stroke colour don't matter (glyph fill only).
  */
 function makeRasterizeFor(
   deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef' | 'getDocumentSize' | 'rasterizeVectorMask'>,
+  textGeometry: Map<string, TextGeometry>,
   nodeExtent: [number, number],
   consumerTransform2d: Transform2D,
   width: number,
@@ -283,20 +312,39 @@ function makeRasterizeFor(
   return (maskId: string) => {
     const ref = deps.getVectorMaskRef(maskId);
     if (!ref) return undefined;
-    const vectorNode = deps.getNode(ref.nodeId);
-    if (!vectorNode || !isVectorNode(vectorNode)) return undefined;
-    return deps.rasterizeVectorMask(
-      vectorNode.paths,
-      vectorNode.fillRule,
-      ref,
-      vectorNode.transform2d ?? IDENTITY_TRANSFORM_2D,
-      deps.getDocumentSize(),
-      consumerTransform2d,
-      nodeExtent,
-      width,
-      height,
-      factor,
-    );
+    const target = deps.getNode(ref.nodeId);
+    if (!target) return undefined;
+    if (isVectorNode(target)) {
+      return deps.rasterizeVectorMask(
+        target.paths,
+        target.fillRule,
+        ref,
+        target.transform2d ?? IDENTITY_TRANSFORM_2D,
+        deps.getDocumentSize(),
+        consumerTransform2d,
+        nodeExtent,
+        width,
+        height,
+        factor,
+      );
+    }
+    if (isTextNode(target)) {
+      const geometry = textGeometry.get(target.id);
+      if (!geometry) return undefined;
+      return deps.rasterizeVectorMask(
+        documentPathsFor(target, geometry),
+        'nonzero',
+        ref,
+        target.transform2d ?? IDENTITY_TRANSFORM_2D,
+        deps.getDocumentSize(),
+        consumerTransform2d,
+        nodeExtent,
+        width,
+        height,
+        factor,
+      );
+    }
+    return undefined;
   };
 }
 
@@ -422,8 +470,12 @@ export async function cookNodeFullRes(
       : node.type === 'text'
         ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
         : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+  // Text mask targets' geometry resolves before the sync rasterizeFor (a
+  // rejection throws, aborting the export like any other cook failure).
+  const maskTextGeometry = await prefetchMaskTextGeometry(node, deps);
   const rasterizeFor = makeRasterizeFor(
     deps,
+    maskTextGeometry,
     nodeExtent,
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
     width,
@@ -513,8 +565,12 @@ export async function cookNode(
           ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
           : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
     const tDownscale = performance.now();
+    // Text mask targets' geometry (async) resolves here, inside the failure try,
+    // so a Rust error is a cook failure; makeRasterizeFor stays synchronous.
+    const maskTextGeometry = await prefetchMaskTextGeometry(node, deps);
     const rasterizeFor = makeRasterizeFor(
       deps,
+      maskTextGeometry,
       nodeExtent,
       node.transform2d ?? IDENTITY_TRANSFORM_2D,
       width,

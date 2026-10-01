@@ -361,6 +361,151 @@ describe('cookNode — masks', () => {
   });
 });
 
+describe('cookNode — text-node mask targets', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCookErrorBurst();
+  });
+
+  const ref = { id: 'ref-1', nodeId: 't1', featherPx: 2, expand: 1, invert: true };
+  const textGeometry: TextGeometry = {
+    paths: [
+      {
+        closed: true,
+        anchors: [{ point: { x: 0, y: 0 }, handleOut: { x: 1, y: 1 } }, { point: { x: 10, y: 0 } }],
+      },
+    ],
+    lines: [],
+    ascent: 0,
+    descent: 0,
+    bounds: null,
+  };
+  const consumer = () =>
+    makeNode({
+      transform2d: { x: 3, y: 4, scaleX: 1, scaleY: 1, rotation: 0 },
+      modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: {}, maskId: 'ref-1' }],
+    });
+
+  it('rasterises the text target through rasterizeVectorMask: translated paths, nonzero', async () => {
+    const textTransform = { x: -5, y: 2, scaleX: 1, scaleY: 1, rotation: 0.1 };
+    const text = makeTextNode({
+      id: 't1',
+      position: { x: 100, y: 200 },
+      transform2d: textTransform,
+    });
+    const nodeRef = { current: consumer() };
+    const plane = new Uint8Array(100 * 50);
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 't1' ? text : undefined,
+      ),
+      getTextGeometry: vi.fn(async () => textGeometry),
+      rasterizeVectorMask: vi.fn(() => plane),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.getTextGeometry).toHaveBeenCalledWith(text);
+    expect(deps.rasterizeVectorMask).toHaveBeenCalledWith(
+      [
+        {
+          closed: true,
+          anchors: [
+            { point: { x: 100, y: 200 }, handleOut: { x: 101, y: 201 } },
+            { point: { x: 110, y: 200 } },
+          ],
+        },
+      ],
+      'nonzero',
+      ref,
+      textTransform,
+      [800, 400],
+      nodeRef.current.transform2d,
+      [800, 400],
+      100,
+      50,
+      1 / 8,
+    );
+    const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runModifiers[0].mask).toBe(plane);
+  });
+
+  it('a ref to a deleted node resolves to no mask and asks for no geometry', async () => {
+    const nodeRef = { current: consumer() };
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) => (id === 'node-1' ? nodeRef.current : undefined)),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.getTextGeometry).not.toHaveBeenCalled();
+    expect(deps.rasterizeVectorMask).not.toHaveBeenCalled();
+    const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runModifiers[0].mask).toBeUndefined();
+  });
+
+  it('a geometry rejection for the mask target is a cook failure: dirty stays, nothing cached', async () => {
+    const text = makeTextNode({ id: 't1' });
+    const nodeRef = { current: consumer() };
+    const deps = makeDeps(nodeRef, {
+      getVectorMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 't1' ? text : undefined,
+      ),
+      getTextGeometry: vi.fn(async () => {
+        throw new Error('FontNotFound: Nope');
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.runPython).not.toHaveBeenCalled();
+    expect(deps.setCache).not.toHaveBeenCalled();
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('cookNodeFullRes prefetches and rasterises the same way (factor 1)', async () => {
+    const text = makeTextNode({ id: 't1', position: { x: 7, y: 9 } });
+    const nodeRef = { current: consumer() };
+    const rasterizeVectorMask = vi.fn(() => new Uint8Array(800 * 400));
+    const deps: FullResCookDeps = {
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 't1' ? text : undefined,
+      ),
+      getSource: vi.fn(() => fakeBitmap()),
+      getOps: vi.fn(() => opsFixture),
+      getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
+      getVectorMaskRef: vi.fn(() => ref),
+      rasterizeVectorMask,
+      rasterizeVector: vi.fn(),
+      getTextGeometry: vi.fn(async () => textGeometry),
+      rasterizeText: vi.fn(),
+      downscale: vi.fn((_s: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
+      runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
+      encode: vi.fn(async () => fakeBitmap()),
+    };
+
+    await cookNodeFullRes('node-1', deps);
+
+    expect(deps.getTextGeometry).toHaveBeenCalledWith(text);
+    const call = (rasterizeVectorMask.mock.calls[0] as unknown[]) ?? [];
+    expect(call[0]).toEqual([
+      {
+        closed: true,
+        anchors: [
+          { point: { x: 7, y: 9 }, handleOut: { x: 8, y: 10 } },
+          { point: { x: 17, y: 9 } },
+        ],
+      },
+    ]);
+    expect(call[1]).toBe('nonzero');
+    expect(call[9]).toBe(1);
+  });
+});
+
 describe('partitionRuns', () => {
   it('keeps one run for an all-python stack (the common case today)', () => {
     const built = buildCookModifiers(

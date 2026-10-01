@@ -161,10 +161,27 @@ function resolvedMaskInput(maskId: string | undefined, scene: Scene): unknown {
   // The referenced shape's transform2d is a cook input too — document-pinned
   // masks rasterise at the shape's COMPOSITED position, so undoing a move of
   // the vector node must recook its consumers.
+  // A text target (text-modifier-masks.md) is keyed by what shapes its glyph
+  // mask: the spec fields + position. Fill/stroke are left out — the modifier
+  // mask is glyph fill only, so they don't affect it.
   const geometry =
     target && isVectorNode(target)
       ? { paths: target.paths, fillRule: target.fillRule, transform2d: target.transform2d }
-      : null;
+      : target && isTextNode(target)
+        ? {
+            text: {
+              content: target.content,
+              font: target.font,
+              fontSize: target.fontSize,
+              tracking: target.tracking,
+              kerning: target.kerning,
+              lineHeight: target.lineHeight,
+              align: target.align,
+              position: target.position,
+            },
+            transform2d: target.transform2d,
+          }
+        : null;
   return { ref, geometry };
 }
 

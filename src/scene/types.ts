@@ -45,7 +45,7 @@ export interface Modifier {
  */
 export interface VectorMaskRef {
   id: string;
-  nodeId: string; // a VectorNode's id
+  nodeId: string; // a VectorNode's or TextNode's id (Epic 20)
   featherPx: number;
   expand: number;
   invert: boolean;

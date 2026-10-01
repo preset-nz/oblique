@@ -559,3 +559,84 @@ describe('text nodes', () => {
     expect(node?.dirty).toEqual({ draft: false, working: false });
   });
 });
+
+describe('a text node as a modifier-mask target', () => {
+  const font = {
+    family: 'Helvetica',
+    style: 'Regular',
+    postscriptName: 'Helvetica',
+    weight: 400,
+    italic: false,
+    category: 'sans' as const,
+  };
+  const nodeById = (id: string) => useSceneStore.getState().scene.nodes.find((n) => n.id === id);
+  const settle = (id: string) => {
+    useSceneStore.getState().clearDirty(id, 'draft');
+    useSceneStore.getState().clearDirty(id, 'working');
+  };
+
+  function setup() {
+    const st = useSceneStore.getState();
+    const textId = st.addTextNode({ content: 'ROT', font, position: { x: 0, y: 0 } });
+    const consumerId = st.addPixelNode({ sourcePath: '/c.png', sourceSize: [10, 10] });
+    sources.set(consumerId, fakeBitmap());
+    st.addModifier(consumerId, 'grain', {});
+    const modId = (nodeById(consumerId) as PixelNode).modifiers[0].id;
+    st.setModifierVectorMask(consumerId, modId, textId, { featherPx: 0, expand: 0, invert: false });
+    settle(textId);
+    settle(consumerId);
+    return { textId, consumerId };
+  }
+
+  it('undoing a text content change recooks the consumer too', async () => {
+    const { textId, consumerId } = setup();
+    useSceneStore.getState().setTextProps(textId, { content: 'ROTTEN' });
+    settle(textId);
+    settle(consumerId);
+
+    await history.undo(fakeDeps());
+
+    expect(nodeById(textId)).toMatchObject({
+      content: 'ROT',
+      dirty: { draft: true, working: true },
+    });
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('undoing a move of the text node recooks the consumer', async () => {
+    const { textId, consumerId } = setup();
+    useSceneStore.getState().setTextProps(textId, { position: { x: 50, y: 50 } });
+    settle(textId);
+    settle(consumerId);
+
+    await history.undo(fakeDeps());
+
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('undoing a fill-only change leaves the consumer clean (glyph fill only)', async () => {
+    const { textId, consumerId } = setup();
+    useSceneStore.getState().setTextProps(textId, { fill: '#ff0000' });
+    settle(textId);
+    settle(consumerId);
+
+    await history.undo(fakeDeps());
+
+    expect(nodeById(textId)?.dirty).toEqual({ draft: true, working: true });
+    expect(nodeById(consumerId)?.dirty).toEqual({ draft: false, working: false });
+  });
+
+  it('undoing the text deletion restores the node and the mask ref', async () => {
+    const { textId, consumerId } = setup();
+    const maskId = (nodeById(consumerId) as PixelNode).modifiers[0].maskId as string;
+    history.clear();
+    useSceneStore.getState().removeNode(textId);
+    expect(useSceneStore.getState().scene.maskRefs?.[maskId]).toBeUndefined();
+
+    await history.undo(fakeDeps());
+
+    expect(nodeById(textId)).toBeDefined();
+    expect(useSceneStore.getState().scene.maskRefs?.[maskId]).toMatchObject({ nodeId: textId });
+    expect((nodeById(consumerId) as PixelNode).modifiers[0].maskId).toBe(maskId);
+  });
+});
