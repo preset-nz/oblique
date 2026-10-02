@@ -1,3 +1,4 @@
+mod document;
 mod fonts;
 mod menu;
 mod sidecar;
@@ -22,7 +23,20 @@ pub fn run() {
             fonts::list_fonts,
             text_cmd::text_outlines,
             sidecar::sidecar_send,
-            sidecar::sidecar_subscribe
+            sidecar::sidecar_subscribe,
+            document::document_init,
+            document::document_log,
+            rhizome_pom_tauri::commands::pom_status,
+            rhizome_pom_tauri::commands::pom_view,
+            rhizome_pom_tauri::commands::pom_commands,
+            rhizome_pom_tauri::commands::pom_run,
+            rhizome_pom_tauri::commands::pom_begin,
+            rhizome_pom_tauri::commands::pom_end,
+            rhizome_pom_tauri::commands::pom_cancel,
+            rhizome_pom_tauri::commands::pom_connect,
+            rhizome_pom_tauri::commands::pom_new,
+            rhizome_pom_tauri::commands::pom_open,
+            rhizome_pom_tauri::commands::pom_save_as
         ])
         .setup(|app| {
             sidecar::start(app.handle().clone());

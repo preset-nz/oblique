@@ -79,7 +79,9 @@ fn family_class_hi(face: &ttf_parser::Face) -> Option<u8> {
 
 /// True when the face's cmap maps every one of `A–Z a–z` — i.e. it can set basic Latin text.
 fn covers_basic_latin(face: &ttf_parser::Face) -> bool {
-    ('A'..='Z').chain('a'..='z').all(|c| face.glyph_index(c).is_some())
+    ('A'..='Z')
+        .chain('a'..='z')
+        .all(|c| face.glyph_index(c).is_some())
 }
 
 /// Mac OS Roman bytes 0x80–0xFF. ASCII maps to itself.
@@ -96,7 +98,10 @@ fn mac_roman(bytes: &[u8]) -> String {
             if b < 0x80 {
                 b as char
             } else {
-                MAC_ROMAN_HIGH.chars().nth(usize::from(b - 0x80)).unwrap_or('\u{fffd}')
+                MAC_ROMAN_HIGH
+                    .chars()
+                    .nth(usize::from(b - 0x80))
+                    .unwrap_or('\u{fffd}')
             }
         })
         .collect()
@@ -116,7 +121,9 @@ fn name_string(face: &ttf_parser::Face, id: u16) -> Option<String> {
         if name.name_id != id {
             continue;
         }
-        let Some(s) = decode_name(&name) else { continue };
+        let Some(s) = decode_name(&name) else {
+            continue;
+        };
         if s.is_empty() {
             continue;
         }
@@ -142,7 +149,12 @@ fn scan_system_fonts() -> Vec<FontFace> {
                 .or_else(|| name_string(&face, name_id::FAMILY));
             let style = name_string(&face, name_id::TYPOGRAPHIC_SUBFAMILY)
                 .or_else(|| name_string(&face, name_id::SUBFAMILY));
-            Some((family, style, family_class_hi(&face), covers_basic_latin(&face)))
+            Some((
+                family,
+                style,
+                family_class_hi(&face),
+                covers_basic_latin(&face),
+            ))
         });
         let (family, style, class_hi, latin) =
             parsed.flatten().unwrap_or((None, None, None, false));
@@ -273,7 +285,12 @@ mod tests {
         }
         // A script-specific face, when one is present.
         let mut checked = false;
-        for ps in ["AlBayan", "AlBayan-Bold", "NotoSansArabic-Regular", "NotoSansThai-Regular"] {
+        for ps in [
+            "AlBayan",
+            "AlBayan-Bold",
+            "NotoSansArabic-Regular",
+            "NotoSansThai-Regular",
+        ] {
             if let Some(v) = latin_of(ps) {
                 assert!(!v, "{ps} is not a Latin face");
                 checked = true;
@@ -305,7 +322,11 @@ mod tests {
             .filter(|f| f.latin)
             .map(|f| f.family.to_lowercase())
             .collect();
-        println!("{} families, {} with a Latin face", families.len(), latin.len());
+        println!(
+            "{} families, {} with a Latin face",
+            families.len(),
+            latin.len()
+        );
         assert_eq!(hn.family, "Helvetica Neue");
         assert_eq!(hn.style, "Condensed Bold");
     }

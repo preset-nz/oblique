@@ -116,8 +116,14 @@ fn supervise(app: AppHandle) {
         };
 
         let stdin = child.stdin.take().expect("child spawned with piped stdin");
-        let stdout = child.stdout.take().expect("child spawned with piped stdout");
-        let stderr = child.stderr.take().expect("child spawned with piped stderr");
+        let stdout = child
+            .stdout
+            .take()
+            .expect("child spawned with piped stdout");
+        let stderr = child
+            .stderr
+            .take()
+            .expect("child spawned with piped stderr");
 
         if let Some(state) = app.try_state::<SidecarState>() {
             *state.stdin.lock().expect("sidecar stdin mutex poisoned") = Some(stdin);
@@ -144,7 +150,10 @@ fn supervise(app: AppHandle) {
             Ok(status) => Some(format!("sidecar exited: {status}")),
             Err(err) => Some(format!("sidecar wait() failed: {err}")),
         };
-        let stderr_tail = last_stderr.lock().expect("last_stderr mutex poisoned").clone();
+        let stderr_tail = last_stderr
+            .lock()
+            .expect("last_stderr mutex poisoned")
+            .clone();
         let combined = if stderr_tail.is_empty() {
             error
         } else {
@@ -223,11 +232,17 @@ pub fn sidecar_subscribe(
 }
 
 #[tauri::command]
-pub fn sidecar_send(state: tauri::State<SidecarState>, request: IpcRequest<'_>) -> Result<(), String> {
+pub fn sidecar_send(
+    state: tauri::State<SidecarState>,
+    request: IpcRequest<'_>,
+) -> Result<(), String> {
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("sidecar_send expects a raw byte body".to_string());
     };
-    let mut guard = state.stdin.lock().map_err(|_| "sidecar stdin mutex poisoned".to_string())?;
+    let mut guard = state
+        .stdin
+        .lock()
+        .map_err(|_| "sidecar stdin mutex poisoned".to_string())?;
     match guard.as_mut() {
         Some(stdin) => stdin
             .write_all(bytes)
