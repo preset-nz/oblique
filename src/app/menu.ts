@@ -8,12 +8,19 @@ import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { type LayerMove, layerMoveTarget } from '@/panels/stack/dragReorder';
 import { exportPng } from '@/project/export';
 import { tauriImportDeps } from '@/project/import';
-import { importImagesDialog, newProject, openProjectDialog, saveProject } from '@/project/io';
+import {
+  importImagesDialog,
+  newProject,
+  openProjectDialog,
+  replaceImageDialog,
+  saveProject,
+} from '@/project/io';
 import { duplicateNode } from '@/scene/duplicateNode';
 import { redo, undo } from '@/scene/history';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { commitActiveTextEdit } from '@/scene/textEditState';
+import { isPixelNode } from '@/scene/types';
 
 /**
  * Native macOS menu bar → webview bridge (roadmap gap "Native app menu +
@@ -71,6 +78,24 @@ function moveSelectedLayer(move: LayerMove): void {
   useSceneStore.getState().reorderNode(selection.nodeId, to);
 }
 
+/**
+ * The selected node when it is an image (pixel) layer that isn't locked — what
+ * Layer → Replace Image… acts on. Also decides whether the item is enabled.
+ */
+function selectedReplaceableImage(): string | null {
+  const selection = useSelectionStore.getState().selection;
+  if (selection.kind !== 'node') return null;
+  const node = useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId);
+  return node && isPixelNode(node) && node.state !== 'locked' ? node.id : null;
+}
+
+/** Layer → Replace Image… (image-source.md): the same flow as the Image section's Browse…. */
+async function replaceSelectedImage(): Promise<void> {
+  commitActiveTextEdit();
+  const nodeId = selectedReplaceableImage();
+  if (nodeId) await replaceImageDialog(nodeId);
+}
+
 const MENU_EVENTS: Record<string, (payload: unknown) => void | Promise<void>> = {
   'menu://app/settings': () => openSettingsDialog(),
   'menu://file/new': () => newProject(),
@@ -119,6 +144,8 @@ const MENU_EVENTS: Record<string, (payload: unknown) => void | Promise<void>> = 
   'menu://layer/backward': () => moveSelectedLayer('backward'),
   'menu://layer/front': () => moveSelectedLayer('front'),
   'menu://layer/back': () => moveSelectedLayer('back'),
+  // Layer → Replace Image… (image-source.md): enabled only for a pixel node.
+  'menu://layer/replace-image': () => replaceSelectedImage(),
   // Same reason: Replace's undo step must not swallow a half-finished text edit.
   'menu://type/replace-font': () => {
     commitActiveTextEdit();
@@ -149,8 +176,24 @@ export function installMenu(): () => void {
       });
   }
 
+  // Keep Layer → Replace Image… enabled only while an unlocked image layer is
+  // selected: tell Rust (which owns the item) whenever that changes. Sent as a
+  // window event, not an `invoke` — see menu.rs's EVT_LAYER_REPLACE_IMAGE_ENABLED.
+  let replaceEnabled: boolean | null = null;
+  const syncReplaceImageEnabled = () => {
+    const enabled = selectedReplaceableImage() !== null;
+    if (enabled === replaceEnabled) return;
+    replaceEnabled = enabled;
+    void win.emit('menu://layer/replace-image-enabled', enabled);
+  };
+  syncReplaceImageEnabled();
+  const unsubSelection = useSelectionStore.subscribe(syncReplaceImageEnabled);
+  const unsubScene = useSceneStore.subscribe(syncReplaceImageEnabled);
+
   return () => {
     disposed = true;
+    unsubSelection();
+    unsubScene();
     for (const fn of unlistens) fn();
   };
 }

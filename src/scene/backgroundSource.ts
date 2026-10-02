@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Closable } from './sources';
+import { type Closable, loadSource } from './sources';
 import type { SceneBackground } from './types';
 
 /**
@@ -104,27 +104,33 @@ export interface BackgroundDecodeDeps {
 export async function reconcile(
   background: SceneBackground | undefined,
   deps: BackgroundDecodeDeps,
+  projectPath: string | null = null,
+  options: { force?: boolean } = {},
 ): Promise<void> {
   if (background?.type !== 'image') {
     clear();
     return;
   }
   const path = background.sourcePath;
-  if (held?.sourcePath === path) {
+  // `force` (a Save As moved the base folder a relative path resolves against)
+  // re-reads even when this path is already held.
+  if (held?.sourcePath === path && !options.force) {
     wanted = path;
     useBackgroundSourceStore.getState().setMissing(false);
     return;
   }
   clear();
   wanted = path;
-  try {
-    const bitmap = (await deps.decode(await deps.readFile(path))) as ImageBitmap;
-    if (wanted !== path) {
-      closeBitmap(bitmap); // superseded while decoding
-      return;
-    }
-    set(path, bitmap);
-  } catch {
+  // Through the shared resolver (image-source.md): `path` stays the stored
+  // string, so a relative background resolves against the project folder.
+  const load = await loadSource(path, projectPath, deps);
+  if (!load.ok) {
     if (wanted === path) useBackgroundSourceStore.getState().setMissing(true);
+    return;
   }
+  if (wanted !== path) {
+    closeBitmap(load.bitmap); // superseded while decoding
+    return;
+  }
+  set(path, load.bitmap);
 }

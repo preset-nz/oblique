@@ -1,4 +1,5 @@
 import { readFile } from '@tauri-apps/plugin-fs';
+import { useProjectMetaStore } from '@/project/projectMeta';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
@@ -67,6 +68,21 @@ export function clear(): void {
   transactionActive = false;
   transactionBefore = null;
   suppressCapture = false;
+}
+
+/**
+ * Run `fn` without its scene mutations becoming undo steps — for bookkeeping
+ * the app does by itself (e.g. fitting a node to a file that became readable
+ * on Save), never for user edits.
+ */
+export function withoutCapture(fn: () => void): void {
+  const was = suppressCapture;
+  suppressCapture = true;
+  try {
+    fn();
+  } finally {
+    suppressCapture = was;
+  }
 }
 
 export function canUndo(): boolean {
@@ -248,20 +264,25 @@ async function restoreScene(
     }
   }
 
+  // Re-decode a pixel node's source when it has none held (undo-of-delete) OR
+  // when its path differs from the one on screen: a replace (image-source.md)
+  // leaves the NEW bitmap under the same node id, so undoing/redoing across it
+  // must swap the pixels, not just the path/size.
+  const projectPath = useProjectMetaStore.getState().path;
   await Promise.all(
     target.nodes
-      .filter((node): node is PixelNode => isPixelNode(node) && !sources.get(node.id))
+      .filter((node): node is PixelNode => {
+        if (!isPixelNode(node)) return false;
+        if (!sources.get(node.id)) return true;
+        const previous = currentById.get(node.id);
+        return !!previous && isPixelNode(previous) && previous.sourcePath !== node.sourcePath;
+      })
       .map(async (node) => {
-        try {
-          const bytes = await deps.readFile(node.sourcePath);
-          const bitmap = await deps.decode(bytes);
-          sources.set(node.id, bitmap as ImageBitmap);
-          sources.useSourceMissingStore.getState().clear(node.id);
-        } catch {
-          // sourcePath kept verbatim — paintScene's striped placeholder covers this,
-          // same re-hydration contract as project load.
-          sources.useSourceMissingStore.getState().setMissing(node.id, true);
-        }
+        // sourcePath kept verbatim — paintScene's striped placeholder covers a
+        // failure, same re-hydration contract as project load.
+        const load = await sources.loadSource(node.sourcePath, projectPath, deps);
+        if (!load.ok) sources.remove(node.id); // never cook a stale bitmap for a missing path
+        sources.applySourceLoad(node.id, load);
       }),
   );
 
@@ -269,7 +290,7 @@ async function restoreScene(
   // undo/redo across a background change must reconcile the holder too, or
   // undoing "set image" keeps painting it and redo shows nothing
   // (background-image.md). Same decode deps as the pixel sources above.
-  await backgroundSource.reconcile(target.background, deps);
+  await backgroundSource.reconcile(target.background, deps, projectPath);
 
   const nodes = target.nodes.map((node) => {
     const previous = currentById.get(node.id);

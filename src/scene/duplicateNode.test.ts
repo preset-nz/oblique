@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImportDeps } from '@/project/import';
+import { useProjectMetaStore } from '@/project/projectMeta';
 import { duplicateNode } from './duplicateNode';
 import * as sources from './sources';
 import { DUPLICATE_OFFSET_PX, useSceneStore } from './store';
@@ -353,6 +354,22 @@ describe('duplicateNode (source-map orchestration)', () => {
     await duplicateNode('a', deps);
     expect(nodeCountAtDecode).toBe(1);
     expect(nodes()).toHaveLength(2);
+  });
+
+  it('reads a relative source path through the resolver, against the saved project folder', async () => {
+    useProjectMetaStore.setState({ path: '/x/proj.oblique' });
+    setNodes([pixelNode('a', { sourcePath: 'plates/eye.png' })]);
+    const readFile = vi.fn(async () => new Uint8Array());
+    const deps: ImportDeps = {
+      readFile,
+      decode: async () => ({ width: 1, height: 1, close: vi.fn() }) as unknown as ImageBitmap,
+    };
+    const newId = await duplicateNode('a', deps);
+    expect(readFile).toHaveBeenCalledWith('/x/plates/eye.png');
+    expect(sources.isSourceMissing(newId as string)).toBe(false);
+    // The copy keeps the path as typed.
+    expect((nodes().find((n) => n.id === newId) as PixelNode).sourcePath).toBe('plates/eye.png');
+    useProjectMetaStore.setState({ path: null });
   });
 
   it('still duplicates when the source cannot be read, flagging the copy as missing', async () => {

@@ -1,4 +1,5 @@
 import type { ImportDeps } from '@/project/import';
+import { useProjectMetaStore } from '@/project/projectMeta';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { isPixelNode } from '@/scene/types';
@@ -22,14 +23,18 @@ export async function duplicateNode(nodeId: string, deps: ImportDeps): Promise<s
   if (!node) return null;
 
   let bitmap: ImageBitmap | null = null;
+  let missingReason: sources.SourceMissingReason = 'not-found';
   if (isPixelNode(node)) {
-    try {
-      bitmap = (await deps.decode(await deps.readFile(node.sourcePath))) as ImageBitmap;
-    } catch {
-      // File moved/deleted since import: still duplicate (re-hydration
-      // contract, pixel-node-import.md) — the copy gets the striped placeholder.
-      bitmap = null;
-    }
+    // Through the shared resolver (image-source.md). A file moved/deleted since
+    // import still duplicates (re-hydration contract, pixel-node-import.md) —
+    // the copy gets the striped placeholder.
+    const load = await sources.loadSource(
+      node.sourcePath,
+      useProjectMetaStore.getState().path,
+      deps,
+    );
+    if (load.ok) bitmap = load.bitmap;
+    else missingReason = load.reason;
   }
 
   // The scene may have changed while decoding; the store no-ops to null if the node went.
@@ -45,7 +50,7 @@ export async function duplicateNode(nodeId: string, deps: ImportDeps): Promise<s
       sources.set(newId, bitmap);
       sources.useSourceMissingStore.getState().clear(newId);
     } else {
-      sources.useSourceMissingStore.getState().setMissing(newId, true);
+      sources.useSourceMissingStore.getState().setMissing(newId, true, missingReason);
     }
   }
   return newId;

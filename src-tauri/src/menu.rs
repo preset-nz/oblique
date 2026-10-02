@@ -5,7 +5,7 @@
 //! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md;
 //! Snap to Layers check item — snapping.md),
 //! Layer (Bring Forward/Send Backward/Bring to Front/Send to Back —
-//! drag-reorder.md), Type.
+//! drag-reorder.md; Replace Image… — image-source.md), Type.
 //!
 //! Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split
 //! Open vs Import", 2026-07-05): genuinely different flows, not one dialog
@@ -37,7 +37,7 @@
 //! real click/keypress test (see report).
 
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Listener, Runtime};
 
 /// Bug-report contact shown in the native About panel (macOS supports
 /// `credits`, not `website`/`comments`) and the friends-build README.
@@ -65,6 +65,12 @@ const EVT_LAYER_FORWARD: &str = "menu://layer/forward";
 const EVT_LAYER_BACKWARD: &str = "menu://layer/backward";
 const EVT_LAYER_FRONT: &str = "menu://layer/front";
 const EVT_LAYER_BACK: &str = "menu://layer/back";
+const EVT_LAYER_REPLACE_IMAGE: &str = "menu://layer/replace-image";
+/// Webview -> Rust (not a menu click): payload `bool`, whether Layer -> Replace
+/// Image… should be enabled (a pixel node is selected). Sent through the
+/// window's `emit` rather than an `invoke` so the frame-IPC dependency gate
+/// stays untouched; Rust owns the item handle and flips it.
+const EVT_LAYER_REPLACE_IMAGE_ENABLED: &str = "menu://layer/replace-image-enabled";
 const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
 const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
 
@@ -246,6 +252,19 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         Some("Shift+CmdOrCtrl+["),
     )?;
 
+    // Replace Image… (image-source.md, no accelerator — an infrequent action):
+    // enabled only while a pixel node is selected, so it starts disabled and the
+    // webview tells us when that changes (listener below).
+    let layer_replace_image = MenuItem::with_id(
+        app,
+        "layer-replace-image",
+        "Replace Image…",
+        false,
+        None::<&str>,
+    )?;
+
+    let layer_replace_image_enabled = layer_replace_image.clone();
+
     let layer_submenu = Submenu::with_items(
         app,
         "Layer",
@@ -256,6 +275,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &layer_front,
             &layer_back,
+            &PredefinedMenuItem::separator(app)?,
+            &layer_replace_image,
         ],
     )?;
 
@@ -295,6 +316,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     )?;
     app.set_menu(menu)?;
 
+    app.listen_any(EVT_LAYER_REPLACE_IMAGE_ENABLED, move |event| {
+        if let Ok(enabled) = serde_json::from_str::<bool>(event.payload()) {
+            let _ = layer_replace_image_enabled.set_enabled(enabled);
+        }
+    });
+
     app.on_menu_event(move |app_handle, event| {
         let evt = match event.id().0.as_str() {
             "app-settings" => EVT_APP_SETTINGS,
@@ -322,6 +349,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "layer-backward" => EVT_LAYER_BACKWARD,
             "layer-front" => EVT_LAYER_FRONT,
             "layer-back" => EVT_LAYER_BACK,
+            "layer-replace-image" => EVT_LAYER_REPLACE_IMAGE,
             "type-replace-font" => EVT_TYPE_REPLACE_FONT,
             "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
             _ => return,

@@ -9,18 +9,20 @@ import {
   writeTextFile,
 } from '@tauri-apps/plugin-fs';
 import { toast } from 'sonner';
-import { create } from 'zustand';
 import { PRODUCT_NAME } from '@/branding';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
 import * as prefixStore from '@/scene/prefixStore';
+import { type ReplaceSourceResult, replacePixelSource } from '@/scene/replaceSource';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
 import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './import';
+import { useProjectMetaStore } from './projectMeta';
+import { isRelativeSourcePath, resolveSourcePath } from './resolvePath';
 
 // On-disk format identifiers, deliberately not `PRODUCT_NAME`: the marker and
 // the `.oblique` extension must survive a product rename or existing files
@@ -33,25 +35,10 @@ export const PROJECT_VERSION = 2;
 const MIN_SUPPORTED_VERSION = 1;
 const MAX_SUPPORTED_VERSION = 2;
 
-/**
- * Current project file + unsaved-changes flag. Transient app state, never
- * persisted; the window title and status bar mirror it.
- */
-interface ProjectMetaState {
-  path: string | null;
-  dirtySinceSave: boolean;
-  setPath: (path: string | null) => void;
-  markSaved: () => void;
-  markMutated: () => void;
-}
+export { useProjectMetaStore };
 
-export const useProjectMetaStore = create<ProjectMetaState>((set) => ({
-  path: null,
-  dirtySinceSave: false,
-  setPath: (path) => set({ path }),
-  markSaved: () => set({ dirtySinceSave: false }),
-  markMutated: () => set({ dirtySinceSave: true }),
-}));
+/** The image-type open-dialog filter shared by Import, Choose image… and Replace Image…. */
+const IMAGE_FILTERS = [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }];
 
 /** Serialise the scene to the on-disk project JSON (format doc: project-persistence.md). */
 export function serialiseProject(scene: Scene): string {
@@ -255,12 +242,63 @@ export async function writeProjectFile(
   await writeBakedSidecar(path, scene, deps);
 }
 
+/**
+ * Relative source paths (image-source.md) resolve against the saved project's
+ * folder, so a first Save or a Save As to another folder changes what they
+ * point at. Re-run the re-decode for every pixel node whose resolved file
+ * differs between the old and new project path (and the background, which
+ * shares the resolver), so the missing flags are true straight away. Absolute
+ * paths never change. A node that comes good with a different pixel size than
+ * its `sourceSize` (typed while unresolvable, so the old footprint was kept) is
+ * fitted like a replace, outside the undo history — this is bookkeeping the
+ * save causes, not a user edit.
+ */
+export async function recheckRelativeSources(
+  previousPath: string | null,
+  newPath: string,
+  deps: ProjectIoDeps,
+): Promise<void> {
+  const scene = useSceneStore.getState().scene;
+  for (const node of scene.nodes) {
+    if (!isPixelNode(node) || !isRelativeSourcePath(node.sourcePath)) continue;
+    const before = resolveSourcePath(node.sourcePath, previousPath);
+    const after = resolveSourcePath(node.sourcePath, newPath);
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    const load = await sources.loadSource(node.sourcePath, newPath, deps);
+    // Deleted or re-pointed while decoding: drop the bitmap.
+    const live = useSceneStore.getState().scene.nodes.find((n) => n.id === node.id);
+    if (!live || !isPixelNode(live) || live.sourcePath !== node.sourcePath) {
+      if (load.ok) (load.bitmap as sources.Closable).close?.();
+      continue;
+    }
+    if (!load.ok) sources.remove(node.id); // never cook the old file's pixels for a path that no longer resolves
+    sources.applySourceLoad(node.id, load);
+    const store = useSceneStore.getState();
+    history.withoutCapture(() => {
+      // The missing flag alone doesn't repaint the canvas; a dirty mark does.
+      if (!load.ok) store.markDirty(node.id, 'draft');
+      else if (
+        load.bitmap.width !== live.sourceSize[0] ||
+        load.bitmap.height !== live.sourceSize[1]
+      ) {
+        store.setPixelSource(node.id, node.sourcePath, [load.bitmap.width, load.bitmap.height]);
+      } else {
+        store.markDirty(node.id, 'draft');
+      }
+    });
+  }
+  if (scene.background?.type === 'image' && isRelativeSourcePath(scene.background.sourcePath)) {
+    await backgroundSource.reconcile(scene.background, deps, newPath, { force: true });
+  }
+}
+
 /** Save to the current path, or run save-as when there is none (or `as` forces it). */
 export async function saveProject(
   options: { as?: boolean } = {},
   deps: ProjectIoDeps = tauriProjectIoDeps,
 ): Promise<void> {
   const meta = useProjectMetaStore.getState();
+  const previousPath = meta.path;
   let path = options.as ? null : meta.path;
   if (!path) {
     const picked = await saveDialog({
@@ -272,6 +310,11 @@ export async function saveProject(
   try {
     await writeProjectFile(path, useSceneStore.getState().scene, deps);
     meta.setPath(path);
+    // The base folder for relative source paths just changed (first save, or
+    // Save As elsewhere): re-run the re-decode so the missing flags tell the
+    // truth now, not at the next load. Before markSaved, like loadProject, so
+    // the dirty-flag churn it causes doesn't leave the title marked edited.
+    if (path !== previousPath) await recheckRelativeSources(previousPath, path, deps);
     meta.markSaved();
   } catch (err) {
     toast.error("Couldn't save project", {
@@ -333,23 +376,20 @@ export async function loadProject(
   store.loadScene(scene);
   sources.clearAll();
 
+  // `path` is passed explicitly: the project-meta path is only updated at the
+  // end of this function, so reading it here would give the previous project's.
   for (const node of scene.nodes) {
     if (!isPixelNode(node)) continue;
-    try {
-      const bitmap = await deps.decode(await deps.readFile(node.sourcePath));
-      sources.set(node.id, bitmap as ImageBitmap);
-      sources.useSourceMissingStore.getState().clear(node.id);
-    } catch {
-      // sourcePath kept verbatim in the scene — saves back without loss.
-      sources.useSourceMissingStore.getState().setMissing(node.id, true);
-    }
+    // sourcePath kept verbatim in the scene — saves back without loss. A
+    // failed read flags the node missing (with the reason) and never deletes it.
+    sources.applySourceLoad(node.id, await sources.loadSource(node.sourcePath, path, deps));
   }
 
   // Document background image (background-image.md): same re-decode as a
   // pixel source — missing/unreadable flags `missing`, never throws, keeps
   // `sourcePath` verbatim so a save writes it back unchanged.
   backgroundSource.clear(); // like sources.clearAll(): a load always re-decodes
-  await backgroundSource.reconcile(scene.background, deps);
+  await backgroundSource.reconcile(scene.background, deps, path);
 
   for (const node of scene.nodes) {
     useSceneStore.getState().markDirty(node.id, 'draft');
@@ -430,7 +470,7 @@ export async function openProjectDialog(): Promise<void> {
 export async function importImagesDialog(): Promise<void> {
   const selected = await openDialog({
     multiple: true,
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+    filters: IMAGE_FILTERS,
   });
   if (!selected) return;
   const paths = Array.isArray(selected) ? selected : [selected];
@@ -449,7 +489,11 @@ export async function setBackgroundImageFromPath(
   deps: ImportDeps = tauriImportDeps,
 ): Promise<boolean> {
   try {
-    const bitmap = await deps.decode(await deps.readFile(path));
+    // Through the shared resolver (image-source.md); the picker hands over an
+    // absolute path, so this only differs for a path that isn't.
+    const resolved = resolveSourcePath(path, useProjectMetaStore.getState().path);
+    if (resolved.kind !== 'file') throw new Error("This path can't be resolved");
+    const bitmap = await deps.decode(await deps.readFile(resolved.absPath));
     backgroundSource.set(path, bitmap as ImageBitmap);
     useSceneStore.getState().setBackgroundImage(path, [bitmap.width, bitmap.height]);
     return true;
@@ -461,10 +505,34 @@ export async function setBackgroundImageFromPath(
   }
 }
 
+/**
+ * Browse… in the Image section and Layer → Replace Image… (image-source.md):
+ * the same image-type open dialog as Import, seeded with the folder of the
+ * current resolved file when there is one. The pick is an absolute path
+ * (decision 3) and goes through `replacePixelSource` like a typed one. Returns
+ * null when cancelled or when `nodeId` isn't a pixel node.
+ */
+export async function replaceImageDialog(
+  nodeId: string,
+  deps: ImportDeps = tauriImportDeps,
+): Promise<ReplaceSourceResult | null> {
+  const node = useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId);
+  if (!node || !isPixelNode(node)) return null;
+  const resolved = resolveSourcePath(node.sourcePath, useProjectMetaStore.getState().path);
+  const folder =
+    resolved.kind === 'file' && !sources.isSourceMissing(nodeId)
+      ? resolved.absPath.slice(0, resolved.absPath.lastIndexOf('/')) || '/'
+      : undefined;
+  const selected = await openDialog({ filters: IMAGE_FILTERS, defaultPath: folder });
+  if (!selected) return null;
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  return replacePixelSource(nodeId, path, deps);
+}
+
 /** Document-setup "Choose image…": same file picker as Import, single file. */
 export async function chooseBackgroundImageDialog(): Promise<void> {
   const selected = await openDialog({
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+    filters: IMAGE_FILTERS,
   });
   if (!selected) return;
   const path = Array.isArray(selected) ? selected[0] : selected;

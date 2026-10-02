@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 // updates). See bootstrap.ts for the singleton rationale.
 import './stack/bootstrap';
 import { Lock } from 'lucide-react';
+import { ImageInspector } from '@/panels/image/ImageInspector';
 import { AddModifier } from '@/panels/stack/AddModifier';
 import { LayerList } from '@/panels/stack/LayerList';
 import { LOCKED_HINT, stackControlsDisabled } from '@/panels/stack/lockUi';
@@ -14,7 +15,7 @@ import { useDragReorder } from '@/panels/stack/useDragReorder';
 import { TextInspector } from '@/panels/text/TextInspector';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
-import { isTextNode } from '@/scene/types';
+import { isPixelNode, isTextNode } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 
 /**
@@ -105,6 +106,7 @@ export function StackPanel() {
           </div>
         )}
 
+        {isPixelNode(node) && <ImageInspector node={node} />}
         {isTextNode(node) && <TextInspector node={node} />}
 
         <AddModifier nodeId={node.id} ops={ops} disabled={locked} />

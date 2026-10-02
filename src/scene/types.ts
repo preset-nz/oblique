@@ -109,7 +109,7 @@ export interface SceneNode {
 
 export interface PixelNode extends SceneNode {
   type: 'pixel';
-  sourcePath: string; // absolute path; bytes re-decoded on load
+  sourcePath: string; // as typed: absolute (`/…`) or relative to the saved .oblique's folder; resolve via project/resolvePath.ts; bytes re-decoded on load
   sourceSize: [number, number]; // document-space dimensions
 }
 

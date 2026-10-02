@@ -38,6 +38,7 @@ import {
   newProject,
   openProjectDialog,
   parseProject,
+  saveProject,
   serialiseProject,
   setBackgroundImageFromPath,
   useProjectMetaStore,
@@ -825,5 +826,95 @@ describe('openProjectDialog vs importImagesDialog (roadmap: split Open vs Import
     await importImagesDialog();
 
     expect(importFilesSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('relative source paths (image-source.md)', () => {
+  function relativeScene(sourcePath: string, sourceSize: [number, number] = [200, 100]): Scene {
+    const scene = sampleScene();
+    // biome-ignore lint/suspicious/noExplicitAny: PixelNode via SceneNode[] slot
+    const node = scene.nodes[0] as any;
+    node.sourcePath = sourcePath;
+    node.sourceSize = sourceSize;
+    return scene;
+  }
+
+  it('loadProject resolves a relative path against the project folder and keeps it verbatim', async () => {
+    const scene = relativeScene('plates/a.png');
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+    await loadProject(
+      '/x/proj.oblique',
+      makeDeps({ readTextFile: vi.fn(async () => serialiseProject(scene)), readFile }),
+    );
+    expect(readFile).toHaveBeenCalledWith('/x/plates/a.png');
+    expect(sources.isSourceMissing('n1')).toBe(false);
+    expect(
+      JSON.parse(serialiseProject(useSceneStore.getState().scene)).scene.nodes[0].sourcePath,
+    ).toBe('plates/a.png');
+  });
+
+  it('loadProject flags a hand-edited strata:// path missing without reading anything', async () => {
+    const scene = relativeScene('strata://asset/1');
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+    await loadProject(
+      '/x/proj.oblique',
+      makeDeps({ readTextFile: vi.fn(async () => serialiseProject(scene)), readFile }),
+    );
+    expect(sources.isSourceMissing('n1')).toBe(true);
+    expect(sources.missingReason('n1')).toBe('unsupported-scheme');
+    expect(readFile).not.toHaveBeenCalledWith('strata://asset/1');
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1); // never deleted
+  });
+
+  it('a first Save re-checks relative paths: flagged missing before, resolved after, fitted outside history', async () => {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/x/proj.oblique');
+    useSceneStore.getState().loadScene(relativeScene('plates/a.png', [200, 100]));
+    sources.useSourceMissingStore.getState().setMissing('n1', true, 'relative-unsaved');
+    history.clear();
+
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+    const decode = vi.fn(async () => ({ width: 400, height: 100, close: vi.fn() }));
+    await saveProject({}, makeDeps({ readFile, decode }));
+
+    expect(readFile).toHaveBeenCalledWith('/x/plates/a.png');
+    expect(sources.isSourceMissing('n1')).toBe(false);
+    const node = useSceneStore.getState().scene.nodes[0] as unknown as {
+      sourcePath: string;
+      sourceSize: [number, number];
+    };
+    expect(node.sourcePath).toBe('plates/a.png');
+    expect(node.sourceSize).toEqual([400, 100]); // the file's own size, not the placeholder's
+    expect(history.canUndo()).toBe(false);
+    expect(useProjectMetaStore.getState().path).toBe('/x/proj.oblique');
+  });
+
+  it('Save As to another folder re-checks: a relative path that no longer resolves is flagged', async () => {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/y/copy.oblique');
+    useSceneStore.getState().loadScene(relativeScene('plates/a.png'));
+    useProjectMetaStore.setState({ path: '/x/proj.oblique' });
+    const held = fakeBitmap();
+    sources.set('n1', held);
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === '/y/plates/a.png') throw new Error('ENOENT');
+      return new Uint8Array([1]);
+    });
+    await saveProject({ as: true }, makeDeps({ readFile }));
+
+    expect(readFile).toHaveBeenCalledWith('/y/plates/a.png');
+    expect(sources.isSourceMissing('n1')).toBe(true);
+    expect(sources.missingReason('n1')).toBe('not-found');
+  });
+
+  it('absolute paths are not re-read on Save As', async () => {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/y/copy.oblique');
+    useSceneStore.getState().loadScene(sampleScene()); // /pics/a.png
+    useProjectMetaStore.setState({ path: '/x/proj.oblique' });
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+    await saveProject({ as: true }, makeDeps({ readFile }));
+    expect(readFile).not.toHaveBeenCalled();
   });
 });
