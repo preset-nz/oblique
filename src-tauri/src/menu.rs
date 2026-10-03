@@ -156,16 +156,15 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // NSResponder's text-field undo manager, not our scene-history store)
     // alongside the OS text-editing predefined items.
     let edit_undo = MenuItem::with_id(app, "edit-undo", "Undo", true, Some("CmdOrCtrl+Z"))?;
-    let edit_redo = MenuItem::with_id(
-        app,
-        "edit-redo",
-        "Redo",
-        true,
-        Some("Shift+CmdOrCtrl+Z"),
-    )?;
+    let edit_redo = MenuItem::with_id(app, "edit-redo", "Redo", true, Some("Shift+CmdOrCtrl+Z"))?;
 
-    let edit_duplicate =
-        MenuItem::with_id(app, "edit-duplicate", "Duplicate", true, Some("CmdOrCtrl+D"))?;
+    let edit_duplicate = MenuItem::with_id(
+        app,
+        "edit-duplicate",
+        "Duplicate",
+        true,
+        Some("CmdOrCtrl+D"),
+    )?;
 
     let edit_submenu = Submenu::with_items(
         app,
