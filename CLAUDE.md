@@ -1,6 +1,6 @@
 # Oblique — Claude instructions
 
-Local-first image editor built around a modifier stack. Tauri 2 + React 19 + TypeScript + Tailwind v4 + shadcn/ui + Zustand; Python sidecar (uv, NumPy + Pillow) for image ops.
+Local-first image editor built around a modifier stack. Tauri 2 + React 19 + TypeScript + Tailwind v4 + @preset.nz/ux-kit (Base UI, Phosphor) + Zustand; Python sidecar (uv, NumPy + Pillow) for image ops.
 
 ## Where the truth lives
 
