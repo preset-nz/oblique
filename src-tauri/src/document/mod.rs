@@ -19,8 +19,11 @@ use rhizome_pom::{payload, Commands, Error, Kinds, ObjectModel, Pom};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
 
+mod host;
 #[cfg(test)]
 mod tests;
+
+pub use host::DocumentHost;
 
 pub const EXTENSION: &str = "oblique";
 
@@ -34,7 +37,8 @@ const BLEND: &[&str] = &[
     "difference",
 ];
 
-/// The keys a layer's transform and props live under. Writes to a locked layer are refused.
+/// The keys a layer's transform and props live under. A locked layer refuses `transform2d.*`;
+/// the compositing props stay writable.
 const TRANSFORM_AND_PROPS: &[&str] = &[
     "transform2d.position",
     "transform2d.scale",
@@ -44,6 +48,21 @@ const TRANSFORM_AND_PROPS: &[&str] = &[
     "blendMode",
     "opacity",
     "output",
+];
+
+/// POM built-in commands that write the tree and that Oblique has not moved yet.
+const NOT_MOVED: &[&str] = &[
+    "value.set",
+    "node.add",
+    "edit.delete",
+    "edit.duplicate",
+    "edit.paste",
+    "preset.apply",
+    "preset.save",
+    "preset.update",
+    "preset.rename",
+    "preset.delete",
+    "preset.import",
 ];
 
 const TEXT_KEYS: &[&str] = &[
@@ -100,9 +119,15 @@ fn param_spec(p: &OpParam) -> Option<ValueSpec> {
     let f = |d: &Json| d.as_f64().unwrap_or(0.0);
     Some(match p.kind.as_str() {
         // an op's max is the slider's end; a typed value may go past it (rhizome decision 53)
+        // a missing end is no limit on that side; a given min always holds
         "float" => match (p.min, p.max) {
-            (Some(lo), Some(hi)) => ValueSpec::float(&*key, lo..=hi, f(&p.default)).soft_max(),
-            _ => ValueSpec::float_unbounded(&*key, f(&p.default)),
+            (None, None) => ValueSpec::float_unbounded(&*key, f(&p.default)),
+            (lo, hi) => ValueSpec::float(
+                &*key,
+                lo.unwrap_or(-f64::MAX)..=hi.unwrap_or(f64::MAX),
+                f(&p.default),
+            )
+            .soft_max(),
         },
         "int" => {
             let lo = p.min.unwrap_or(i64::MIN as f64) as i64;
@@ -298,7 +323,7 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
-        // Transform and layer props; a locked layer refuses (lock-state-machine.md). Same
+        // Transform and layer props; a locked layer refuses its transform only (lock-state-machine.md). Same
         // shape as POM's built-in `values.set`, which this replaces.
         c.add(
             "values.set",
@@ -316,7 +341,11 @@ impl ObjectModel for Oblique {
                             return Err(structural(format!("`{}` isn't on rhizome yet", ch.key)));
                         }
                         let at = live(tx, &ch.at)?;
-                        refuse_locked(tx, at)?;
+                        // compositing-only props stay writable on a locked layer
+                        // (lock-state-machine.md); only the transform is guarded
+                        if ch.key.starts_with("transform2d.") {
+                            refuse_locked(tx, at)?;
+                        }
                         set(tx, at, &ch.key, &ch.value)?;
                     }
                     Ok(())
@@ -358,6 +387,17 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // POM's other built-ins that write the tree would bypass the rules above, so they
+        // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
+        // commands, copy and export stay as POM has them.
+        for id in NOT_MOVED {
+            c.add(
+                id,
+                |_| "Not on rhizome yet".into(),
+                |_, _| true,
+                move |_, _| Err(structural(format!("`{id}` isn't on rhizome yet")).into()),
+            );
+        }
         c.add(
             "document.set_size",
             |_| "Document Size".into(),
@@ -541,6 +581,8 @@ pub fn document_init<R: tauri::Runtime>(
     }
     let pom =
         Pom::<Oblique>::files_in(Arc::new(Catalogue(ops))).map_err(|e: Error| e.to_string())?;
-    app.manage(rhizome_pom_tauri::PomHost::new(Arc::new(pom)));
+    let (document, transport) = DocumentHost::new(pom);
+    app.manage(transport);
+    app.manage(document);
     Ok(())
 }

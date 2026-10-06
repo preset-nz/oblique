@@ -62,8 +62,10 @@ module.exports = {
         'surfaces (e.g. @tauri-apps/api/webview for drag-drop) remain usable elsewhere; the ' +
         'architecture note this gate encodes is specifically "Tauri IPC for frames". ' +
         '2026-10-01, Epic 20: `fonts/fontsIpc.ts` is the one other sanctioned `invoke` caller ' +
-        '(font catalogue + outlines); it is not frame IPC.',
-      from: { pathNot: '^src/(sidecar/tauriTransport|fonts/fontsIpc)\\.ts$' },
+        '(font catalogue + outlines); it is not frame IPC. ' +
+        '2026-10-07, Epic 21: `rhizome/transport.ts` is the third (the document host: ' +
+        'pom_* commands and the commit/status events); it is not frame IPC either.',
+      from: { pathNot: '^src/(sidecar/tauriTransport|fonts/fontsIpc|rhizome/transport)\\.ts$' },
       to: { path: 'node_modules/@tauri-apps/api/(core|event)' },
     },
     {

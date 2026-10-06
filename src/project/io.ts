@@ -1,19 +1,12 @@
 import { notify } from '@preset.nz/ux-kit';
 import { confirm, open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import {
-  mkdir,
-  readDir,
-  readTextFile,
-  remove,
-  rename,
-  writeFile,
-  writeTextFile,
-} from '@tauri-apps/plugin-fs';
+import { mkdir, readDir, remove, writeFile } from '@tauri-apps/plugin-fs';
 import { PRODUCT_NAME } from '@/branding';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
+import { isRefused } from '@/rhizome/refusal';
+import { type Rhizome, rhizome } from '@/rhizome/rhizome';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
-import * as history from '@/scene/history';
 import * as prefixStore from '@/scene/prefixStore';
 import { type ReplaceSourceResult, replacePixelSource } from '@/scene/replaceSource';
 import * as sources from '@/scene/sources';
@@ -24,91 +17,24 @@ import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './imp
 import { useProjectMetaStore } from './projectMeta';
 import { isRelativeSourcePath, resolveSourcePath } from './resolvePath';
 
-// On-disk format identifiers, deliberately not `PRODUCT_NAME`: the marker and
-// the `.oblique` extension must survive a product rename or existing files
-// stop opening. Only displayed strings route through branding.
-export const PROJECT_FORMAT = 'oblique-project';
-// v2 (baked-persistence.md, 2026-07-06): scene shape is unchanged — v2 only
-// *means* "a `<name>.oblique.baked/` sidecar dir may exist beside this file".
-// Saves always write 2; loads accept 1 and 2.
-export const PROJECT_VERSION = 2;
-const MIN_SUPPORTED_VERSION = 1;
-const MAX_SUPPORTED_VERSION = 2;
-
 export { useProjectMetaStore };
 
 /** The image-type open-dialog filter shared by Import, Choose image… and Replace Image…. */
 const IMAGE_FILTERS = [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }];
 
-/** Serialise the scene to the on-disk project JSON (format doc: project-persistence.md). */
-export function serialiseProject(scene: Scene): string {
-  return JSON.stringify(
-    { format: PROJECT_FORMAT, version: PROJECT_VERSION, saved: new Date().toISOString(), scene },
-    null,
-    2,
-  );
+/**
+ * Projects are rhizome documents (Epic 21 story 1): Open, New and Save go through the
+ * document host (`rhizome/`), which owns the file format, the `.oblique` extension and the
+ * unsaved state. What stays here is what rhizome knows nothing about: the baked bitmaps beside
+ * the file, the decoded sources and the caches.
+ */
+function host(): Rhizome {
+  const r = rhizome();
+  if (!r) throw new Error("The document host isn't running");
+  return r;
 }
 
-/**
- * Parse + validate project JSON. Throws with a user-showable message; never
- * half-loads. `sourcePath` is optional and used only to name the file in the
- * legacy-`masks` warning below (callers without a path, e.g. tests, just get
- * an unnamed warning).
- */
-export function parseProject(text: string, sourcePath?: string): Scene {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(text);
-  } catch {
-    throw new Error('not valid JSON');
-  }
-  const record = doc as Record<string, unknown>;
-  if (record?.format !== PROJECT_FORMAT) {
-    throw new Error(`not an ${PRODUCT_NAME} project file`);
-  }
-  const version = record.version;
-  if (
-    typeof version !== 'number' ||
-    version < MIN_SUPPORTED_VERSION ||
-    version > MAX_SUPPORTED_VERSION
-  ) {
-    throw new Error(
-      `unsupported project version ${String(version)} (expected ${MIN_SUPPORTED_VERSION}-${MAX_SUPPORTED_VERSION})`,
-    );
-  }
-  if (typeof record.scene !== 'object' || record.scene === null) {
-    throw new Error('project file has no scene');
-  }
-  const scene = record.scene as Record<string, unknown> & Scene;
-  // Baked masks (MaskDef via Scene.masks) are retired (retire-baked-masks.md,
-  // 2026-09-10) — no migration, just warn and drop so the Scene stays typed.
-  if ('masks' in scene) {
-    const masks = scene.masks as Record<string, unknown> | undefined;
-    const count = masks ? Object.keys(masks).length : 0;
-    console.warn(
-      `[project] ${sourcePath ?? 'project file'}: dropping ${count} legacy baked mask(s) (masks are retired)`,
-    );
-    delete scene.masks;
-  }
-  migrateLegacyTextKerning(scene);
-  return scene;
-}
-
-/**
- * Epic 20 story 4b: `TextNode.kerning` went from a boolean to a percentage
- * (0–200, 100 = the font's own pairs). A saved `true` loads as 100 and `false`
- * as 0; a missing or otherwise non-numeric value is the default, 100. Mutates
- * the freshly parsed scene in place, before `loadScene`.
- */
-function migrateLegacyTextKerning(scene: Scene): void {
-  if (!Array.isArray(scene.nodes)) return;
-  for (const node of scene.nodes) {
-    if (node?.type !== 'text') continue;
-    const text = node as unknown as { kerning?: unknown };
-    if (typeof text.kerning === 'boolean') text.kerning = text.kerning ? 100 : 0;
-    else if (typeof text.kerning !== 'number' || !Number.isFinite(text.kerning)) text.kerning = 100;
-  }
-}
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** A single entry from a directory listing — the subset baked-dir sweeping needs. */
 export interface DirEntry {
@@ -123,9 +49,6 @@ export interface DirEntry {
  * same injectable-deps pattern as everything else here.
  */
 export interface ProjectIoDeps {
-  readTextFile: (path: string) => Promise<string>;
-  writeTextFile: (path: string, contents: string) => Promise<void>;
-  rename: (oldPath: string, newPath: string) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array>;
   decode: (bytes: Uint8Array) => Promise<{ width: number; height: number } & sources.Closable>;
   mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
@@ -145,9 +68,6 @@ async function encodeBitmapPng(bitmap: ImageBitmap): Promise<Uint8Array> {
 }
 
 export const tauriProjectIoDeps: ProjectIoDeps = {
-  readTextFile,
-  writeTextFile,
-  rename,
   readFile: tauriImportDeps.readFile,
   decode: tauriImportDeps.decode,
   mkdir: (path, options) => mkdir(path, options),
@@ -183,7 +103,11 @@ async function removeIfExists(
  * node id is still locked, and the next save after rehydration completes
  * writes the fresh bitmap.
  */
-async function writeBakedSidecar(path: string, scene: Scene, deps: ProjectIoDeps): Promise<void> {
+export async function writeBakedSidecar(
+  path: string,
+  scene: Scene,
+  deps: ProjectIoDeps,
+): Promise<void> {
   const dir = bakedDirFor(path);
   const lockedIds = new Set(scene.nodes.filter((n) => n.state === 'locked').map((n) => n.id));
 
@@ -228,30 +152,12 @@ async function writeBakedSidecar(path: string, scene: Scene, deps: ProjectIoDeps
 }
 
 /**
- * Atomic write: temp file in the same directory, then rename over the
- * target — a crash mid-write can never destroy the previous save.
- */
-export async function writeProjectFile(
-  path: string,
-  scene: Scene,
-  deps: ProjectIoDeps,
-): Promise<void> {
-  const tmp = `${path}.tmp-${Date.now()}`;
-  await deps.writeTextFile(tmp, serialiseProject(scene));
-  await deps.rename(tmp, path);
-  await writeBakedSidecar(path, scene, deps);
-}
-
-/**
  * Relative source paths (image-source.md) resolve against the saved project's
  * folder, so a first Save or a Save As to another folder changes what they
  * point at. Re-run the re-decode for every pixel node whose resolved file
  * differs between the old and new project path (and the background, which
  * shares the resolver), so the missing flags are true straight away. Absolute
- * paths never change. A node that comes good with a different pixel size than
- * its `sourceSize` (typed while unresolvable, so the old footprint was kept) is
- * fitted like a replace, outside the undo history — this is bookkeeping the
- * save causes, not a user edit.
+ * paths never change.
  */
 export async function recheckRelativeSources(
   previousPath: string | null,
@@ -274,140 +180,101 @@ export async function recheckRelativeSources(
     if (!load.ok) sources.remove(node.id); // never cook the old file's pixels for a path that no longer resolves
     sources.applySourceLoad(node.id, load);
     const store = useSceneStore.getState();
-    history.withoutCapture(() => {
-      // The missing flag alone doesn't repaint the canvas; a dirty mark does.
-      if (!load.ok) store.markDirty(node.id, 'draft');
-      else if (
-        load.bitmap.width !== live.sourceSize[0] ||
-        load.bitmap.height !== live.sourceSize[1]
-      ) {
-        store.setPixelSource(node.id, node.sourcePath, [load.bitmap.width, load.bitmap.height]);
-      } else {
-        store.markDirty(node.id, 'draft');
-      }
-    });
+    // The missing flag alone doesn't repaint the canvas; a dirty mark does. A node that comes
+    // good at a different size than its `sourceSize` used to be fitted here (a write); that
+    // write isn't on rhizome yet, so the node keeps its footprint. deferred: Epic 21 story 2
+    store.markDirty(node.id, 'draft');
   }
   if (scene.background?.type === 'image' && isRelativeSourcePath(scene.background.sourcePath)) {
     await backgroundSource.reconcile(scene.background, deps, newPath, { force: true });
   }
 }
 
-/** Save to the current path, or run save-as when there is none (or `as` forces it). */
+/**
+ * Save to the current path, or run save-as when there is none (or `as` forces it). The
+ * document goes through rhizome; the baked bitmaps for locked layers are written beside the
+ * file it names (baked-persistence.md).
+ */
 export async function saveProject(
   options: { as?: boolean } = {},
   deps: ProjectIoDeps = tauriProjectIoDeps,
 ): Promise<void> {
-  const meta = useProjectMetaStore.getState();
-  const previousPath = meta.path;
-  let path = options.as ? null : meta.path;
-  if (!path) {
-    const picked = await saveDialog({
+  const previousPath = useProjectMetaStore.getState().path;
+  let picked: string | null = null;
+  if (options.as || !previousPath) {
+    picked = await saveDialog({
       filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
     });
     if (!picked) return;
-    path = picked;
   }
   try {
-    await writeProjectFile(path, useSceneStore.getState().scene, deps);
-    meta.setPath(path);
-    // The base folder for relative source paths just changed (first save, or
-    // Save As elsewhere): re-run the re-decode so the missing flags tell the
-    // truth now, not at the next load. Before markSaved, like loadProject, so
-    // the dirty-flag churn it causes doesn't leave the title marked edited.
+    const r = host();
+    const status = picked === null ? await r.save() : await r.saveAs(picked);
+    // rhizome adds the extension when the name has none: the file is where it says it is
+    const path = status.path ?? picked ?? previousPath;
+    if (!path) throw new Error('The document has no file');
+    await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
+    // The base folder for relative source paths just changed (first save, or Save As
+    // elsewhere): re-run the re-decode so the missing flags tell the truth now, not at the
+    // next load.
     if (path !== previousPath) await recheckRelativeSources(previousPath, path, deps);
-    meta.markSaved();
   } catch (err) {
     notify({
       message: "Couldn't save project",
       kind: 'error',
-      description: err instanceof Error ? err.message : String(err),
+      description: messageOf(err),
     });
   }
 }
 
 /**
- * Load a `.oblique` file: validate, swap the scene in verbatim, re-decode
- * every pixel source (missing file -> `sourceMissing` flag, never node
- * deletion — pixel-node-import.md re-hydration contract), then mark all
- * nodes draft-dirty so the scheduler rebuilds every cache.
+ * Open a `.oblique` file: rhizome reads it (anything that isn't its format is refused with
+ * its own error, and nothing changes), then the store is rebuilt from the document, every
+ * pixel source is re-decoded (missing file -> `sourceMissing` flag, never node deletion —
+ * pixel-node-import.md re-hydration contract), and every node is marked draft-dirty so the
+ * scheduler rebuilds every cache.
  */
 export async function loadProject(
   path: string,
   deps: ProjectIoDeps = tauriProjectIoDeps,
 ): Promise<void> {
-  let scene: Scene;
+  let issues: { path: string; message: string }[];
   try {
-    scene = parseProject(await deps.readTextFile(path), path);
+    issues = await host().replaceDocument({ kind: 'open', path }, async (target) => {
+      // The old project's cache entries go before this one's baked-bitmap rehydration
+      // populates fresh ones — leaving them leaks full-res ImageBitmaps across every Open.
+      // Done only now, with the file read and accepted: a refused file changes nothing.
+      cache.clearAll();
+      prefixStore.clearAll();
+      sources.clearAll();
+      backgroundSource.clear(); // like sources: a load always re-decodes
+      await rehydrateBaked(path, target, deps);
+    });
   } catch (err) {
     notify({
       message: `Couldn't open ${filenameOf(path)}`,
       kind: 'error',
-      description: err instanceof Error ? err.message : String(err),
+      description: messageOf(err),
     });
     return;
   }
 
-  // Drop the previous project's cache entries before this project's own
-  // baked-bitmap rehydration populates fresh ones below — node ids are
-  // unique per project, so a stale entry could never be *read* wrong, but
-  // leaving it around leaks full-res ImageBitmaps (including baked ones)
-  // across every Open. Same mechanism `newProject` already uses.
-  cache.clearAll();
-  prefixStore.clearAll();
-
-  // Baked-bitmap rehydration (baked-persistence.md) runs BEFORE the scene
-  // lands in the store: the scheduler subscribes to scene changes and its
-  // rehydrate check (cook/scheduler.ts) fires synchronously on that
-  // subscription. Populating the `baked` cache slot first means a normal
-  // reopen finds every locked node's slot already full and issues zero
-  // cook requests; only a missing/corrupt PNG leaves the slot empty for the
-  // scheduler's one-shot rehydrate cook to recover (the single recovery
-  // path — never a second mechanism here).
-  for (const node of scene.nodes) {
-    if (node.state !== 'locked') continue;
-    try {
-      const bytes = await deps.readFile(`${bakedDirFor(path)}/${node.id}.png`);
-      const bitmap = await deps.decode(bytes);
-      cache.set(node.id, 'baked', bitmap as ImageBitmap);
-    } catch (err) {
-      // Non-fatal by design: missing sidecar (pre-v2 file, hand-deleted PNG)
-      // or a corrupt one both fall through to the scheduler's rehydrate path.
-      console.warn(`[project] baked bitmap for ${node.id} missing/corrupt, will recook`, err);
-    }
-  }
-
-  const store = useSceneStore.getState();
-  store.loadScene(scene);
-  sources.clearAll();
-
-  // `path` is passed explicitly: the project-meta path is only updated at the
-  // end of this function, so reading it here would give the previous project's.
-  for (const node of scene.nodes) {
-    if (!isPixelNode(node)) continue;
-    // sourcePath kept verbatim in the scene — saves back without loss. A
-    // failed read flags the node missing (with the reason) and never deletes it.
-    sources.applySourceLoad(node.id, await sources.loadSource(node.sourcePath, path, deps));
-  }
-
-  // Document background image (background-image.md): same re-decode as a
-  // pixel source — missing/unreadable flags `missing`, never throws, keeps
-  // `sourcePath` verbatim so a save writes it back unchanged.
-  backgroundSource.clear(); // like sources.clearAll(): a load always re-decodes
-  await backgroundSource.reconcile(scene.background, deps, path);
-
-  for (const node of scene.nodes) {
+  // Reopening the file that is open keeps its node ids, which restoreScene reads as
+  // unchanged; the caches were just cleared, so say so.
+  for (const node of useSceneStore.getState().scene.nodes) {
     useSceneStore.getState().markDirty(node.id, 'draft');
   }
 
-  const meta = useProjectMetaStore.getState();
-  meta.setPath(path);
-  meta.markSaved();
-
-  // History is per-session, never persisted (epic 13 scope) — a fresh load
-  // clears both stacks so Cmd+Z can't reach back into a different document.
-  // Cleared at the end (not the start) so it wins over anything this
-  // function's own mutations pushed on the way in.
-  history.clear();
+  if (issues.length > 0) {
+    notify({
+      kind: 'warning',
+      message: `${filenameOf(path)} opened with ${issues.length} ${issues.length === 1 ? 'issue' : 'issues'}`,
+      description: issues
+        .slice(0, 3)
+        .map((i) => i.message)
+        .join('\n'),
+    });
+  }
 
   // Missing fonts (missing-fonts.md): one warning per open, shown now if the
   // catalogue is ready, otherwise as soon as it is.
@@ -415,10 +282,32 @@ export async function loadProject(
 }
 
 /**
+ * Baked-bitmap rehydration (baked-persistence.md) runs BEFORE the scene lands in the store:
+ * the scheduler subscribes to scene changes and its rehydrate check (cook/scheduler.ts)
+ * fires synchronously on that subscription. Populating the `baked` cache slot first means a
+ * normal reopen finds every locked node's slot already full and issues zero cook requests;
+ * only a missing/corrupt PNG leaves the slot empty for the scheduler's one-shot rehydrate
+ * cook to recover (the single recovery path — never a second mechanism here).
+ */
+async function rehydrateBaked(path: string, target: Scene, deps: ProjectIoDeps): Promise<void> {
+  for (const node of target.nodes) {
+    if (node.state !== 'locked') continue;
+    try {
+      const bytes = await deps.readFile(`${bakedDirFor(path)}/${node.id}.png`);
+      const bitmap = await deps.decode(bytes);
+      cache.set(node.id, 'baked', bitmap as ImageBitmap);
+    } catch (err) {
+      // Non-fatal by design: a missing sidecar or a corrupt one both fall through to the
+      // scheduler's rehydrate path.
+      console.warn(`[project] baked bitmap for ${node.id} missing/corrupt, will recook`, err);
+    }
+  }
+}
+
+/**
  * File → New (native-menu.md gap, 2026-07-04): respects the unsaved-changes
  * guard (same confirm-dialog pattern as `closeGuard.ts`'s close prompt),
- * then resets the scene to empty. Mirrors `loadProject`'s teardown of
- * caches/sources/history, but to the empty state rather than a loaded one.
+ * then replaces the document with a new one (rhizome's `seed`: empty, size 0×0).
  *
  * `confirmDiscard` is injected for tests (same pattern as `ProjectIoDeps`);
  * production wires the real Tauri `confirm` dialog.
@@ -434,21 +323,28 @@ export async function newProject(
     if (!discard) return;
   }
 
-  useSceneStore.getState().resetScene();
-  cache.clearAll();
-  prefixStore.clearAll();
-  sources.clearAll();
-  backgroundSource.clear();
-
-  const meta = useProjectMetaStore.getState();
-  meta.setPath(null);
-  meta.markSaved();
-
-  // Same end-of-function ordering as loadProject: clear history last so it
-  // wins over the undo-stack push this function's own resetScene mutation
-  // would otherwise have caused (per-session only, never persisted).
-  history.clear();
+  try {
+    await host().replaceDocument({ kind: 'new' }, async () => {
+      cache.clearAll();
+      prefixStore.clearAll();
+      sources.clearAll();
+      backgroundSource.clear();
+    });
+  } catch (err) {
+    notify({ message: "Couldn't start a new project", kind: 'error', description: messageOf(err) });
+    return;
+  }
   useMissingFontsStore.getState().documentCleared();
+}
+
+/**
+ * What to open when macOS launches the app with a file, and when it asks for another while
+ * it runs (`takeLaunchPath`, `pom://open-document`): the same path as Cmd+O.
+ */
+export async function attachDocumentOpening(r: Rhizome): Promise<void> {
+  const launched = r.takeLaunchPath();
+  if (launched) void loadProject(launched);
+  await r.onOpenDocument((path) => void loadProject(path));
 }
 
 /**
@@ -492,6 +388,12 @@ export async function setBackgroundImageFromPath(
   path: string,
   deps: ImportDeps = tauriImportDeps,
 ): Promise<boolean> {
+  if (isRefused('setBackgroundImage')) {
+    // Before decoding or holding anything: the store's refusing action toasts and does
+    // nothing, so a bitmap held now would paint a background the scene doesn't have.
+    useSceneStore.getState().setBackgroundImage(path, [0, 0]);
+    return false;
+  }
   try {
     // Through the shared resolver (image-source.md); the picker hands over an
     // absolute path, so this only differs for a path that isn't.
@@ -544,10 +446,3 @@ export async function chooseBackgroundImageDialog(): Promise<void> {
   const path = Array.isArray(selected) ? selected[0] : selected;
   await setBackgroundImageFromPath(path);
 }
-
-// Any scene mutation after the last save marks the project dirty. loadScene
-// and save both call markSaved afterwards, which wins because they run
-// after their own store mutations have fired this subscription.
-useSceneStore.subscribe((state, prev) => {
-  if (state.scene !== prev.scene) useProjectMetaStore.getState().markMutated();
-});

@@ -1,6 +1,7 @@
 import type { ImportDeps } from '@/project/import';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import { resolveSourcePath } from '@/project/resolvePath';
+import { isRefused } from '@/rhizome/refusal';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { isPixelNode } from '@/scene/types';
@@ -22,7 +23,7 @@ import { isPixelNode } from '@/scene/types';
 export type ReplaceSourceResult =
   | { ok: true; missing: boolean }
   /** `unsupported-scheme`: `strata://…` or any `scheme://` — refused, nothing changed. */
-  | { ok: false; reason: 'unsupported-scheme' | 'locked' | 'no-node' | 'stale' };
+  | { ok: false; reason: 'unsupported-scheme' | 'locked' | 'no-node' | 'stale' | 'refused' };
 
 /**
  * Per-node replace generation. A decode that comes back after the node was
@@ -39,6 +40,13 @@ export async function replacePixelSource(
   const node = useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId);
   if (!node || !isPixelNode(node)) return { ok: false, reason: 'no-node' };
   if (node.state === 'locked') return { ok: false, reason: 'locked' };
+
+  // Not on rhizome yet (Epic 21): the store action below would refuse, but only after the
+  // bitmap was swapped. Call it now for its toast and change nothing.
+  if (isRefused('setPixelSource')) {
+    useSceneStore.getState().setPixelSource(nodeId, typed);
+    return { ok: false, reason: 'refused' };
+  }
 
   const projectPath = useProjectMetaStore.getState().path;
   const resolved = resolveSourcePath(typed, projectPath);

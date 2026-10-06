@@ -3,7 +3,12 @@ import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { defaultFontRef } from '@/fonts/resolveFont';
 import type { FontRef } from '@/fonts/types';
 import { deleteNode } from '@/scene/deleteNode';
-import { beginTransaction, endTransaction } from '@/scene/history';
+import {
+  beginTransaction,
+  cancelTransaction,
+  endTransaction,
+  hasHistoryBackend,
+} from '@/scene/history';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { isTextNode, type Point2D } from '@/scene/types';
@@ -94,11 +99,18 @@ export function commitActiveTextEdit(): void {
 
   const node = useSceneStore.getState().scene.nodes.find((n) => n.id === editing.nodeId);
   if (editing.isNew && node && isTextNode(node) && node.content.trim() === '') {
-    // removeNode + cache eviction (a cook may already have run on the blank node).
-    deleteNode(editing.nodeId);
+    const rhizomeHoldsIt = hasHistoryBackend();
+    // Rhizome holds the document: take the whole gesture (the layer's creation) back below,
+    // so the blank layer goes without a removeNode and leaves no undo step.
+    // Otherwise removeNode + cache eviction (a cook may already have run on the blank node).
+    if (!rhizomeHoldsIt) deleteNode(editing.nodeId);
     const selection = useSelectionStore.getState().selection;
     if (selection.kind === 'node' && selection.nodeId === editing.nodeId) {
       useSelectionStore.getState().clear();
+    }
+    if (rhizomeHoldsIt) {
+      cancelTransaction();
+      return;
     }
   }
   endTransaction();

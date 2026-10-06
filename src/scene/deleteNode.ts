@@ -17,6 +17,9 @@ import { useSceneStore } from '@/scene/store';
  */
 export function deleteNode(nodeId: string): void {
   useSceneStore.getState().removeNode(nodeId);
+  // Evict only what actually went: a refused removeNode (Epic 21, not on rhizome yet) must
+  // leave the layer's caches and bitmap alone, or it blanks while the scene still has it.
+  if (useSceneStore.getState().scene.nodes.some((n) => n.id === nodeId)) return;
   cache.clearNode(nodeId);
   prefixStore.clearNode(nodeId);
   sources.remove(nodeId);

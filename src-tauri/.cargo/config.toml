@@ -1,4 +1,0 @@
-# rhizome is a private git dependency (preset-nz/rhizome); fetch with the system git so the
-# SSH key and agent work.
-[net]
-git-fetch-with-cli = true

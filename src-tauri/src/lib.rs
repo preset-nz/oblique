@@ -43,6 +43,22 @@ pub fn run() {
             menu::install(app.handle())?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // A document macOS asks us to open (`open -a`, the Dock). It reaches the webview
+            // through `pom_connect` at launch or `pom://open-document` while running.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                use tauri::Manager;
+                // The host exists once the sidecar's op catalogue is in (`document_init`).
+                // A path asked for before that has nowhere to wait yet.
+                // deferred: Epic 21 story 2 (or app-kit) holds it until then.
+                if app.try_state::<rhizome_pom_tauri::PomHost>().is_some() {
+                    rhizome_pom_tauri::opened(app, urls);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

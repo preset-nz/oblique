@@ -6,6 +6,8 @@ import { installMenu } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
 import { useFontCatalogueStore } from './fonts/catalogue';
 import { loadFontPreferences } from './fonts/preferences';
+import { attachDocumentOpening } from './project/io';
+import { installRhizome } from './rhizome/rhizome';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
@@ -32,6 +34,9 @@ function App() {
 
   useEffect(() => installShortcuts(), []);
   useEffect(() => installMenu(), []);
+  // The document lives in rhizome inside the Tauri app (Epic 21 story 1); idempotent, a no-op in the web build.
+  // Once it is up, a file macOS launched the app with opens through the same path as Cmd+O.
+  useEffect(() => installRhizome({ onLive: (r) => void attachDocumentOpening(r) }), []);
   // AI backend settings (Epic 17 story 1) — loaded once at startup so the
   // Settings dialog shows the persisted endpoint the first time it opens,
   // per acceptance ("enter an endpoint, restart the app: same value").

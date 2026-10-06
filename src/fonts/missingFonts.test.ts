@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: vi.fn(),
 }));
 
-import { parseProject, serialiseProject } from '@/project/io';
+import { Mirror, rowsFromScene } from '@/rhizome/adapter';
 import { useSceneStore } from '@/scene/store';
 import { specFor } from '@/scene/textGeometryCache';
 import { isTextNode, type Scene, type TextNode } from '@/scene/types';
@@ -131,8 +131,15 @@ describe('saving after a substitution', () => {
     // Rendering uses the stand-in...
     expect(specFor(node).postscriptName).toBe('TimesNewRomanPS-BoldMT');
     // ...but the file names the wanted font.
-    const saved = parseProject(serialiseProject(useSceneStore.getState().scene));
-    const reloaded = saved.nodes.find((n) => n.id === id) as TextNode;
+    // (the document is held as rhizome rows; this is what Open reads back)
+    const mirror = new Mirror();
+    mirror.load({
+      seq: 0,
+      generation: 0,
+      schema: null,
+      rows: [...rowsFromScene(useSceneStore.getState().scene).values()],
+    });
+    const reloaded = mirror.scene()?.nodes.find((n) => n.id === id) as TextNode;
     expect(reloaded.font).toEqual(BLACKLETTER_BOLD);
   });
 });

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { destSizeFor } from '@/compositor/composite';
 import { cn } from '@/lib/utils';
 import { importFiles, tauriImportDeps } from '@/project/import';
+import { currentTransform } from '@/rhizome/rhizome';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
 import { useEyedropperStore } from '@/scene/eyedropperState';
@@ -483,7 +484,7 @@ export function Viewport() {
       const px = e.shiftKey ? 10 : 1;
       setNodeTransform(
         node.id,
-        applyMove(node.transform2d ?? IDENTITY_TRANSFORM_2D, {
+        applyMove(currentTransform(node.id), {
           x: step[0] * px,
           y: step[1] * px,
         }),

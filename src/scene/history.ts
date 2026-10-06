@@ -1,20 +1,10 @@
-import { readFile } from '@tauri-apps/plugin-fs';
-import { useProjectMetaStore } from '@/project/projectMeta';
-import * as backgroundSource from '@/scene/backgroundSource';
-import * as cache from '@/scene/cache';
-import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
-import * as sources from '@/scene/sources';
-import { useSceneStore } from '@/scene/store';
-import {
-  isPixelNode,
-  isTextNode,
-  isVectorNode,
-  type PixelNode,
-  type Scene,
-  type SceneNode,
-  type TextNode,
-} from '@/scene/types';
+import type { Scene } from '@/scene/types';
+import { type HistoryRehydrateDeps, productionRehydrateDeps, restoreScene } from './restore';
 import { sceneChangedIgnoringDirty } from './sceneDiff';
+import { useSceneStore } from './store';
+
+export type { HistoryRehydrateDeps };
+export { productionRehydrateDeps };
 
 /**
  * Undo/history (Epic 13). Snapshot model, not command pattern: the undo/redo
@@ -39,7 +29,32 @@ import { sceneChangedIgnoringDirty } from './sceneDiff';
  *    `beginTransaction`/`endTransaction` so every intermediate `onChange`
  *    during one drag coalesces into a single undo step, per the story's
  *    transaction-boundary rule.
+ *
+ * Epic 21 story 1: when rhizome backs the document (`setHistoryBackend`), this stack is
+ * out of the picture. Transactions become rhizome gestures (begin/end/cancel), nothing is
+ * captured, and `undo`/`redo` are rhizome's. The hooks are injected so `scene/` doesn't
+ * import `rhizome/`.
  */
+
+/** What rhizome supplies in place of the snapshot stacks. */
+export interface HistoryBackend {
+  begin: () => void;
+  end: () => void;
+  cancel: () => void;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
+}
+
+let backend: HistoryBackend | null = null;
+
+/** True while rhizome holds undo: a transaction can then be cancelled, and `cancelTransaction` does something. */
+export const hasHistoryBackend = (): boolean => backend !== null;
+
+/** Hands transactions, undo and redo to rhizome (or takes them back with `null`). */
+export function setHistoryBackend(next: HistoryBackend | null): void {
+  backend = next;
+  if (next) clear(); // whatever the snapshot stacks held before is not rhizome's undo
+}
 
 const CAP = 50;
 
@@ -49,7 +64,7 @@ let redoStack: Scene[] = [];
 let transactionActive = false;
 let transactionBefore: Scene | null = null;
 
-/** True while `restoreScene` is applying an undo/redo — the subscription must not re-capture its own restore as a new undo step. */
+/** True while a restore is applying an undo/redo — the subscription must not re-capture its own restore as a new undo step. */
 let suppressCapture = false;
 
 // Real-edit-vs-cook-churn test lives in scene/sceneDiff.ts (shared with the
@@ -112,6 +127,10 @@ function flushTransaction(): void {
  * it first, so a missed release can never wedge history shut.
  */
 export function beginTransaction(): void {
+  if (backend) {
+    backend.begin();
+    return;
+  }
   if (transactionActive) flushTransaction();
   transactionActive = true;
   transactionBefore = useSceneStore.getState().scene;
@@ -119,11 +138,24 @@ export function beginTransaction(): void {
 
 /** Marks the end of a coalesced undo step. No-op if no transaction is open. */
 export function endTransaction(): void {
+  if (backend) {
+    backend.end();
+    return;
+  }
   if (!transactionActive) return;
   flushTransaction();
 }
 
+/**
+ * Takes back everything done since `beginTransaction`. Only rhizome can: the snapshot stacks
+ * never had it, so without a backend this does nothing.
+ */
+export function cancelTransaction(): void {
+  backend?.cancel();
+}
+
 useSceneStore.subscribe((state, prev) => {
+  if (backend) return; // rhizome's undo is the only one
   if (state.scene === prev.scene) return;
   if (suppressCapture) return; // our own undo/redo restore, not a user action
   if (!sceneChangedIgnoringDirty(prev.scene, state.scene)) return; // cook churn only
@@ -131,223 +163,31 @@ useSceneStore.subscribe((state, prev) => {
   pushUndo(prev.scene);
 });
 
-/**
- * File-system edge injected for tests, same pattern as `project/import.ts`'s
- * `ImportDeps` — kept as a local, minimal shape (rather than importing
- * `project/import.ts`) so `scene/` doesn't depend on `project/`.
- */
-export interface HistoryRehydrateDeps {
-  readFile: (path: string) => Promise<Uint8Array>;
-  decode: (bytes: Uint8Array) => Promise<{ width: number; height: number } & sources.Closable>;
-}
-
-async function realDecode(
-  bytes: Uint8Array,
-): Promise<{ width: number; height: number } & sources.Closable> {
-  const blob = new Blob([bytes as BlobPart]);
-  return createImageBitmap(blob);
-}
-
-export const productionRehydrateDeps: HistoryRehydrateDeps = {
-  readFile: (path) => readFile(path),
-  decode: realDecode,
-};
-
-/**
- * Cook-affecting fields only (dirty rule 4): modifiers (maskId changes ride
- * along via the modifiers JSON), the mask DEFINITIONS those modifiers
- * reference (same maskId, edited geometry/feather — invisible to the
- * modifiers array, so compared explicitly), (pixel nodes)
- * sourcePath/sourceSize, and (vector nodes) paths/fillRule — a vector node's
- * raster comes entirely from those two fields (vectorRasterize.ts), so an
- * undo/redo across a path-editing.md edit must register here or
- * `restoreScene` leaves the node clean while a stale cached bitmap (from
- * before/after the edit it's undoing) keeps painting.
- *
- * A mask reference resolves through `Scene.maskRefs` (cook.ts's
- * `makeRasterizeFor` rule): a `VectorMaskRef` plus the referenced vector
- * node's live paths/fillRule — the referenced GEOMETRY is part of the
- * consumer's cook inputs (vector-modifier-masks.md cross-node dirty), so an
- * undo that only changes the referenced vector node's paths must dirty the
- * consumer too, not just the vector node.
- */
-function resolvedMaskInputIn(maskId: string | undefined, scene: Scene): unknown {
-  return resolvedMaskInput(
-    maskId,
-    (id) => scene.maskRefs?.[id],
-    (id) => scene.nodes.find((n) => n.id === id),
-  );
-}
-
-function hasDocumentPinnedMaskIn(node: SceneNode, scene: Scene): boolean {
-  return hasDocumentPinnedMask(node.modifiers, (id) => scene.maskRefs?.[id]);
-}
-
-function textInputs(n: TextNode): unknown {
-  return {
-    content: n.content,
-    font: n.font,
-    fontSize: n.fontSize,
-    tracking: n.tracking,
-    kerning: n.kerning,
-    lineHeight: n.lineHeight,
-    align: n.align,
-    fill: n.fill,
-    stroke: n.stroke,
-    position: n.position,
-  };
-}
-
-function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB: Scene): boolean {
-  if (JSON.stringify(a.modifiers) !== JSON.stringify(b.modifiers)) return true;
-  const refA = a.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneA));
-  const refB = b.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneB));
-  if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
-  // Document-pinned vector masks rasterise through the consumer's CURRENT
-  // transform2d (store.ts setNodeTransform's rule-4 exception), so for a
-  // node with such a mask the transform IS a cook input — an undo that only
-  // moves it must recook it or the mask paints in the old frame. Node-pinned
-  // refs (mask-follows-node.md) read their own attachTransform instead, so
-  // they don't count.
-  if (
-    (hasDocumentPinnedMaskIn(a, sceneA) || hasDocumentPinnedMaskIn(b, sceneB)) &&
-    JSON.stringify(a.transform2d) !== JSON.stringify(b.transform2d)
-  ) {
-    return true;
-  }
-  const pa = isPixelNode(a) ? { sourcePath: a.sourcePath, sourceSize: a.sourceSize } : undefined;
-  const pb = isPixelNode(b) ? { sourcePath: b.sourcePath, sourceSize: b.sourceSize } : undefined;
-  if (JSON.stringify(pa) !== JSON.stringify(pb)) return true;
-  // A text node's raster comes entirely from these fields (+ the Rust geometry
-  // they key), so an undo across a setTextProps edit must register here.
-  const ta = isTextNode(a) ? textInputs(a) : undefined;
-  const tb = isTextNode(b) ? textInputs(b) : undefined;
-  if (JSON.stringify(ta) !== JSON.stringify(tb)) return true;
-  const va = isVectorNode(a) ? { paths: a.paths, fillRule: a.fillRule } : undefined;
-  const vb = isVectorNode(b) ? { paths: b.paths, fillRule: b.fillRule } : undefined;
-  return JSON.stringify(va) !== JSON.stringify(vb);
-}
-
-/**
- * Restores `target` wholesale (per the epic's design), but recomputes every
- * node's `dirty` flag from an old-vs-restored diff rather than trusting
- * `target`'s own frozen flags (which may be stale — already-cleared by a
- * cook that ran after this snapshot was taken, or still-dirty from a cook
- * that hadn't finished yet):
- *
- * - Node absent from `current` (undo-of-delete / redo-of-add): the source
- *   bitmap was evicted by `deleteNode` — re-decode it from `sourcePath`
- *   (same contract as `project/import.ts`'s project-load re-hydration)
- *   before the scheduler's next cook can find it, then mark dirty.
- * - Node present in both with changed modifiers/sourcePath/sourceSize: mark
- *   dirty (recook).
- * - Node present in both, unchanged cook-affecting fields: leave clean —
- *   pure compositing fields (visible/opacity/blendMode/order) never dirty
- *   per dirty rule 4.
- * - The document background's held bitmap is reconciled with `target.background`
- *   (dropped for none/colour, re-decoded for an image whose path isn't held).
- * - Node present in `current` but absent from `target` (undo-of-add /
- *   redo-of-delete): evict its cache + decoded source so nothing leaks.
- */
-async function restoreScene(
-  current: Scene,
-  target: Scene,
-  deps: HistoryRehydrateDeps,
-): Promise<void> {
-  const currentById = new Map(current.nodes.map((n) => [n.id, n]));
-  const targetById = new Map(target.nodes.map((n) => [n.id, n]));
-
-  for (const id of currentById.keys()) {
-    if (!targetById.has(id)) {
-      cache.clearNode(id);
-      sources.remove(id);
-    }
-  }
-
-  // Re-decode a pixel node's source when it has none held (undo-of-delete) OR
-  // when its path differs from the one on screen: a replace (image-source.md)
-  // leaves the NEW bitmap under the same node id, so undoing/redoing across it
-  // must swap the pixels, not just the path/size.
-  const projectPath = useProjectMetaStore.getState().path;
-  await Promise.all(
-    target.nodes
-      .filter((node): node is PixelNode => {
-        if (!isPixelNode(node)) return false;
-        if (!sources.get(node.id)) return true;
-        const previous = currentById.get(node.id);
-        return !!previous && isPixelNode(previous) && previous.sourcePath !== node.sourcePath;
-      })
-      .map(async (node) => {
-        // sourcePath kept verbatim — paintScene's striped placeholder covers a
-        // failure, same re-hydration contract as project load.
-        const load = await sources.loadSource(node.sourcePath, projectPath, deps);
-        if (!load.ok) sources.remove(node.id); // never cook a stale bitmap for a missing path
-        sources.applySourceLoad(node.id, load);
-      }),
-  );
-
-  // The document background's decoded bitmap lives outside the scene, so an
-  // undo/redo across a background change must reconcile the holder too, or
-  // undoing "set image" keeps painting it and redo shows nothing
-  // (background-image.md). Same decode deps as the pixel sources above.
-  await backgroundSource.reconcile(target.background, deps, projectPath);
-
-  const nodes = target.nodes.map((node) => {
-    const previous = currentById.get(node.id);
-
-    // Lock/unlock reconciliation (lock-state-machine.md) — an ordinary
-    // undoable scene change like any other, but the cache-map side effect
-    // (module-level, outside the snapshot) has to be driven explicitly here:
-    if (previous?.state === 'locked' && node.state !== 'locked') {
-      // locked -> active (undo of a lock, or redo of an unlock): drop the
-      // baked bitmap and resume the normal draft/working cook.
-      cache.clearLevel(node.id, 'baked');
-      return { ...node, dirty: { draft: true, working: true } };
-    }
-    if (node.state === 'locked') {
-      // A locked node NEVER carries a dirty flag (dirty rule: baked is only
-      // cleared by explicit unlock) — even if `previous` disagrees on
-      // modifiers/paths/etc (e.g. redo of a lock after further edits while
-      // active). If its baked cache is missing (unlock cleared it, or this
-      // is the first time this session sees it locked), the scheduler's
-      // rehydrate path — the single recovery mechanism — cooks it, not this
-      // function.
-      return { ...node, dirty: { draft: false, working: false } };
-    }
-
-    const dirty =
-      !previous || cookAffectingChanged(previous, node, current, target)
-        ? { draft: true, working: true }
-        : { draft: false, working: false };
-    return { ...node, dirty };
-  });
-
-  suppressCapture = true;
-  try {
-    useSceneStore.getState().loadScene({ ...target, nodes });
-  } finally {
-    suppressCapture = false;
-  }
+/** Applies a restored scene with capture off: it is not a user action. */
+function restoreApply(scene: Scene): void {
+  withoutCapture(() => useSceneStore.getState().loadScene(scene));
 }
 
 /** Cmd+Z. No-op with an empty undo stack. Flushes any open transaction first. */
 export async function undo(deps: HistoryRehydrateDeps = productionRehydrateDeps): Promise<void> {
+  if (backend) return backend.undo();
   if (transactionActive) flushTransaction();
   const target = undoStack.pop();
   if (!target) return;
   const current = useSceneStore.getState().scene;
   redoStack.push(current);
   if (redoStack.length > CAP) redoStack.shift();
-  await restoreScene(current, target, deps);
+  await restoreScene(current, target, deps, restoreApply);
 }
 
 /** Shift+Cmd+Z. No-op with an empty redo stack. Flushes any open transaction first. */
 export async function redo(deps: HistoryRehydrateDeps = productionRehydrateDeps): Promise<void> {
+  if (backend) return backend.redo();
   if (transactionActive) flushTransaction();
   const target = redoStack.pop();
   if (!target) return;
   const current = useSceneStore.getState().scene;
   undoStack.push(current);
   if (undoStack.length > CAP) undoStack.shift();
-  await restoreScene(current, target, deps);
+  await restoreScene(current, target, deps, restoreApply);
 }
