@@ -85,13 +85,15 @@ export function DocumentSetup() {
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="text-xs text-neutral-400 hover:text-neutral-100 whitespace-nowrap"
-        >
-          {sizeLabel}
-        </button>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="text-xs text-neutral-400 hover:text-neutral-100 whitespace-nowrap"
+          />
+        }
+      >
+        {sizeLabel}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64">
         <div className="flex flex-col gap-3">
@@ -100,9 +102,8 @@ export function DocumentSetup() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-neutral-500">Aspect</span>
             <ToggleGroup
-              type="single"
-              value={presetId ?? undefined}
-              onValueChange={(value) => value && applyPreset(value)}
+              value={presetId ? [presetId] : []}
+              onValueChange={([value]) => value && applyPreset(value)}
             >
               {ASPECT_PRESETS.map((preset) => (
                 <ToggleGroupItem key={preset.id} value={preset.id} aria-label={preset.label}>
@@ -115,10 +116,9 @@ export function DocumentSetup() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-neutral-500">Base (longest side)</span>
             <ToggleGroup
-              type="single"
               className="flex-wrap"
-              value={baseId ?? undefined}
-              onValueChange={(value) => value && applyBase(value)}
+              value={baseId ? [baseId] : []}
+              onValueChange={([value]) => value && applyBase(value)}
             >
               {BASE_PRESETS.map((base) => (
                 <ToggleGroupItem key={base.id} value={base.id} aria-label={base.label}>
@@ -131,9 +131,8 @@ export function DocumentSetup() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-neutral-500">Orientation</span>
             <ToggleGroup
-              type="single"
-              value={orientation}
-              onValueChange={(value) => value && applyOrientation(value as Orientation)}
+              value={[orientation]}
+              onValueChange={([value]) => value && applyOrientation(value as Orientation)}
             >
               <ToggleGroupItem value="landscape" aria-label="Landscape">
                 Landscape
@@ -148,9 +147,8 @@ export function DocumentSetup() {
             <span className="text-xs text-neutral-500">Background</span>
             <div className="flex items-center gap-2">
               <ToggleGroup
-                type="single"
-                value={backgroundKind}
-                onValueChange={(value) => value && applyBackgroundKind(value)}
+                value={[backgroundKind]}
+                onValueChange={([value]) => value && applyBackgroundKind(value)}
               >
                 <ToggleGroupItem value="none" aria-label="No background">
                   None

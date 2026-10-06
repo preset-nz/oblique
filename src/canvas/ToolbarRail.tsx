@@ -77,21 +77,23 @@ export function ToolbarRail() {
         const effectiveLabel = gatedOff ? (disabledHint ?? label) : label;
         return (
           <Tooltip key={t}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={effectiveLabel}
-                aria-pressed={tool === t}
-                disabled={effectiveDisabled}
-                className={`flex h-8 w-8 items-center justify-center rounded ${
-                  tool === t
-                    ? 'bg-neutral-700 text-neutral-50'
-                    : 'text-neutral-400 hover:bg-neutral-800'
-                } disabled:opacity-30 disabled:hover:bg-transparent`}
-                onClick={() => setTool(t)}
-              >
-                <Icon size={16} />
-              </button>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={effectiveLabel}
+                  aria-pressed={tool === t}
+                  disabled={effectiveDisabled}
+                  className={`flex h-8 w-8 items-center justify-center rounded ${
+                    tool === t
+                      ? 'bg-neutral-700 text-neutral-50'
+                      : 'text-neutral-400 hover:bg-neutral-800'
+                  } disabled:opacity-30 disabled:hover:bg-transparent`}
+                  onClick={() => setTool(t)}
+                />
+              }
+            >
+              <Icon size={16} />
             </TooltipTrigger>
             <TooltipContent side="right">{effectiveLabel}</TooltipContent>
           </Tooltip>

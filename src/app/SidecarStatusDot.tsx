@@ -15,14 +15,14 @@ export function SidecarStatusDot() {
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-1.5 text-xs text-neutral-400">
-          <span
-            className={`h-2 w-2 rounded-full ${up ? 'bg-green-500' : 'bg-red-500'}`}
-            aria-hidden="true"
-          />
-          {up ? 'Connected' : 'Disconnected'}
-        </span>
+      <TooltipTrigger
+        render={<span className="inline-flex items-center gap-1.5 text-xs text-neutral-400" />}
+      >
+        <span
+          className={`h-2 w-2 rounded-full ${up ? 'bg-green-500' : 'bg-red-500'}`}
+          aria-hidden="true"
+        />
+        {up ? 'Connected' : 'Disconnected'}
       </TooltipTrigger>
       <TooltipContent>{tooltipText}</TooltipContent>
     </Tooltip>

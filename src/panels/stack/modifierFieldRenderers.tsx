@@ -152,12 +152,11 @@ const ModifierSelectRenderer: FieldRenderer<ModifierSelectFieldDef> = ({
         </span>
       </LabelTip>
       <ToggleGroup
-        type="single"
         size="sm"
         spacing={0}
-        value={current}
+        value={[current]}
         disabled={readOnly}
-        onValueChange={(next) => {
+        onValueChange={([next]) => {
           if (next) onChange?.(next);
         }}
       >

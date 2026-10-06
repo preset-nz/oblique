@@ -152,7 +152,7 @@ export function ReplaceFontDialog() {
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Replace Font</DialogTitle>
           <DialogDescription>

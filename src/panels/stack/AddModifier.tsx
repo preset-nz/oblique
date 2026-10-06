@@ -64,18 +64,22 @@ export function AddModifier({
       }}
     >
       <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              disabled={disabled}
-              aria-label="Add modifier"
-              className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-neutral-700 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-700 disabled:hover:text-neutral-400"
-            >
-              <Plus size={14} />
-              Add modifier
-            </button>
-          </PopoverTrigger>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={disabled}
+                  aria-label="Add modifier"
+                  className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-neutral-700 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-700 disabled:hover:text-neutral-400"
+                />
+              }
+            />
+          }
+        >
+          <Plus size={14} />
+          Add modifier
         </TooltipTrigger>
         <TooltipContent>
           {disabled ? 'Locked — unlock to edit' : 'Add a modifier to the top of the stack'}

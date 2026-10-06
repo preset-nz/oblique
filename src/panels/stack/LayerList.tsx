@@ -139,9 +139,16 @@ function FontMissingBadge({ node }: { node: TextNode }) {
   const hint = missingFontTooltip(node.font, missing.substitute);
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <TriangleAlert size={14} className="shrink-0 text-amber-400" role="img" aria-label={hint} />
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <TriangleAlert
+            size={14}
+            className="shrink-0 text-amber-400"
+            role="img"
+            aria-label={hint}
+          />
+        }
+      />
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
   );
@@ -241,9 +248,11 @@ function LayerRow({
           in the list. */}
       {node.output === 'mask' && (
         <Tooltip>
-          <TooltipTrigger asChild>
-            <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
-          </TooltipTrigger>
+          <TooltipTrigger
+            render={
+              <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
+            }
+          />
           <TooltipContent>Mask — clips the span below it</TooltipContent>
         </Tooltip>
       )}
@@ -259,7 +268,13 @@ function LayerRow({
     // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the inner button
     // biome-ignore lint/a11y/noStaticElementInteractions: same — pointer-only convenience
     <div
-      onClick={onSelect}
+      onClick={(e) => {
+        // Base UI popups portal out of the DOM but not out of the React tree, so a
+        // click on a Select item or Popover content bubbles here; only clicks that
+        // land inside the row select it.
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        onSelect();
+      }}
       data-reorder-index={index}
       className={`flex cursor-pointer items-center gap-2 rounded p-1 ${selected ? 'bg-neutral-800' : ''} ${spanRole === 'member' ? MEMBER_ROW_CLASS : ''} ${dragging ? 'opacity-40' : ''}`}
     >
@@ -267,15 +282,17 @@ function LayerRow({
           the controls inside the row behave as before. Live on locked nodes —
           layer order is compositing-only. */}
       <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label="Drag to reorder layer"
-            className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing"
-            {...gripProps(index)}
-          >
-            <GripVertical size={14} />
-          </button>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Drag to reorder layer"
+              className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing"
+              {...gripProps(index)}
+            />
+          }
+        >
+          <GripVertical size={14} />
         </TooltipTrigger>
         <TooltipContent>Drag to reorder</TooltipContent>
       </Tooltip>
@@ -335,20 +352,22 @@ function LayerRow({
         <div className="flex items-center gap-2">
           {(isVectorNode(node) || isTextNode(node)) && (
             <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setNodeProp(node.id, {
-                      output: node.output === 'mask' ? 'image' : 'mask',
-                    });
-                  }}
-                  aria-label={node.output === 'mask' ? 'Use as image' : 'Use as mask'}
-                  className={node.output === 'mask' ? 'text-amber-400' : 'text-neutral-500'}
-                >
-                  <VenetianMask size={14} />
-                </button>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setNodeProp(node.id, {
+                        output: node.output === 'mask' ? 'image' : 'mask',
+                      });
+                    }}
+                    aria-label={node.output === 'mask' ? 'Use as image' : 'Use as mask'}
+                    className={node.output === 'mask' ? 'text-amber-400' : 'text-neutral-500'}
+                  />
+                }
+              >
+                <VenetianMask size={14} />
               </TooltipTrigger>
               <TooltipContent>
                 {node.output === 'mask' ? 'Use as image' : 'Use as mask'}
@@ -356,40 +375,44 @@ function LayerRow({
             </Tooltip>
           )}
           <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setNodeProp(node.id, { visible: !node.visible });
-                }}
-                aria-label={node.visible ? 'Hide layer' : 'Show layer'}
-              >
-                {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-              </button>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setNodeProp(node.id, { visible: !node.visible });
+                  }}
+                  aria-label={node.visible ? 'Hide layer' : 'Show layer'}
+                />
+              }
+            >
+              {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
             </TooltipTrigger>
             <TooltipContent>{node.visible ? 'Hide layer' : 'Show layer'}</TooltipContent>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                disabled={padlockState === 'baking'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePadlock();
-                }}
-                aria-label={padlockAriaLabel(padlockState)}
-                className={padlockState === 'locked' ? 'text-amber-400' : 'text-neutral-500'}
-              >
-                {padlockState === 'baking' ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : padlockState === 'locked' ? (
-                  <Lock size={14} />
-                ) : (
-                  <LockOpen size={14} />
-                )}
-              </button>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={padlockState === 'baking'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePadlock();
+                  }}
+                  aria-label={padlockAriaLabel(padlockState)}
+                  className={padlockState === 'locked' ? 'text-amber-400' : 'text-neutral-500'}
+                />
+              }
+            >
+              {padlockState === 'baking' ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : padlockState === 'locked' ? (
+                <Lock size={14} />
+              ) : (
+                <LockOpen size={14} />
+              )}
             </TooltipTrigger>
             <TooltipContent>
               {padlockState === 'baking'
@@ -400,18 +423,20 @@ function LayerRow({
             </TooltipContent>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="Delete layer"
-                className="ml-auto text-neutral-500 hover:text-red-400"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteNode(node.id);
-                }}
-              >
-                <Trash2 size={14} />
-              </button>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Delete layer"
+                  className="ml-auto text-neutral-500 hover:text-red-400"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteNode(node.id);
+                  }}
+                />
+              }
+            >
+              <Trash2 size={14} />
             </TooltipTrigger>
             <TooltipContent>Delete layer</TooltipContent>
           </Tooltip>
@@ -421,12 +446,14 @@ function LayerRow({
           min={0}
           max={100}
           step={1}
-          onValueChange={(value) => setNodeProp(node.id, { opacity: value[0] / 100 })}
-          // Undo/history transaction boundary (Epic 13): Radix's onValueChange
-          // fires continuously while dragged; onPointerDown/onValueCommit are
-          // this control's start/release, coalescing one drag into one step.
+          onValueChange={(value) =>
+            setNodeProp(node.id, { opacity: (typeof value === 'number' ? value : value[0]) / 100 })
+          }
+          // Undo/history transaction boundary (Epic 13): onValueChange
+          // fires continuously while dragged; onPointerDown/onValueCommitted
+          // are this control's start/release, coalescing one drag into one step.
           onPointerDown={() => beginTransaction()}
-          onValueCommit={() => endTransaction()}
+          onValueCommitted={() => endTransaction()}
           onClick={(e) => e.stopPropagation()}
         />
         {/* Dropdown, not a ToggleGroup: seven inline toggles made rows wider

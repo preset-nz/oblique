@@ -11,6 +11,12 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { useColourSelectStore } from './state';
 
+// Base UI's Select shows the raw value unless the root is told each value's label.
+const SPACE_ITEMS = [
+  { value: 'lab', label: 'Lab' },
+  { value: 'rgb', label: 'RGB' },
+];
+
 /**
  * `select-colour`'s own request-params panel (colour-range-select.md):
  * tolerance, contiguous, colour space, expand, min island — these feed the
@@ -44,7 +50,7 @@ export function ColourSelectParamsPanel() {
             min={0}
             max={255}
             step={1}
-            onValueChange={([v]) => setParams({ tolerance: v })}
+            onValueChange={(v) => setParams({ tolerance: typeof v === 'number' ? v : v[0] })}
             className="flex-1"
           />
           <InputNumber
@@ -74,6 +80,7 @@ export function ColourSelectParamsPanel() {
         <span className="text-neutral-400">Colour space</span>
         <Select
           value={params.space}
+          items={SPACE_ITEMS}
           onValueChange={(value) => {
             if (value) setParams({ space: value as ColourSpace });
           }}
@@ -82,12 +89,11 @@ export function ColourSelectParamsPanel() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="lab" className="text-xs">
-              Lab
-            </SelectItem>
-            <SelectItem value="rgb" className="text-xs">
-              RGB
-            </SelectItem>
+            {SPACE_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value} className="text-xs">
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

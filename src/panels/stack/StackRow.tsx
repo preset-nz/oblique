@@ -154,31 +154,35 @@ export function StackRow({
         {/* Drag grip (drag-reorder.md): the only drag origin. Inert on a locked
             node — modifier order changes the cook, which locking forbids. */}
         <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              disabled={locked}
-              aria-label="Drag to reorder modifier"
-              className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing disabled:cursor-default disabled:opacity-30 disabled:hover:text-neutral-500"
-              {...(locked ? {} : gripProps(displayIndex))}
-            >
-              <GripVertical size={14} />
-            </button>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                disabled={locked}
+                aria-label="Drag to reorder modifier"
+                className="shrink-0 cursor-grab touch-none text-neutral-500 hover:text-neutral-300 active:cursor-grabbing disabled:cursor-default disabled:opacity-30 disabled:hover:text-neutral-500"
+                {...(locked ? {} : gripProps(displayIndex))}
+              />
+            }
+          >
+            <GripVertical size={14} />
           </TooltipTrigger>
           <TooltipContent>{locked ? LOCKED_HINT : 'Drag to reorder'}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              disabled={locked}
-              className="disabled:opacity-30"
-              aria-label={modifier.enabled ? 'Disable modifier' : 'Enable modifier'}
-              onClick={() => setModifierEnabled(node.id, modifier.id, !modifier.enabled)}
-            >
-              {modifier.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
-            </button>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                disabled={locked}
+                className="disabled:opacity-30"
+                aria-label={modifier.enabled ? 'Disable modifier' : 'Enable modifier'}
+                onClick={() => setModifierEnabled(node.id, modifier.id, !modifier.enabled)}
+              />
+            }
+          >
+            {modifier.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
           </TooltipTrigger>
           <TooltipContent>
             {locked ? LOCKED_HINT : modifier.enabled ? 'Disable' : 'Enable'}
@@ -204,9 +208,11 @@ export function StackRow({
           <span className="truncate">{descriptor ? opLabel(descriptor) : modifier.type}</span>
           {modifier.maskId && (
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Blend size={12} className="shrink-0 text-neutral-500" aria-label="Masked" />
-              </TooltipTrigger>
+              <TooltipTrigger
+                render={
+                  <Blend size={12} className="shrink-0 text-neutral-500" aria-label="Masked" />
+                }
+              />
               <TooltipContent>
                 Masked — live vector reference; editing the shape recooks this modifier
               </TooltipContent>
@@ -216,12 +222,20 @@ export function StackRow({
 
         <Popover>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <button type="button" aria-label="Modifier options" className="text-neutral-500">
-                  <MoreVertical size={14} />
-                </button>
-              </PopoverTrigger>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Modifier options"
+                      className="text-neutral-500"
+                    />
+                  }
+                />
+              }
+            >
+              <MoreVertical size={14} />
             </TooltipTrigger>
             <TooltipContent>Options</TooltipContent>
           </Tooltip>

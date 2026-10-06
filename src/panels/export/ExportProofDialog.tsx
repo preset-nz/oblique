@@ -106,9 +106,8 @@ export function ExportProofDialog() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-neutral-500">Paper</span>
             <ToggleGroup
-              type="single"
-              value={options.paper}
-              onValueChange={(v) => v && setOptions({ paper: v as ProofPaper })}
+              value={[options.paper]}
+              onValueChange={([v]) => v && setOptions({ paper: v as ProofPaper })}
             >
               <ToggleGroupItem value="white" aria-label="White paper">
                 White
@@ -159,10 +158,9 @@ export function ExportProofDialog() {
               <div className="flex flex-col gap-1">
                 <span className="text-xs text-neutral-500">Steps</span>
                 <ToggleGroup
-                  type="single"
-                  value={String(options.steps)}
+                  value={[String(options.steps)]}
                   disabled={!options.bars}
-                  onValueChange={(v) => v && setOptions({ steps: Number(v) as ProofBarSteps })}
+                  onValueChange={([v]) => v && setOptions({ steps: Number(v) as ProofBarSteps })}
                 >
                   {[3, 5, 7].map((n) => (
                     <ToggleGroupItem key={n} value={String(n)} aria-label={`${n} steps`}>
@@ -174,10 +172,9 @@ export function ExportProofDialog() {
               <div className="flex flex-col gap-1">
                 <span className="text-xs text-neutral-500">Edge</span>
                 <ToggleGroup
-                  type="single"
-                  value={options.barEdge}
+                  value={[options.barEdge]}
                   disabled={!options.bars}
-                  onValueChange={(v) => v && setOptions({ barEdge: v as ProofBarEdge })}
+                  onValueChange={([v]) => v && setOptions({ barEdge: v as ProofBarEdge })}
                 >
                   <ToggleGroupItem value="bottom" aria-label="Bottom edge">
                     Bottom

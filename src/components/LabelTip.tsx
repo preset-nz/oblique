@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 export const LABEL_TIP_DELAY_MS = 500;
 
 /**
- * Wraps a label element in a shadcn tooltip showing `description`. With no
+ * Wraps a label element in a tooltip showing `description`. With no
  * description it returns the child untouched, so unannotated params render
  * exactly as before. Carries its own `TooltipProvider` (the app-level one
  * defaults to a zero delay) so the 500 ms delay holds wherever it is used.
@@ -19,9 +19,9 @@ export function LabelTip({
 }) {
   if (!description) return children;
   return (
-    <TooltipProvider delayDuration={LABEL_TIP_DELAY_MS}>
+    <TooltipProvider delay={LABEL_TIP_DELAY_MS}>
       <Tooltip>
-        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipTrigger render={children} />
         <TooltipContent side="left">{description}</TooltipContent>
       </Tooltip>
     </TooltipProvider>

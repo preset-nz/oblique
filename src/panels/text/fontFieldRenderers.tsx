@@ -1,4 +1,11 @@
-import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
+import {
+  type FieldDef,
+  type FieldRenderer,
+  FieldShell,
+  type PanelView,
+  ReadOnlyText,
+  registerFieldRenderer,
+} from '@preset.nz/facets';
 import { Star, TriangleAlert } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -32,21 +39,16 @@ import type { OptionalColourFieldDef, TextScopeContext } from './textScope';
  * is the words themselves (dogfood-revisions.md) and reads `ctx.nodeId`.
  */
 
-const labelClass = 'text-[11px] font-medium text-muted-foreground tracking-wide';
-
-function FieldLabel({ text, dim }: { text: string; dim?: boolean }) {
-  return <span className={cn(labelClass, dim && 'opacity-50')}>{text}</span>;
-}
-
 /** Current value as plain text — the catalogue-not-ready / read-only presentation. */
-function ReadOnlyText({ label, text }: { label: string; text: string }) {
+function ReadOnlyValue({ label, text, view }: { label: string; text: string; view?: PanelView }) {
   return (
-    <div className="flex flex-col gap-1">
-      <FieldLabel text={label} />
-      <span className="truncate text-xs text-neutral-300" title={text}>
-        {text || '—'}
-      </span>
-    </div>
+    <FieldShell label={label} view={view}>
+      <ReadOnlyText>
+        <span className="block truncate" title={text}>
+          {text || '—'}
+        </span>
+      </ReadOnlyText>
+    </FieldShell>
   );
 }
 
@@ -54,9 +56,16 @@ function ReadOnlyText({ label, text }: { label: string; text: string }) {
 function MissingMarker({ hint }: { hint: string }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <TriangleAlert size={12} className="shrink-0 text-amber-400" role="img" aria-label={hint} />
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <TriangleAlert
+            size={12}
+            className="shrink-0 text-amber-400"
+            role="img"
+            aria-label={hint}
+          />
+        }
+      />
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
   );
@@ -120,12 +129,14 @@ export function FontFamilyField({
   onChange,
   disabled,
   missingHint,
+  view,
 }: {
   label: string;
   family: string;
   onChange?: (next: string) => void;
   disabled: boolean;
   missingHint?: string;
+  view?: PanelView;
 }) {
   const status = useFontCatalogueStore((s) => s.status);
   const pickerFamilies = useFontCatalogueStore((s) => s.pickerFamilies);
@@ -142,7 +153,7 @@ export function FontFamilyField({
     return (
       <div className="flex items-end gap-1">
         <div className="min-w-0 flex-1">
-          <ReadOnlyText label={label} text={family} />
+          <ReadOnlyValue label={label} text={family} view={view} />
         </div>
         {missingHint && <MissingMarker hint={missingHint} />}
       </div>
@@ -157,8 +168,7 @@ export function FontFamilyField({
   };
 
   return (
-    <div className="flex flex-col gap-1">
-      <FieldLabel text={label} />
+    <FieldShell label={label} view={view}>
       <div className="flex items-center gap-1">
         <Popover
           open={open}
@@ -167,14 +177,16 @@ export function FontFamilyField({
             if (!next) setQuery('');
           }}
         >
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={label}
-              className="min-w-0 flex-1 truncate rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-left text-xs hover:bg-neutral-800"
-            >
-              {family}
-            </button>
+          <PopoverTrigger
+            render={
+              <button
+                type="button"
+                aria-label={label}
+                className="min-w-0 flex-1 truncate rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-left text-xs hover:bg-neutral-800"
+              />
+            }
+          >
+            {family}
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64 p-1">
             <div className="mb-1 flex items-center gap-1">
@@ -187,19 +199,21 @@ export function FontFamilyField({
                 className="min-w-0 flex-1 rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-neutral-700 focus:ring-sky-500"
               />
               <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Favourites only"
-                    aria-pressed={favouritesOnly}
-                    onClick={() => useFavouritesOnlyStore.getState().setOn(!favouritesOnly)}
-                    className={cn(
-                      'shrink-0 rounded p-1.5 hover:bg-neutral-800',
-                      favouritesOnly ? 'text-amber-400' : 'text-neutral-500',
-                    )}
-                  >
-                    <Star size={14} fill={favouritesOnly ? 'currentColor' : 'none'} />
-                  </button>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Favourites only"
+                      aria-pressed={favouritesOnly}
+                      onClick={() => useFavouritesOnlyStore.getState().setOn(!favouritesOnly)}
+                      className={cn(
+                        'shrink-0 rounded p-1.5 hover:bg-neutral-800',
+                        favouritesOnly ? 'text-amber-400' : 'text-neutral-500',
+                      )}
+                    />
+                  }
+                >
+                  <Star size={14} fill={favouritesOnly ? 'currentColor' : 'none'} />
                 </TooltipTrigger>
                 <TooltipContent>Favourites only</TooltipContent>
               </Tooltip>
@@ -233,12 +247,20 @@ export function FontFamilyField({
         </Popover>
         {missingHint && <MissingMarker hint={missingHint} />}
       </div>
-    </div>
+    </FieldShell>
   );
 }
 
-const FontFamilyRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, onChange, ctx }) => (
+const FontFamilyRenderer: FieldRenderer<FieldDef> = ({
+  field,
+  value,
+  disabled,
+  onChange,
+  ctx,
+  view,
+}) => (
   <FontFamilyField
+    view={view}
     label={field.label ?? field.id}
     family={typeof value === 'string' ? value : ''}
     disabled={disabled}
@@ -253,11 +275,13 @@ export function FontStyleField({
   font,
   onChange,
   disabled,
+  view,
 }: {
   label: string;
   font: TextScopeContext['font'];
   onChange?: (next: string) => void;
   disabled: boolean;
+  view?: PanelView;
 }) {
   const status = useFontCatalogueStore((s) => s.status);
   const families = useFontCatalogueStore((s) => s.families);
@@ -266,7 +290,7 @@ export function FontStyleField({
   // Not ready, read-only, or the family isn't installed (a missing font): show
   // the wanted style as text rather than an empty select.
   if (status !== 'ready' || !onChange || disabled || !faces || faces.length === 0) {
-    return <ReadOnlyText label={label} text={font.style} />;
+    return <ReadOnlyValue label={label} text={font.style} view={view} />;
   }
 
   // A select item's value is the face's PostScript name: a style name isn't
@@ -274,31 +298,50 @@ export function FontStyleField({
   const current = faces.some((f) => f.postscriptName === font.postscriptName)
     ? font.postscriptName
     : undefined;
+  const items = faces.map((f) => ({
+    value: f.postscriptName,
+    // A face with no decodable style name still needs a visible label.
+    label: f.style || f.postscriptName,
+  }));
   return (
-    <div className="flex flex-col gap-1">
-      <FieldLabel text={label} />
-      <Select value={current} onValueChange={onChange}>
+    <FieldShell label={label} view={view}>
+      <Select
+        value={current ?? null}
+        items={items}
+        onValueChange={(next) => {
+          if (next != null) onChange(next);
+        }}
+      >
         <SelectTrigger size="sm" className="w-full text-xs" aria-label={label}>
           <SelectValue placeholder={font.style} />
         </SelectTrigger>
         <SelectContent>
-          {faces.map((f) => (
-            <SelectItem key={f.postscriptName} value={f.postscriptName} className="text-xs">
-              {/* A face with no decodable style name still needs a visible label. */}
-              {f.style || f.postscriptName}
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value} className="text-xs">
+              {item.label}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-    </div>
+    </FieldShell>
   );
 }
 
-const FontStyleRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, onChange, ctx }) => {
+const FontStyleRenderer: FieldRenderer<FieldDef> = ({
+  field,
+  value,
+  disabled,
+  onChange,
+  ctx,
+  view,
+}) => {
   const font = (ctx as TextScopeContext | null)?.font;
-  if (!font) return <ReadOnlyText label={field.label ?? field.id} text={String(value ?? '')} />;
+  if (!font) {
+    return <ReadOnlyValue label={field.label ?? field.id} text={String(value ?? '')} view={view} />;
+  }
   return (
     <FontStyleField
+      view={view}
       label={field.label ?? field.id}
       font={font}
       disabled={disabled}
@@ -331,12 +374,14 @@ function TextContentField({
   value,
   readOnly,
   onChange,
+  view,
 }: {
   label: string;
   nodeId: string;
   value: string;
   readOnly: boolean;
   onChange?: (next: string) => void;
+  view?: PanelView;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   // True from a pointer-initiated focus request until that pointer is released:
@@ -419,8 +464,7 @@ function TextContentField({
   }, []);
 
   return (
-    <div className="flex flex-col gap-1">
-      <FieldLabel text={label} dim={readOnly} />
+    <FieldShell label={label} view={view} top>
       <textarea
         ref={ref}
         aria-label={label}
@@ -458,15 +502,16 @@ function TextContentField({
         }}
         className="w-full resize-none rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs outline-none focus:border-sky-400 read-only:opacity-60"
       />
-    </div>
+    </FieldShell>
   );
 }
 
-const TextContentRenderer: FieldRenderer<FieldDef> = ({ field, value, onChange, ctx }) => {
+const TextContentRenderer: FieldRenderer<FieldDef> = ({ field, value, onChange, ctx, view }) => {
   const nodeId = (ctx as TextScopeContext | null)?.nodeId;
   if (!nodeId) return null;
   return (
     <TextContentField
+      view={view}
       label={field.label ?? field.id}
       nodeId={nodeId}
       value={typeof value === 'string' ? value : ''}
@@ -481,10 +526,12 @@ function OptionalColour({
   value,
   disabled,
   onChange,
+  view,
 }: {
   field: OptionalColourFieldDef;
   value: unknown;
   disabled: boolean;
+  view?: PanelView;
   /** A colour recolours, `null` disables, `true` enables (the scope restores the remembered colour). */
   onChange?: (next: string | true | null) => void;
 }) {
@@ -499,8 +546,7 @@ function OptionalColour({
   const checkId = `optional-colour-enabled-${field.id}`;
 
   return (
-    <div className="flex flex-col gap-1">
-      <FieldLabel text={label} dim={readOnly} />
+    <FieldShell label={label} view={view}>
       <div className={cn('flex items-center gap-2', readOnly && 'opacity-50')}>
         <input
           type="color"
@@ -529,12 +575,19 @@ function OptionalColour({
           Enabled
         </label>
       </div>
-    </div>
+    </FieldShell>
   );
 }
 
-const OptionalColourRenderer: FieldRenderer<FieldDef> = ({ field, value, disabled, onChange }) => (
+const OptionalColourRenderer: FieldRenderer<FieldDef> = ({
+  field,
+  value,
+  disabled,
+  onChange,
+  view,
+}) => (
   <OptionalColour
+    view={view}
     field={field as unknown as OptionalColourFieldDef}
     value={value}
     disabled={disabled}

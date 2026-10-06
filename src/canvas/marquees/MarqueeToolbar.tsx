@@ -59,7 +59,7 @@ export function MarqueeToolbar() {
             min={0}
             max={500}
             step={1}
-            onValueChange={([v]) => setParams({ featherPx: v })}
+            onValueChange={(v) => setParams({ featherPx: typeof v === 'number' ? v : v[0] })}
             className="flex-1"
           />
           <InputNumber

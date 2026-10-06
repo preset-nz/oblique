@@ -15,6 +15,16 @@ import { isVectorNode } from '@/scene/types';
 import { nudgeIndex } from './stack/LayerList';
 import { deletePath, reorderPath } from './vectors/pathList';
 
+// Base UI's Select shows the raw value unless the root is told each value's label.
+const FILL_RULE_ITEMS = [
+  { value: 'nonzero', label: 'Nonzero' },
+  { value: 'evenodd', label: 'Even-odd' },
+];
+const OUTPUT_ITEMS = [
+  { value: 'image', label: 'Image' },
+  { value: 'mask', label: 'Mask' },
+];
+
 /**
  * Vectors tab (vectors-tab.md) — housekeeping for a vector node's `paths`
  * without hunting for anchors on canvas. Panel-scoped: imports nothing from
@@ -173,6 +183,7 @@ export function VectorsPanel() {
         <span className="text-neutral-400">Fill rule</span>
         <Select
           value={node.fillRule}
+          items={FILL_RULE_ITEMS}
           onValueChange={(value) => {
             if (value) setVectorFillRule(node.id, value as VectorNode['fillRule']);
           }}
@@ -181,12 +192,11 @@ export function VectorsPanel() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="nonzero" className="text-xs">
-              Nonzero
-            </SelectItem>
-            <SelectItem value="evenodd" className="text-xs">
-              Even-odd
-            </SelectItem>
+            {FILL_RULE_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value} className="text-xs">
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
@@ -195,6 +205,7 @@ export function VectorsPanel() {
         <span className="text-neutral-400">Output</span>
         <Select
           value={node.output}
+          items={OUTPUT_ITEMS}
           onValueChange={(value) => {
             if (value) setNodeProp(node.id, { output: value as NodeOutput });
           }}
@@ -203,12 +214,11 @@ export function VectorsPanel() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="image" className="text-xs">
-              Image
-            </SelectItem>
-            <SelectItem value="mask" className="text-xs">
-              Mask
-            </SelectItem>
+            {OUTPUT_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value} className="text-xs">
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

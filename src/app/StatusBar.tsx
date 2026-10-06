@@ -19,15 +19,17 @@ function ZoomButton(props: {
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={props.label}
-          className={props.className ?? ZOOM_BUTTON_CLASS}
-          onClick={props.onClick}
-        >
-          {props.children}
-        </button>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={props.label}
+            className={props.className ?? ZOOM_BUTTON_CLASS}
+            onClick={props.onClick}
+          />
+        }
+      >
+        {props.children}
       </TooltipTrigger>
       <TooltipContent>{`${props.label} (${props.shortcut})`}</TooltipContent>
     </Tooltip>
@@ -41,13 +43,15 @@ function CookReadout() {
   const tooltip = `${last.nodeLabel} · ${last.level} · ${last.width}×${last.height} · sidecar ${Math.round(last.sidecarMs)} ms`;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-testid="cook-readout"
-          className={`tabular-nums ${last.totalMs >= SLOW_COOK_MS ? 'text-amber-400' : 'text-neutral-500'}`}
-        >
-          Cook {formatCookMs(last.totalMs)}
-        </span>
+      <TooltipTrigger
+        render={
+          <span
+            data-testid="cook-readout"
+            className={`tabular-nums ${last.totalMs >= SLOW_COOK_MS ? 'text-amber-400' : 'text-neutral-500'}`}
+          />
+        }
+      >
+        Cook {formatCookMs(last.totalMs)}
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
