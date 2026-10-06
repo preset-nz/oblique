@@ -1,4 +1,4 @@
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import { useLastCookStore } from '@/cook/lastCook';
 import * as prefixCache from '@/cook/prefixCache';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
@@ -159,7 +159,7 @@ export function resetCookErrorBurst(): void {
 function reportCookFailure(message: string): void {
   if (errorBurstActive) return;
   errorBurstActive = true;
-  toast.error('Cook failed', { description: message });
+  notify({ message: 'Cook failed', kind: 'error', description: message });
 }
 
 /**

@@ -1,6 +1,6 @@
+import { dismissNotification, notify } from '@preset.nz/ux-kit';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
-import { toast } from 'sonner';
 import {
   type CacheLookup,
   type Composite2DContext,
@@ -101,7 +101,7 @@ export interface ExportProgress {
  * see `cookNodeFullRes`), then run the *exact same* `compositeScene` routine
  * used on-screen into a full-size canvas, via a local-map cache lookup so no
  * node's export cook is ever backed by a lower-res cache bitmap. Cancellable
- * between node cooks; progress is reported on `toastId`.
+ * between node cooks; progress is reported on `progressToast`.
  *
  * Resolves to `null` when cancelled (the cancel toast has already been
  * shown); throws if any node's full-res cook fails — never silently
@@ -113,7 +113,7 @@ export async function renderFullRes(
   deps: ExportDeps,
   onProgress: ((progress: ExportProgress) => void) | undefined,
   cancelled: { current: boolean },
-  toastId: string | number,
+  progressToast: ProgressToast,
   scene: Scene = deps.getScene(),
 ): Promise<ExportCanvas | null> {
   const [docW, docH] = scene.documentSize;
@@ -127,12 +127,12 @@ export async function renderFullRes(
   try {
     for (let i = 0; i < nodes.length; i++) {
       if (cancelled.current) {
-        toast.dismiss(toastId);
-        toast('Export cancelled');
+        progressToast.dismiss();
+        notify({ message: 'Export cancelled' });
         return null;
       }
       const node = nodes[i];
-      toast.loading(`Exporting ${i + 1} / ${nodes.length} — ${node.label}`, { id: toastId });
+      progressToast.show(`Exporting ${i + 1} / ${nodes.length} — ${node.label}`);
       onProgress?.({ done: i, total: nodes.length });
 
       // Locking makes export cheaper (lock-state-machine.md): a locked
@@ -148,8 +148,8 @@ export async function renderFullRes(
     }
 
     if (cancelled.current) {
-      toast.dismiss(toastId);
-      toast('Export cancelled');
+      progressToast.dismiss();
+      notify({ message: 'Export cancelled' });
       return null;
     }
     onProgress?.({ done: nodes.length, total: nodes.length });
@@ -189,21 +189,48 @@ export async function renderFullRes(
 function hasExportableSize(scene: Scene): boolean {
   const [docW, docH] = scene.documentSize;
   if (docW > 0 && docH > 0) return true;
-  toast.error('Nothing to export', {
+  notify({
+    message: 'Nothing to export',
+    kind: 'error',
     description: 'Import an image or set a document size first.',
   });
   return false;
 }
 
-function startProgressToast(count: number, cancelled: { current: boolean }): string | number {
-  return toast.loading(`Exporting 0 / ${count}`, {
-    action: {
-      label: 'Cancel',
-      onClick: () => {
-        cancelled.current = true;
-      },
+/**
+ * The export progress snackbar. The kit's `notify()` has no update call, so a
+ * progress change is dismiss-then-notify; the toast is persistent so it stays
+ * until the export finishes, fails, or is cancelled.
+ */
+export interface ProgressToast {
+  show(message: string): void;
+  dismiss(): void;
+}
+
+function startProgressToast(count: number, cancelled: { current: boolean }): ProgressToast {
+  let id: string | null = null;
+  const progressToast: ProgressToast = {
+    show(message) {
+      progressToast.dismiss();
+      id = notify({
+        message,
+        persistent: true,
+        action: {
+          label: 'Cancel',
+          onClick: () => {
+            cancelled.current = true;
+          },
+        },
+      });
     },
-  });
+    dismiss() {
+      if (id === null) return;
+      dismissNotification(id);
+      id = null;
+    },
+  };
+  progressToast.show(`Exporting 0 / ${count}`);
+  return progressToast;
 }
 
 /**
@@ -223,20 +250,22 @@ export async function exportPng(
   if (!path) return;
 
   const cancelled = { current: false };
-  const toastId = startProgressToast(exportableNodes(scene).length, cancelled);
+  const progressToast = startProgressToast(exportableNodes(scene).length, cancelled);
   try {
-    const canvas = await renderFullRes(deps, onProgress, cancelled, toastId, scene);
+    const canvas = await renderFullRes(deps, onProgress, cancelled, progressToast, scene);
     if (!canvas) return;
 
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const bytes = await deps.blobToBytes(blob);
 
     await deps.writeFile(path, bytes);
-    toast.dismiss(toastId);
-    toast.success(`Exported ${filenameOf(path)}`);
+    progressToast.dismiss();
+    notify({ message: `Exported ${filenameOf(path)}`, kind: 'success' });
   } catch (err) {
-    toast.dismiss(toastId);
-    toast.error('Export failed', {
+    progressToast.dismiss();
+    notify({
+      message: 'Export failed',
+      kind: 'error',
       description: err instanceof Error ? err.message : String(err),
     });
   }
@@ -271,9 +300,9 @@ export async function exportProof(
   if (!path) return;
 
   const cancelled = { current: false };
-  const toastId = startProgressToast(exportableNodes(scene).length, cancelled);
+  const progressToast = startProgressToast(exportableNodes(scene).length, cancelled);
   try {
-    const work = await renderFullRes(deps, onProgress, cancelled, toastId, scene);
+    const work = await renderFullRes(deps, onProgress, cancelled, progressToast, scene);
     if (!work) return;
 
     const layout = proofLayout(docW, docH, opts);
@@ -288,11 +317,13 @@ export async function exportProof(
     const bytes = await deps.blobToBytes(blob);
 
     await deps.writeFile(path, bytes);
-    toast.dismiss(toastId);
-    toast.success(`Exported ${filenameOf(path)}`);
+    progressToast.dismiss();
+    notify({ message: `Exported ${filenameOf(path)}`, kind: 'success' });
   } catch (err) {
-    toast.dismiss(toastId);
-    toast.error('Export failed', {
+    progressToast.dismiss();
+    notify({
+      message: 'Export failed',
+      kind: 'error',
       description: err instanceof Error ? err.message : String(err),
     });
   }

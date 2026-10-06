@@ -1,5 +1,5 @@
+import { notify } from '@preset.nz/ux-kit';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { toast } from 'sonner';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 
@@ -72,7 +72,7 @@ export async function importFile(path: string, deps: ImportDeps): Promise<Import
     return { path, nodeId };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    toast.error(`Couldn't import ${filename}`, { description: reason });
+    notify({ message: `Couldn't import ${filename}`, kind: 'error', description: reason });
     return { path, error: reason };
   }
 }

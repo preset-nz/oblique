@@ -1,3 +1,4 @@
+import { notify } from '@preset.nz/ux-kit';
 import { confirm, open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   mkdir,
@@ -8,7 +9,6 @@ import {
   writeFile,
   writeTextFile,
 } from '@tauri-apps/plugin-fs';
-import { toast } from 'sonner';
 import { PRODUCT_NAME } from '@/branding';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import * as backgroundSource from '@/scene/backgroundSource';
@@ -317,7 +317,9 @@ export async function saveProject(
     if (path !== previousPath) await recheckRelativeSources(previousPath, path, deps);
     meta.markSaved();
   } catch (err) {
-    toast.error("Couldn't save project", {
+    notify({
+      message: "Couldn't save project",
+      kind: 'error',
       description: err instanceof Error ? err.message : String(err),
     });
   }
@@ -337,7 +339,9 @@ export async function loadProject(
   try {
     scene = parseProject(await deps.readTextFile(path), path);
   } catch (err) {
-    toast.error(`Couldn't open ${filenameOf(path)}`, {
+    notify({
+      message: `Couldn't open ${filenameOf(path)}`,
+      kind: 'error',
       description: err instanceof Error ? err.message : String(err),
     });
     return;
@@ -498,7 +502,9 @@ export async function setBackgroundImageFromPath(
     useSceneStore.getState().setBackgroundImage(path, [bitmap.width, bitmap.height]);
     return true;
   } catch (err) {
-    toast.error(`Couldn't use ${filenameOf(path)} as the background`, {
+    notify({
+      message: `Couldn't use ${filenameOf(path)} as the background`,
+      kind: 'error',
       description: err instanceof Error ? err.message : String(err),
     });
     return false;

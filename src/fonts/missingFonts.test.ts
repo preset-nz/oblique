@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./fontsIpc', () => ({ listFonts: vi.fn(), textOutlines: vi.fn() }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(),
+  dismissNotification: vi.fn(),
+}));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(), save: vi.fn(), confirm: vi.fn() }));
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: vi.fn(),

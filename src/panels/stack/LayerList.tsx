@@ -1,6 +1,5 @@
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, notify } from '@preset.nz/ux-kit';
 import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import {
   Select,
   SelectContent,
@@ -221,7 +220,9 @@ function LayerRow({
     }
     lockNode(node.id, cookNodeFullRes).catch((err) => {
       // Same posture as export's own cook-failure surface (project/export.ts).
-      toast.error('Lock failed', {
+      notify({
+        message: 'Lock failed',
+        kind: 'error',
         description: err instanceof Error ? err.message : String(err),
       });
     });

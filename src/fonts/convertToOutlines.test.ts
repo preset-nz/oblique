@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./fontsIpc', () => ({ listFonts: vi.fn(), textOutlines: vi.fn() }));
-vi.mock('sonner', () => {
-  const toast = Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn() });
-  return { toast };
-});
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(),
+  dismissNotification: vi.fn(),
+}));
 
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { clearAll } from '@/scene/textGeometryCache';
@@ -58,8 +59,7 @@ beforeEach(() => {
   useSelectionStore.getState().clear();
   clearAll();
   vi.mocked(textOutlines).mockReset();
-  vi.mocked(toast).mockClear();
-  vi.mocked(toast.error).mockClear();
+  vi.mocked(notify).mockClear();
 });
 
 describe('convertedToastMessage', () => {
@@ -93,12 +93,12 @@ describe('convertSelectedTextToOutlines', () => {
       handleOut: { x: 101, y: 50 },
     });
     expect(useSelectionStore.getState().selection).toEqual({ kind: 'node', nodeId: node.id });
-    expect(toast).toHaveBeenCalledWith('Converted to outlines');
+    expect(notify).toHaveBeenCalledWith({ message: 'Converted to outlines' });
   });
 
   it('tells the user when nothing convertible is selected', async () => {
     await convertSelectedTextToOutlines();
-    expect(toast).toHaveBeenCalledWith('Select an unlocked text layer to convert');
+    expect(notify).toHaveBeenCalledWith({ message: 'Select an unlocked text layer to convert' });
     expect(textOutlines).not.toHaveBeenCalled();
   });
 
@@ -106,7 +106,7 @@ describe('convertSelectedTextToOutlines', () => {
     const text = addText({ state: 'locked' });
     useSelectionStore.getState().selectNode(text.id);
     await convertSelectedTextToOutlines();
-    expect(toast).toHaveBeenCalledWith('Select an unlocked text layer to convert');
+    expect(notify).toHaveBeenCalledWith({ message: 'Select an unlocked text layer to convert' });
     expect(state().scene.nodes[0].type).toBe('text');
   });
 
@@ -117,7 +117,7 @@ describe('convertSelectedTextToOutlines', () => {
 
     await convertSelectedTextToOutlines();
 
-    expect(toast.error).toHaveBeenCalledWith('font not found');
+    expect(notify).toHaveBeenCalledWith({ message: 'font not found', kind: 'error' });
     expect(state().scene.nodes[0].type).toBe('text');
   });
 });

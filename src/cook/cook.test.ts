@@ -3,11 +3,13 @@ import type { OpDescriptor } from '@/sidecar/opsCache';
 import type { TextGeometry } from '../fonts/textGeometry';
 import type { Modifier, PixelNode, SceneNode, TextNode, VectorNode } from '../scene/types';
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn() },
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(),
+  dismissNotification: vi.fn(),
 }));
 
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import {
   buildCookModifiers,
   type CookDeps,
@@ -588,7 +590,7 @@ describe('cookNode — text-node mask targets', () => {
     expect(deps.runPython).not.toHaveBeenCalled();
     expect(deps.setCache).not.toHaveBeenCalled();
     expect(deps.clearDirty).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('cookNodeFullRes prefetches and rasterises the same way (factor 1)', async () => {
@@ -796,7 +798,7 @@ describe('cookNode', () => {
 
     expect(deps.setCache).not.toHaveBeenCalled();
     expect(deps.clearDirty).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('resetCookErrorBurst allows a fresh toast for a new burst', async () => {
@@ -815,7 +817,7 @@ describe('cookNode', () => {
     resetCookErrorBurst();
     await cookNode('node-1', 'draft', deps);
 
-    expect(toast.error).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -856,7 +858,7 @@ describe('cookNode — vector nodes', () => {
 
     expect(deps.setCache).not.toHaveBeenCalled();
     expect(deps.clearDirty).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('runs enabled modifiers over the rasterised paths, same as a pixel node', async () => {
@@ -911,7 +913,7 @@ describe('cookNode — text nodes', () => {
     expect(deps.rasterizeText).not.toHaveBeenCalled();
     expect(deps.setCache).not.toHaveBeenCalled();
     expect(deps.clearDirty).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('runs enabled modifiers over the text raster', async () => {

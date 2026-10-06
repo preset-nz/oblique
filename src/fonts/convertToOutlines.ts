@@ -1,4 +1,4 @@
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { documentPathsFor, ensureGeometry, specFor, specKey } from '@/scene/textGeometryCache';
@@ -31,7 +31,7 @@ function selectedTextNode(): TextNode | null {
 export async function convertSelectedTextToOutlines(): Promise<void> {
   let node = selectedTextNode();
   if (!node) {
-    toast('Select an unlocked text layer to convert');
+    notify({ message: 'Select an unlocked text layer to convert' });
     return;
   }
 
@@ -43,7 +43,7 @@ export async function convertSelectedTextToOutlines(): Promise<void> {
       const geometry = await ensureGeometry(node);
       const fresh = selectedTextNode();
       if (!fresh || fresh.id !== node.id) {
-        toast('Select an unlocked text layer to convert');
+        notify({ message: 'Select an unlocked text layer to convert' });
         return;
       }
       node = fresh;
@@ -53,15 +53,18 @@ export async function convertSelectedTextToOutlines(): Promise<void> {
         .getState()
         .convertTextToOutlines(node.id, documentPathsFor(node, geometry));
       if (!newId) {
-        toast('Select an unlocked text layer to convert');
+        notify({ message: 'Select an unlocked text layer to convert' });
         return;
       }
       useSelectionStore.getState().selectNode(newId);
-      toast(convertedToastMessage(node));
+      notify({ message: convertedToastMessage(node) });
       return;
     }
-    toast.error('The text kept changing, so it was not converted. Try again.');
+    notify({
+      message: 'The text kept changing, so it was not converted. Try again.',
+      kind: 'error',
+    });
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : String(err));
+    notify({ message: err instanceof Error ? err.message : String(err), kind: 'error' });
   }
 }

@@ -3,8 +3,10 @@ import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { PixelNode } from '@/scene/types';
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn() },
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(),
+  dismissNotification: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -15,7 +17,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: vi.fn(),
 }));
 
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import type { ImportDeps } from './import';
 import { importFile, importFiles } from './import';
 
@@ -96,7 +98,7 @@ describe('importFile', () => {
     expect(useSceneStore.getState().scene.nodes).toHaveLength(2);
   });
 
-  it('decode failure: no node created, toast.error called with filename', async () => {
+  it('decode failure: no node created, error snackbar raised with filename', async () => {
     const deps: ImportDeps = {
       readFile: vi.fn(async () => new Uint8Array([1])),
       decode: vi.fn(async () => {
@@ -108,11 +110,13 @@ describe('importFile', () => {
 
     expect(outcome.error).toBe('corrupt image data');
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('broken.jpg');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', message: expect.stringContaining('broken.jpg') }),
+    );
   });
 
-  it('read failure also surfaces as a toast with no node created', async () => {
+  it('read failure also surfaces as a snackbar with no node created', async () => {
     const deps: ImportDeps = {
       readFile: vi.fn(async () => {
         throw new Error('file not found');
@@ -123,7 +127,7 @@ describe('importFile', () => {
     const outcome = await importFile('/missing.png', deps);
     expect(outcome.error).toBe('file not found');
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -191,6 +195,6 @@ describe('importFiles', () => {
     const outcomes = await importFiles(['/a.png', '/broken.png', '/c.png'], deps);
     expect(outcomes.map((o) => Boolean(o.error))).toEqual([false, true, false]);
     expect(useSceneStore.getState().scene.nodes).toHaveLength(2);
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });

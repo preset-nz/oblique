@@ -1,6 +1,5 @@
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, notify } from '@preset.nz/ux-kit';
 import { useMemo, useState } from 'react';
-import { toast } from 'sonner';
 import { create } from 'zustand';
 import {
   Dialog,
@@ -144,9 +143,9 @@ export function ReplaceFontDialog() {
     );
     close(false);
     if (skipped > 0) {
-      toast.info(
-        `Replaced the font on ${replaced} ${replaced === 1 ? 'layer' : 'layers'}; skipped ${skipped} locked ${skipped === 1 ? 'layer' : 'layers'}.`,
-      );
+      notify({
+        message: `Replaced the font on ${replaced} ${replaced === 1 ? 'layer' : 'layers'}; skipped ${skipped} locked ${skipped === 1 ? 'layer' : 'layers'}.`,
+      });
     }
   };
 

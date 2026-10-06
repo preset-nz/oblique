@@ -2,13 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Composite2DContext } from '@/compositor/composite';
 import type { PixelNode, Scene, SceneNode } from '@/scene/types';
 
-vi.mock('sonner', () => ({
-  toast: Object.assign(vi.fn(), {
-    loading: vi.fn(() => 'toast-id'),
-    success: vi.fn(),
-    error: vi.fn(),
-    dismiss: vi.fn(),
-  }),
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(() => 'toast-id'),
+  dismissNotification: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -24,7 +21,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   rename: vi.fn(),
 }));
 
-import { toast } from 'sonner';
+import { dismissNotification, notify } from '@preset.nz/ux-kit';
 import * as backgroundSource from '@/scene/backgroundSource';
 import type { ExportCanvas, ExportDeps } from './export';
 import { exportableNodes, exportPng, exportProof, suggestedExportName } from './export';
@@ -162,7 +159,22 @@ describe('exportPng', () => {
     expect(deps.createCanvas).toHaveBeenCalledWith(200, 100); // documentSize, not upscaled/downscaled
     expect(deps.ctx.drawCalls).toBeGreaterThan(0); // compositeScene actually drew something
     expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
-    expect(toast.success).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
+  });
+
+  it('shows a persistent progress snackbar with Cancel, and dismisses it before the result', async () => {
+    const deps = makeDeps(makeScene([pixelNode('a')]));
+
+    await exportPng(deps);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringMatching(/^Exporting 1 \/ 1/),
+        persistent: true,
+        action: expect.objectContaining({ label: 'Cancel' }),
+      }),
+    );
+    expect(dismissNotification).toHaveBeenCalledWith('toast-id');
   });
 
   it('includes the document background image at native size, before the nodes (background-image.md)', async () => {
@@ -196,7 +208,7 @@ describe('exportPng', () => {
     expect(deps.createCanvas).toHaveBeenCalledTimes(2);
     expect(deps.ctx.drawCalls).toBeGreaterThan(0);
     expect(deps.writeFile).toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
   });
 
   it("applies a node's transform2d in the export composite (baked level — translation unscaled)", async () => {
@@ -225,19 +237,24 @@ describe('exportPng', () => {
 
     expect(deps.createCanvas).not.toHaveBeenCalled();
     expect(deps.writeFile).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(
-      'Export failed',
-      expect.objectContaining({ description: expect.stringContaining('sidecar down') }),
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Export failed',
+        kind: 'error',
+        description: expect.stringContaining('sidecar down'),
+      }),
     );
   });
 
-  it('does nothing (no toast.success) when the document has no size', async () => {
+  it('does nothing (no success snackbar) when the document has no size', async () => {
     const deps = makeDeps(makeScene([], [0, 0]));
 
     await exportPng(deps);
 
     expect(deps.cookFullRes).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith('Nothing to export', expect.anything());
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Nothing to export', kind: 'error' }),
+    );
   });
 
   it('cooks nothing and writes nothing when the save dialog is cancelled (dialog comes first)', async () => {
@@ -335,7 +352,7 @@ describe('exportProof', () => {
     expect(sheetCanvas.convertToBlob).toHaveBeenCalled();
     expect(workCanvas.convertToBlob).not.toHaveBeenCalled();
     expect(deps.writeFile).toHaveBeenCalledWith('/out/export.png', expect.any(Uint8Array));
-    expect(toast.success).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
   });
 
   it('defaults a null margin to 8% of the short edge', async () => {

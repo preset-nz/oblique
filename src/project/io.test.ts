@@ -5,8 +5,10 @@ import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn() },
+vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
+  notify: vi.fn(),
+  dismissNotification: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -26,7 +28,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: vi.fn(),
 }));
 
-import { toast } from 'sonner';
+import { notify } from '@preset.nz/ux-kit';
 import * as cache from '@/scene/cache';
 import * as history from '@/scene/history';
 import * as prefixStore from '@/scene/prefixStore';
@@ -396,7 +398,7 @@ describe('document background image round-trip (background-image.md)', () => {
     expect(backgroundSource.heldPath()).toBeUndefined();
   });
 
-  it('setBackgroundImageFromPath holds the bitmap and sets the scene background; decode failure toasts and changes nothing', async () => {
+  it('setBackgroundImageFromPath holds the bitmap and sets the scene background; decode failure raises a snackbar and changes nothing', async () => {
     const decode = vi.fn(async () => ({ width: 60, height: 40, close: vi.fn() }));
     const ok = await setBackgroundImageFromPath('/pics/bg.png', {
       readFile: vi.fn(async () => new Uint8Array([1])),
@@ -417,7 +419,7 @@ describe('document background image round-trip (background-image.md)', () => {
       }),
     });
     expect(failed).toBe(false);
-    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
     expect(useSceneStore.getState().scene.background).toMatchObject({ sourcePath: '/pics/bg.png' });
     expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
   });
@@ -576,13 +578,15 @@ describe('loadProject', () => {
     expect(sources.isSourceMissing('n1')).toBe(true);
   });
 
-  it('corrupt file: toast with filename, scene untouched, app healthy', async () => {
+  it('corrupt file: snackbar with filename, scene untouched, app healthy', async () => {
     const deps = makeDeps({ readTextFile: vi.fn(async () => '{broken') });
     await loadProject('/proj/bad.oblique', deps);
 
     expect(useSceneStore.getState().scene.id).toBe('empty');
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('bad.oblique');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', message: expect.stringContaining('bad.oblique') }),
+    );
   });
 
   describe('baked-bitmap rehydration (baked-persistence.md)', () => {
@@ -621,7 +625,7 @@ describe('loadProject', () => {
 
       await expect(loadProject('/proj/x.oblique', deps)).resolves.not.toThrow();
       expect(cache.get('n1', 'baked')).toBeUndefined();
-      expect(toast.error).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
       expect(useSceneStore.getState().scene.id).toBe('scene-1');
     });
 
@@ -635,7 +639,7 @@ describe('loadProject', () => {
 
       await expect(loadProject('/proj/x.oblique', deps)).resolves.not.toThrow();
       expect(cache.get('n1', 'baked')).toBeUndefined();
-      expect(toast.error).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
     });
 
     it('a v1 project (no baked sidecar ever written) still opens; locked nodes just rehydrate', async () => {
