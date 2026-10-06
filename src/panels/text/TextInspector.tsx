@@ -3,7 +3,7 @@
 // number fields below get their one-undo-step-per-scrub behaviour from there.
 import '@/panels/stack/bootstrap';
 import { PropertyPanel } from '@preset.nz/facets';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { missingFontTooltip, useMissingFont } from '@/fonts/missingFonts';
 import { stackControlsDisabled } from '@/panels/stack/lockUi';
 import type { TextNode } from '@/scene/types';
@@ -42,7 +42,7 @@ export function TextInspector({ node }: { node: TextNode }) {
         aria-label={collapsed ? 'Expand Text' : 'Collapse Text'}
         className="flex w-full items-center gap-1 px-3 pt-2 pb-1 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-neutral-200"
       >
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        {collapsed ? <Icons.CaretRightIcon size={14} /> : <Icons.CaretDownIcon size={14} />}
         Text
       </button>
       {!collapsed && (

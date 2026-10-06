@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import {
   Select,
   SelectContent,
@@ -145,7 +145,7 @@ function PathRow({
           handleDelete();
         }}
       >
-        <Trash2 size={14} />
+        <Icons.TrashIcon size={14} />
       </button>
     </div>
   );

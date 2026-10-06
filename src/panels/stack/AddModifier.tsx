@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useMemo, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -78,7 +78,7 @@ export function AddModifier({
             />
           }
         >
-          <Plus size={14} />
+          <Icons.PlusIcon size={14} />
           Add modifier
         </TooltipTrigger>
         <TooltipContent>

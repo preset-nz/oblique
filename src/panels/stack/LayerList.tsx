@@ -1,14 +1,4 @@
-import {
-  Eye,
-  EyeOff,
-  GripVertical,
-  Loader2,
-  Lock,
-  LockOpen,
-  Trash2,
-  TriangleAlert,
-  VenetianMask,
-} from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -141,7 +131,7 @@ function FontMissingBadge({ node }: { node: TextNode }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <TriangleAlert
+          <Icons.WarningIcon
             size={14}
             className="shrink-0 text-amber-400"
             role="img"
@@ -250,7 +240,11 @@ function LayerRow({
         <Tooltip>
           <TooltipTrigger
             render={
-              <VenetianMask size={14} className="shrink-0 text-amber-400" aria-label="Mask node" />
+              <Icons.MaskHappyIcon
+                size={14}
+                className="shrink-0 text-amber-400"
+                aria-label="Mask node"
+              />
             }
           />
           <TooltipContent>Mask — clips the span below it</TooltipContent>
@@ -292,7 +286,7 @@ function LayerRow({
             />
           }
         >
-          <GripVertical size={14} />
+          <Icons.DotsSixVerticalIcon size={14} />
         </TooltipTrigger>
         <TooltipContent>Drag to reorder</TooltipContent>
       </Tooltip>
@@ -367,7 +361,7 @@ function LayerRow({
                   />
                 }
               >
-                <VenetianMask size={14} />
+                <Icons.MaskHappyIcon size={14} />
               </TooltipTrigger>
               <TooltipContent>
                 {node.output === 'mask' ? 'Use as image' : 'Use as mask'}
@@ -387,7 +381,7 @@ function LayerRow({
                 />
               }
             >
-              {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+              {node.visible ? <Icons.EyeIcon size={14} /> : <Icons.EyeSlashIcon size={14} />}
             </TooltipTrigger>
             <TooltipContent>{node.visible ? 'Hide layer' : 'Show layer'}</TooltipContent>
           </Tooltip>
@@ -407,11 +401,11 @@ function LayerRow({
               }
             >
               {padlockState === 'baking' ? (
-                <Loader2 size={14} className="animate-spin" />
+                <Icons.SpinnerIcon size={14} className="animate-spin" />
               ) : padlockState === 'locked' ? (
-                <Lock size={14} />
+                <Icons.LockIcon size={14} />
               ) : (
-                <LockOpen size={14} />
+                <Icons.LockOpenIcon size={14} />
               )}
             </TooltipTrigger>
             <TooltipContent>
@@ -436,7 +430,7 @@ function LayerRow({
                 />
               }
             >
-              <Trash2 size={14} />
+              <Icons.TrashIcon size={14} />
             </TooltipTrigger>
             <TooltipContent>Delete layer</TooltipContent>
           </Tooltip>

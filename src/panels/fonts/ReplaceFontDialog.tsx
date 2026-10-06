@@ -1,4 +1,4 @@
-import { TriangleAlert } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
@@ -55,7 +55,7 @@ function Row({
     <div className="flex flex-col gap-2 rounded border border-neutral-800 p-3">
       <div className="flex items-center gap-2 text-sm">
         {used.missing && (
-          <TriangleAlert
+          <Icons.WarningIcon
             size={14}
             className="shrink-0 text-amber-400"
             role="img"

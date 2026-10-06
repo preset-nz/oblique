@@ -1,5 +1,5 @@
+import { Icons } from '@preset.nz/ux-kit';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { stackControlsDisabled } from '@/panels/stack/lockUi';
 import { tauriImportDeps } from '@/project/import';
@@ -92,7 +92,7 @@ export function ImageInspector({ node }: { node: PixelNode }) {
         aria-label={collapsed ? 'Expand Image' : 'Collapse Image'}
         className="flex w-full items-center gap-1 px-3 pt-2 pb-1 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-neutral-200"
       >
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        {collapsed ? <Icons.CaretRightIcon size={14} /> : <Icons.CaretDownIcon size={14} />}
         Image
       </button>
       {!collapsed && (

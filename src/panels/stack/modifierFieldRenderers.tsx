@@ -1,5 +1,5 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
-import { Pipette } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useEffect, useId, useRef } from 'react';
 import { InputNumber } from '@/components/InputNumber';
 import { LabelTip } from '@/components/LabelTip';
@@ -231,7 +231,7 @@ function EyedropperButton({
           active && 'text-sky-400 hover:text-sky-400',
         )}
       >
-        <Pipette size={14} />
+        <Icons.EyedropperIcon size={14} />
       </button>
     </LabelTip>
   );

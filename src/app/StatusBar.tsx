@@ -1,4 +1,4 @@
-import { Minus, Plus } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -88,7 +88,7 @@ export function StatusBar() {
       {/* Zoom level */}
       <div className="flex items-center gap-0.5 whitespace-nowrap">
         <ZoomButton label="Zoom Out" shortcut="⌘−" onClick={zoomOut}>
-          <Minus size={12} aria-hidden="true" />
+          <Icons.MinusIcon size={12} aria-hidden="true" />
         </ZoomButton>
         <ZoomButton
           label="Fit in Window"
@@ -99,7 +99,7 @@ export function StatusBar() {
           {zoomPercent}%
         </ZoomButton>
         <ZoomButton label="Zoom In" shortcut="⌘=" onClick={zoomIn}>
-          <Plus size={12} aria-hidden="true" />
+          <Icons.PlusIcon size={12} aria-hidden="true" />
         </ZoomButton>
       </div>
 

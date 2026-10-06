@@ -6,7 +6,7 @@ import {
   ReadOnlyText,
   registerFieldRenderer,
 } from '@preset.nz/facets';
-import { Star, TriangleAlert } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -58,7 +58,7 @@ function MissingMarker({ hint }: { hint: string }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <TriangleAlert
+          <Icons.WarningIcon
             size={12}
             className="shrink-0 text-amber-400"
             role="img"
@@ -116,7 +116,7 @@ function PickerRow({
           void toggleFavourite(group.family);
         }}
       >
-        <Star size={12} fill={starred ? 'currentColor' : 'none'} />
+        <Icons.StarIcon size={12} weight={starred ? 'fill' : 'regular'} />
       </button>
     </div>
   );
@@ -213,7 +213,7 @@ export function FontFamilyField({
                     />
                   }
                 >
-                  <Star size={14} fill={favouritesOnly ? 'currentColor' : 'none'} />
+                  <Icons.StarIcon size={14} weight={favouritesOnly ? 'fill' : 'regular'} />
                 </TooltipTrigger>
                 <TooltipContent>Favourites only</TooltipContent>
               </Tooltip>

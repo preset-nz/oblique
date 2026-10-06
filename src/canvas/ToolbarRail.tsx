@@ -1,14 +1,4 @@
-import {
-  Circle,
-  Hand,
-  Lasso,
-  Move,
-  PenTool as PenToolIcon,
-  Pipette,
-  Square,
-  Type as TypeIcon,
-  Wand2,
-} from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidecarStatusStore } from '@/sidecar/client';
 import { type Tool, useToolStateStore } from './toolState';
@@ -16,7 +6,7 @@ import { type Tool, useToolStateStore } from './toolState';
 interface ToolButtonSpec {
   tool: Tool;
   label: string;
-  icon: typeof Hand;
+  icon: Icons.Icon;
   disabled?: boolean;
   /**
    * Gated on live sidecar connectivity, not on any static `disabled` flag
@@ -30,27 +20,27 @@ interface ToolButtonSpec {
 }
 
 const TOOLS: ToolButtonSpec[] = [
-  { tool: 'pan', label: 'Pan', icon: Hand },
-  { tool: 'move', label: 'Move (V)', icon: Move },
-  { tool: 'select-rect', label: 'Rectangle select (M)', icon: Square },
-  { tool: 'select-ellipse', label: 'Ellipse select', icon: Circle },
-  { tool: 'select-lasso', label: 'Lasso select', icon: Lasso },
+  { tool: 'pan', label: 'Pan', icon: Icons.HandIcon },
+  { tool: 'move', label: 'Move (V)', icon: Icons.ArrowsOutCardinalIcon },
+  { tool: 'select-rect', label: 'Rectangle select (M)', icon: Icons.SquareIcon },
+  { tool: 'select-ellipse', label: 'Ellipse select', icon: Icons.CircleIcon },
+  { tool: 'select-lasso', label: 'Lasso select', icon: Icons.LassoIcon },
   {
     tool: 'select-smart',
     label: 'Smart select — click an object; Alt-click to exclude; drag a box',
-    icon: Wand2,
+    icon: Icons.MagicWandIcon,
     sidecarGated: true,
     disabledHint: 'Smart select — Sidecar not running',
   },
   {
     tool: 'select-colour',
     label: 'Colour select — click a colour; Alt-click to exclude; Shift-click adds',
-    icon: Pipette,
+    icon: Icons.EyedropperIcon,
     sidecarGated: true,
     disabledHint: 'Colour select — Sidecar not running',
   },
-  { tool: 'pen', label: 'Pen', icon: PenToolIcon },
-  { tool: 'text', label: 'Text (T)', icon: TypeIcon },
+  { tool: 'pen', label: 'Pen', icon: Icons.PenNibIcon },
+  { tool: 'text', label: 'Text (T)', icon: Icons.TextTIcon },
 ];
 
 /**

@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 // `modifier:<opType>` scopes (re-registered whenever the ops cache
 // updates). See bootstrap.ts for the singleton rationale.
 import './stack/bootstrap';
-import { Lock } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { ImageInspector } from '@/panels/image/ImageInspector';
 import { AddModifier } from '@/panels/stack/AddModifier';
 import { LayerList } from '@/panels/stack/LayerList';
@@ -101,7 +101,7 @@ export function StackPanel() {
             explaining why every row below just went inert. */}
         {locked && (
           <div className="mb-1 flex items-center gap-1.5 rounded border border-amber-900/40 bg-amber-950/20 px-2 py-1 text-xs text-amber-400">
-            <Lock size={12} />
+            <Icons.LockIcon size={12} />
             {LOCKED_HINT}
           </div>
         )}

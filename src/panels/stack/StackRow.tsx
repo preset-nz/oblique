@@ -1,18 +1,5 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import {
-  Blend,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  Eye,
-  EyeOff,
-  GripVertical,
-  MoreVertical,
-  RotateCcw,
-  Spline,
-  Trash2,
-  Type,
-} from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useState } from 'react';
 import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -165,7 +152,7 @@ export function StackRow({
               />
             }
           >
-            <GripVertical size={14} />
+            <Icons.DotsSixVerticalIcon size={14} />
           </TooltipTrigger>
           <TooltipContent>{locked ? LOCKED_HINT : 'Drag to reorder'}</TooltipContent>
         </Tooltip>
@@ -182,7 +169,7 @@ export function StackRow({
               />
             }
           >
-            {modifier.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
+            {modifier.enabled ? <Icons.EyeIcon size={14} /> : <Icons.EyeSlashIcon size={14} />}
           </TooltipTrigger>
           <TooltipContent>
             {locked ? LOCKED_HINT : modifier.enabled ? 'Disable' : 'Enable'}
@@ -197,9 +184,9 @@ export function StackRow({
         >
           {expandable ? (
             expanded ? (
-              <ChevronDown size={14} />
+              <Icons.CaretDownIcon size={14} />
             ) : (
-              <ChevronRight size={14} />
+              <Icons.CaretRightIcon size={14} />
             )
           ) : (
             // Spacer keeps param-less rows' labels aligned with expandable ones.
@@ -210,7 +197,11 @@ export function StackRow({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <Blend size={12} className="shrink-0 text-neutral-500" aria-label="Masked" />
+                  <Icons.CircleHalfIcon
+                    size={12}
+                    className="shrink-0 text-neutral-500"
+                    aria-label="Masked"
+                  />
                 }
               />
               <TooltipContent>
@@ -235,7 +226,7 @@ export function StackRow({
                 />
               }
             >
-              <MoreVertical size={14} />
+              <Icons.DotsThreeVerticalIcon size={14} />
             </TooltipTrigger>
             <TooltipContent>Options</TooltipContent>
           </Tooltip>
@@ -246,7 +237,7 @@ export function StackRow({
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={duplicate}
             >
-              <Copy size={12} /> Duplicate
+              <Icons.CopyIcon size={12} /> Duplicate
             </button>
             <button
               type="button"
@@ -254,7 +245,7 @@ export function StackRow({
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={resetParams}
             >
-              <RotateCcw size={12} /> Reset params
+              <Icons.ArrowCounterClockwiseIcon size={12} /> Reset params
             </button>
             <button
               type="button"
@@ -262,7 +253,7 @@ export function StackRow({
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={maskFromSelection}
             >
-              <Blend size={12} />{' '}
+              <Icons.CircleHalfIcon size={12} />{' '}
               {modifier.maskId ? 'Replace mask from selection' : 'Mask from selection'}
             </button>
             <button
@@ -271,7 +262,7 @@ export function StackRow({
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={() => !locked && setVectorPickerOpen((open) => !open)}
             >
-              <Spline size={12} />{' '}
+              <Icons.BezierCurveIcon size={12} />{' '}
               {modifier.maskId
                 ? 'Replace mask from vector or text layer'
                 : 'Mask from vector or text layer'}
@@ -319,9 +310,9 @@ export function StackRow({
                     onClick={() => maskFromVectorNode(v.id)}
                   >
                     {isTextNode(v) ? (
-                      <Type size={12} className="mr-1 inline" />
+                      <Icons.TextTIcon size={12} className="mr-1 inline" />
                     ) : (
-                      <Spline size={12} className="mr-1 inline" />
+                      <Icons.BezierCurveIcon size={12} className="mr-1 inline" />
                     )}
                     {v.label}
                   </button>
@@ -353,7 +344,7 @@ export function StackRow({
                 className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
                 onClick={() => !locked && removeModifierMask(node.id, modifier.id)}
               >
-                <Blend size={12} className="opacity-40" /> Remove mask
+                <Icons.CircleHalfIcon size={12} className="opacity-40" /> Remove mask
               </button>
             )}
             <button
@@ -362,7 +353,7 @@ export function StackRow({
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={() => !locked && removeModifier(node.id, modifier.id)}
             >
-              <Trash2 size={12} /> Delete
+              <Icons.TrashIcon size={12} /> Delete
             </button>
           </PopoverContent>
         </Popover>
