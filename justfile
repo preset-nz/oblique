@@ -41,6 +41,9 @@ check:
     uv run --project sidecar ruff format --check .
     uv run --project sidecar pytest sidecar
     ./node_modules/.bin/vitest run
+    # tauri-build wants bundle.resources to exist; on a clean clone (CI) the PyInstaller
+    # output isn't there, and checking doesn't need it. An existing build is left alone.
+    mkdir -p sidecar/dist/oblique-sidecar
     cargo test --manifest-path src-tauri/Cargo.toml --lib
     ./node_modules/.bin/depcruise src
     just licences
