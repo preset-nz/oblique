@@ -43,9 +43,7 @@ check:
     ./node_modules/.bin/vitest run
     cargo test --manifest-path src-tauri/Cargo.toml --lib
     ./node_modules/.bin/depcruise src
-    node scripts/check-licenses.mjs
-    python3 scripts/check_python_licenses.py
-    python3 scripts/check_rust_licenses.py
+    just licences
 
 # Opt-in: every real project opens, saves (to memory) and reopens to the same tree. Takes
 # colon-separated .oblique files and only reads them; needs `uv` for the op catalogue.
@@ -54,12 +52,13 @@ check:
 coverage files:
     OBLIQUE_FILES="{{files}}" cargo test --manifest-path src-tauri/Cargo.toml --lib real_projects -- --ignored --nocapture
 
-# Licence gate only (also part of `check`) — permissive allowlist, see script header.
+# Licence check (also part of `check`). Reads files only, no network. Re-resolve with
+# `preset-compliance licences scan` after changing dependencies.
+# check_python_licenses.py stays for the sidecar: preset-compliance doesn't scan uv.lock yet.
 [group('quality')]
-licenses:
-    node scripts/check-licenses.mjs
+licences:
+    preset-compliance licences check
     python3 scripts/check_python_licenses.py
-    python3 scripts/check_rust_licenses.py
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
@@ -113,3 +112,4 @@ package: build
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
         zip -q "${product}-v${version}.zip" README.txt THIRD-PARTY-LICENSES)
     echo "Packaged: $outdir/${product}-v${version}.zip"
+
