@@ -273,13 +273,14 @@ describe('rasterizeVectorMask — node-pinned frame (mask-follows-node.md)', () 
     expect(p.some((v) => v === 0)).toBe(true);
   });
 
-  it.each(
-    moves,
-  )("node-pinned (%s): attached at T, consumer later at T' -> byte-identical to document-pinned while the consumer was at T", (_name, later) => {
-    const documentAtT = plane(ref, attachedAt);
-    const nodePinnedLater = plane({ ...ref, space: 'node', attachTransform: attachedAt }, later);
-    expect(Array.from(nodePinnedLater)).toEqual(Array.from(documentAtT));
-  });
+  it.each(moves)(
+    "node-pinned (%s): attached at T, consumer later at T' -> byte-identical to document-pinned while the consumer was at T",
+    (_name, later) => {
+      const documentAtT = plane(ref, attachedAt);
+      const nodePinnedLater = plane({ ...ref, space: 'node', attachTransform: attachedAt }, later);
+      expect(Array.from(nodePinnedLater)).toEqual(Array.from(documentAtT));
+    },
+  );
 
   it('document-pinned stays where it is on the page: moving the consumer changes the plane', () => {
     const atT = plane(ref, attachedAt);

@@ -1262,7 +1262,8 @@ describe('cookNode — prefix cache', () => {
     expect(h.deps[rasterizer]).toHaveBeenCalledTimes(1);
     expect(h.calls[0].payload).toEqual(sourcePattern(100, 50));
     expect(h.calls[0].modifiers[0].params.black).toBe(
-      (h.nodeRef.current.modifiers.find((m) => m.enabled)?.params as { black: number }).black,
+      (h.nodeRef.current.modifiers.find((m) => m.enabled)?.params as { black: number } | undefined)
+        ?.black,
     );
   }
 

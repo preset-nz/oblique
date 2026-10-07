@@ -315,7 +315,7 @@ export class FakeHost implements RhizomeBackend {
       this.rows = before;
       throw e;
     }
-    if (!this.gesture || !this.gesture.saved) this.undos.push(before);
+    if (!this.gesture?.saved) this.undos.push(before);
     if (this.gesture) this.gesture.saved = true;
     this.redos = [];
     this.seq += 1;
