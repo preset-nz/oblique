@@ -24,11 +24,11 @@ sha256 = "3f62a6c1e1d305d8fd2e9aa9a359db23fd0c40de581e778c53dd577e9c231073"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "23511473e1d740123a81c18bef4094f85f6782a5515c41ddbb07f7f13f05d0ee"
+sha256 = "2894d78d83dd80655c8d74af6fef7522e70cfaaca1f53e069c308c2a4892ded7"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "e297ea3bfa8d5e23ed0400cf056d5b742508e456b7b9e866e2760d68d28b6182"
+sha256 = "4ba2d087a738bf8f4e02b6e88abd6e957643c627260a1961863f3835c7a25132"
 
 [[packages]]
 ecosystem = "cargo"

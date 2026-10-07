@@ -96,7 +96,7 @@ package: build
     set -euo pipefail
     node scripts/generate-third-party-licenses.mjs
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
-    version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+    version=$(node -p "require('./package.json').version")
     outdir="dist-friends-build"
     rm -rf "$outdir"
     mkdir -p "$outdir"
@@ -113,3 +113,13 @@ package: build
         zip -q "${product}-v${version}.zip" README.txt THIRD-PARTY-LICENSES)
     echo "Packaged: $outdir/${product}-v${version}.zip"
 
+# Version, changelog, commit and tag from the conventional commits since the last
+# tag (knope.toml). Push stays by hand.
+[group('build')]
+release:
+    knope release
+
+# What `release` would do, without touching anything.
+[group('build')]
+release-preview:
+    knope release --dry-run
