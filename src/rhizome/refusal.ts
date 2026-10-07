@@ -22,6 +22,7 @@ export const ON_RHIZOME = [
   'addVectorNode',
   'addTextNode',
   'setTextProps',
+  'setPixelSource',
 ] as const;
 
 /** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */

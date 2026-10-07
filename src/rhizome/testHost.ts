@@ -1,6 +1,6 @@
 /**
- * A fake document host for the tests: the commands story 1 moves (`layer.add`, `values.set`,
- * `text.set`, `document.set_size`, undo and redo, gestures), applied to rows built with the
+ * A fake document host for the tests: the commands moved so far (`layer.add`, `values.set`,
+ * `text.set`, `document.set_size`, `layer.set_source`, undo and redo, gestures), applied to rows built with the
  * adapter's `rowsFromScene`, and emitted as updates before the command answers, as Tauri
  * does. A stand-in for src-tauri/src/document, whose own tests hold the real rules.
  */
@@ -44,6 +44,12 @@ export class FakeHost implements RhizomeBackend {
   hold: Promise<void> | null = null;
   /** Command ids that fail. */
   reject = new Set<string>();
+  /**
+   * What Rust decides besides the path and size when `layer.set_source` brings a different
+   * size (the fit and the mask refits, which only the Rust tests hold the rules for): a test
+   * supplies the outcome it wants the webview to apply.
+   */
+  decided: ((layer: Row, rows: Map<string, Row>, size: [number, number]) => void) | null = null;
 
   private onCommit: ((u: Update) => void)[] = [];
   private onState: ((s: Status) => void)[] = [];
@@ -213,6 +219,19 @@ export class FakeHost implements RhizomeBackend {
           for (const [k, v] of Object.entries(patch)) this.setValue(row, k, v);
           if (typeof patch.content === 'string' && label === before) {
             this.setValue(row, 'label', textLabel(patch.content));
+          }
+        });
+      case 'layer.set_source':
+        return this.commit('Replace Image', () => {
+          const row = this.at(p.at as string);
+          if (row.type !== 'pixel') throw new Error(`${p.at} isn't a pixel layer`);
+          if (val(row, 'state') === 'locked') throw new Error(`${p.at} is locked`);
+          row.refs = { ...row.refs, source: { file: p.sourcePath as string } };
+          const size = p.sourceSize as [number, number] | undefined;
+          const have = val(row, 'sourceSize') as [number, number];
+          if (size && (size[0] !== have[0] || size[1] !== have[1])) {
+            this.setValue(row, 'sourceSize', size);
+            this.decided?.(row, this.rows, size);
           }
         });
       case 'document.set_size':

@@ -28,7 +28,7 @@ Local-first image editor built around a modifier stack. Tauri 2 + React 19 + Typ
 
 ## Naming
 
-The product name may still change. The display name exists in exactly two places: `src/branding.ts` (`PRODUCT_NAME`) and `src-tauri/tauri.conf.json` (`productName` + window title). Never hardcode "Oblique" in user-facing strings — import `PRODUCT_NAME`.
+The product name may still change. The display name exists in exactly two places: `src/branding.ts` (`PRODUCT_NAME`) and `src-tauri/tauri.conf.json` (`productName`, window title, and the `.oblique` document type name in `fileAssociations`). Never hardcode "Oblique" in user-facing strings — import `PRODUCT_NAME`.
 
 ## Language
 

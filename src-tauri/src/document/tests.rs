@@ -3,11 +3,14 @@
 
 use std::sync::Arc;
 
-use rhizome_core::{IdSource, Value};
-use rhizome_pom::{Document, Host, MemoryStore, Outcome, Pom};
+use rhizome_core::{IdSource, On, Value};
+use rhizome_pom::{Document, FileStore, Host, MemoryStore, Outcome, Pom};
 use serde_json::{json, Value as Json};
 
-use super::{Catalogue, DocumentHost, Oblique, Op, OpParam};
+use super::{
+    fit_replaced_transform, refit_attach_transform, Catalogue, DocumentHost, Oblique, Op, OpParam,
+    Placement,
+};
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
     OpParam {
@@ -977,6 +980,430 @@ fn the_host_refuses_a_write_to_a_missing_layer_and_names_it() {
     assert_eq!(pom.tree(), before);
 }
 
+// ---- layer.set_source ----
+
+fn set_source(
+    d: &mut Document<Oblique>,
+    at: &str,
+    path: &str,
+    size: Option<[f64; 2]>,
+) -> rhizome_pom::Result<Outcome> {
+    let mut p = json!({"at": at, "sourcePath": path});
+    if let Some(size) = size {
+        p["sourceSize"] = json!(size);
+    }
+    d.run("layer.set_source", &p)
+}
+
+/// A pixel layer as the TypeScript replace-source tests build it: 512x512, moved, flipped
+/// horizontally and turned.
+fn placed(id: &str) -> Json {
+    let mut n = node(id, "pixel");
+    n["sourcePath"] = json!("/old/a.png");
+    n["sourceSize"] = json!([512.0, 512.0]);
+    n["transform2d"] =
+        json!({"x": 100.0, "y": 40.0, "scaleX": -1.0, "scaleY": 1.0, "rotation": 0.3});
+    n
+}
+
+fn placement(d: &Document<Oblique>, at: &str) -> Placement {
+    let f = |key: &str| match value(d, at, key) {
+        Some(Value::Vec2(v)) => v,
+        other => panic!("{key}: {other:?}"),
+    };
+    let Some(Value::Float(rotation)) = value(d, at, "transform2d.rotation") else {
+        panic!("no rotation");
+    };
+    Placement {
+        x: f("transform2d.position")[0],
+        y: f("transform2d.position")[1],
+        scale_x: f("transform2d.scale")[0],
+        scale_y: f("transform2d.scale")[1],
+        rotation,
+    }
+}
+
+fn source_of(d: &Document<Oblique>, at: &str) -> String {
+    d.tree()
+        .at(at)
+        .unwrap()
+        .reference("source")
+        .and_then(|r| r.file.clone())
+        .unwrap_or_default()
+}
+
+/// A modifier named `id` with a mask on `layer`: a vector layer `v` bound onto its mask slot.
+fn with_masks(d: &mut Document<Oblique>, layer: Json, masks: &[(&str, Json)]) {
+    let mut layer = layer;
+    layer["modifiers"] = json!(masks
+        .iter()
+        .enumerate()
+        .map(|(i, _)| json!({"id": format!("m{}", i + 1), "type": "blur", "enabled": true, "params": {}}))
+        .collect::<Vec<_>>());
+    add(d, layer.clone()).unwrap();
+    add(d, node("v", "vector")).unwrap();
+    let id = layer["id"].as_str().unwrap().to_string();
+    for (i, (mask, attach)) in masks.iter().enumerate() {
+        let space = if attach.is_null() {
+            Json::Null
+        } else {
+            json!("node")
+        };
+        d.edit("Mask", |tx| {
+            tx.bind(
+                format!("/layers/{id}/m{}", i + 1).as_str(),
+                On::slot("mask"),
+                "/layers/v",
+                [
+                    ("refId", Value::Text(mask.to_string())),
+                    ("featherPx", Value::Float(0.0)),
+                    ("expand", Value::Float(0.0)),
+                    ("invert", Value::Bool(false)),
+                    ("space", Value::Shaped(space)),
+                    ("attachTransform", Value::Shaped(attach.clone())),
+                ],
+            )
+        })
+        .unwrap();
+    }
+}
+
+fn mask_value(d: &Document<Oblique>, modifier: &str, key: &str) -> Json {
+    d.tree().at(modifier).unwrap().bindings()[0]
+        .value(key)
+        .unwrap()
+        .to_json()
+}
+
+fn attach_of(d: &Document<Oblique>, modifier: &str) -> Placement {
+    Placement::from_json(&mask_value(d, modifier, "attachTransform")).unwrap()
+}
+
+/// Node-local -> document space for a node with transform `t` and source `w`x`h`: scale and
+/// rotate about the box centre (src/scene/maskRasterize.ts `localToDocMatrix`).
+fn local_to_doc(t: Placement, w: f64, h: f64, px: f64, py: f64) -> (f64, f64) {
+    let (cos, sin) = (t.rotation.cos(), t.rotation.sin());
+    let (cx, cy) = (t.x + w / 2.0, t.y + h / 2.0);
+    let (a, b, c, d) = (
+        cos * t.scale_x,
+        sin * t.scale_x,
+        -sin * t.scale_y,
+        cos * t.scale_y,
+    );
+    let e = cx - (a * (w / 2.0) + c * (h / 2.0));
+    let f = cy - (b * (w / 2.0) + d * (h / 2.0));
+    (a * px + c * py + e, b * px + d * py + f)
+}
+
+/// Its inverse (`docToLocalMatrix`).
+fn doc_to_local(t: Placement, w: f64, h: f64, px: f64, py: f64) -> (f64, f64) {
+    let (cos, sin) = (t.rotation.cos(), t.rotation.sin());
+    let sx = if t.scale_x == 0.0 {
+        0.0
+    } else {
+        1.0 / t.scale_x
+    };
+    let sy = if t.scale_y == 0.0 {
+        0.0
+    } else {
+        1.0 / t.scale_y
+    };
+    let (cx, cy) = (t.x + w / 2.0, t.y + h / 2.0);
+    let (a, c, b, d) = (cos * sx, sin * sx, -sin * sy, cos * sy);
+    let e = w / 2.0 - (a * cx + c * cy);
+    let f = h / 2.0 - (b * cx + d * cy);
+    (a * px + c * py + e, b * px + d * py + f)
+}
+
+fn near(a: f64, b: f64) {
+    assert!((a - b).abs() < 1e-9, "{a} vs {b}");
+}
+
+fn near_placement(a: Placement, b: Placement) {
+    near(a.x, b.x);
+    near(a.y, b.y);
+    near(a.scale_x, b.scale_x);
+    near(a.scale_y, b.scale_y);
+    near(a.rotation, b.rotation);
+}
+
+fn identity() -> Placement {
+    Placement {
+        x: 0.0,
+        y: 0.0,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        rotation: 0.0,
+    }
+}
+
+#[test]
+fn set_source_without_a_size_changes_only_the_path() {
+    let mut d = doc();
+    add(&mut d, placed("a")).unwrap();
+    let before = placement(&d, "/layers/a");
+    set_source(&mut d, "/layers/a", "/elsewhere.png", None).unwrap();
+    assert_eq!(source_of(&d, "/layers/a"), "/elsewhere.png");
+    assert_eq!(
+        value(&d, "/layers/a", "sourceSize"),
+        Some(Value::Vec2([512.0, 512.0]))
+    );
+    assert_eq!(placement(&d, "/layers/a"), before);
+    // the same size is a path-only change too: nothing to fit
+    set_source(&mut d, "/layers/a", "/same.png", Some([512.0, 512.0])).unwrap();
+    assert_eq!(source_of(&d, "/layers/a"), "/same.png");
+    assert_eq!(placement(&d, "/layers/a"), before);
+}
+
+#[test]
+fn set_source_with_nothing_new_is_not_a_step() {
+    let mut d = doc();
+    add(&mut d, placed("a")).unwrap();
+    let steps = d.tree().history_len();
+    let before = d.tree().serialise();
+    set_source(&mut d, "/layers/a", "/old/a.png", Some([512.0, 512.0])).unwrap();
+    set_source(&mut d, "/layers/a", "/old/a.png", None).unwrap();
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn set_source_is_one_undo_step_named_replace_image() {
+    let mut d = doc();
+    add(&mut d, placed("a")).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    set_source(&mut d, "/layers/a", "/new/b.png", Some([4000.0, 2000.0])).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    assert_eq!(d.tree().undo_label().as_deref(), Some("Replace Image"));
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before);
+    d.redo().unwrap();
+    assert_eq!(source_of(&d, "/layers/a"), "/new/b.png");
+}
+
+#[test]
+fn set_source_with_a_new_size_fits_the_old_footprint() {
+    let mut d = doc();
+    add(&mut d, placed("a")).unwrap();
+    set_source(&mut d, "/layers/a", "/new/b.png", Some([4000.0, 2000.0])).unwrap();
+    assert_eq!(source_of(&d, "/layers/a"), "/new/b.png");
+    assert_eq!(
+        value(&d, "/layers/a", "sourceSize"),
+        Some(Value::Vec2([4000.0, 2000.0]))
+    );
+    let t = placement(&d, "/layers/a");
+    // the box stays 512 wide and becomes 256 tall, centred where it was
+    near(4000.0 * t.scale_x.abs(), 512.0);
+    near(2000.0 * t.scale_y.abs(), 256.0);
+    near(t.rotation, 0.3);
+    assert!(t.scale_x < 0.0 && t.scale_y > 0.0, "flip survives: {t:?}");
+    let old = Placement {
+        x: 100.0,
+        y: 40.0,
+        scale_x: -1.0,
+        scale_y: 1.0,
+        rotation: 0.3,
+    };
+    let (bx, by) = local_to_doc(old, 512.0, 512.0, 256.0, 256.0);
+    let (ax, ay) = local_to_doc(t, 4000.0, 2000.0, 2000.0, 1000.0);
+    near(ax, bx);
+    near(ay, by);
+    // everything else about the layer is untouched
+    assert_eq!(value(&d, "/layers/a", "opacity"), Some(Value::Float(1.0)));
+    assert_eq!(
+        value(&d, "/layers/a", "label"),
+        Some(Value::Text("Layer".into()))
+    );
+}
+
+#[test]
+fn set_source_fits_a_layer_that_was_never_moved() {
+    let mut d = doc();
+    let mut n = node("a", "pixel");
+    n["sourceSize"] = json!([100.0, 100.0]);
+    add(&mut d, n).unwrap();
+    set_source(&mut d, "/layers/a", "/new.png", Some([50.0, 25.0])).unwrap();
+    let t = placement(&d, "/layers/a");
+    near(t.scale_x, 2.0);
+    near(t.scale_y, 2.0);
+    let (cx, cy) = local_to_doc(t, 50.0, 25.0, 25.0, 12.5);
+    near(cx, 50.0);
+    near(cy, 50.0);
+}
+
+#[test]
+fn fit_replaced_transform_cases() {
+    // 512x512 -> 4000x2000 from {100, 40}
+    let t = fit_replaced_transform(
+        Placement {
+            x: 100.0,
+            y: 40.0,
+            ..identity()
+        },
+        [512.0, 512.0],
+        [4000.0, 2000.0],
+    );
+    near(4000.0 * t.scale_x.abs(), 512.0);
+    near(2000.0 * t.scale_y.abs(), 256.0);
+
+    // rotated, h-flipped, moved, non-uniformly scaled: centre, rotation and flip kept, uniform fit
+    let old = Placement {
+        x: -37.0,
+        y: 211.0,
+        scale_x: -1.5,
+        scale_y: 0.75,
+        rotation: 0.6,
+    };
+    let (w0, h0, w1, h1) = (640.0, 480.0, 300.0, 900.0);
+    let next = fit_replaced_transform(old, [w0, h0], [w1, h1]);
+    assert_eq!(next.rotation, old.rotation);
+    assert!(next.scale_x < 0.0 && next.scale_y > 0.0);
+    near(next.scale_x.abs(), next.scale_y.abs());
+    let (c0, c1) = (
+        local_to_doc(old, w0, h0, w0 / 2.0, h0 / 2.0),
+        local_to_doc(next, w1, h1, w1 / 2.0, h1 / 2.0),
+    );
+    near(c1.0, c0.0);
+    near(c1.1, c0.1);
+    // the new image's corners, in the old node's local frame, sit inside the old box and touch it
+    let corners: Vec<(f64, f64)> = [(0.0, 0.0), (w1, 0.0), (w1, h1), (0.0, h1)]
+        .iter()
+        .map(|(x, y)| {
+            let (dx, dy) = local_to_doc(next, w1, h1, *x, *y);
+            doc_to_local(old, w0, h0, dx, dy)
+        })
+        .collect();
+    for (x, y) in &corners {
+        assert!(
+            *x > -1e-6 && *x < w0 + 1e-6 && *y > -1e-6 && *y < h0 + 1e-6,
+            "{x},{y}"
+        );
+    }
+    let (min_x, max_x) = corners.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+        (lo.min(p.0), hi.max(p.0))
+    });
+    let (min_y, max_y) = corners.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+        (lo.min(p.1), hi.max(p.1))
+    });
+    assert!((min_x < 1e-6 && max_x > w0 - 1e-6) || (min_y < 1e-6 && max_y > h0 - 1e-6));
+
+    // a collapsed old footprint keeps its scale and still preserves the centre
+    let collapsed = fit_replaced_transform(
+        Placement {
+            x: 10.0,
+            y: 10.0,
+            scale_x: 0.0,
+            scale_y: 1.0,
+            rotation: 0.0,
+        },
+        [100.0, 100.0],
+        [40.0, 40.0],
+    );
+    assert_eq!((collapsed.scale_x, collapsed.scale_y), (0.0, 1.0));
+    near(collapsed.x + 20.0, 10.0 + 50.0);
+}
+
+#[test]
+fn set_source_refits_a_node_space_mask_and_leaves_a_document_space_one() {
+    let mut d = doc();
+    let attach = json!({"x": 100.0, "y": 40.0, "scaleX": -1.0, "scaleY": 1.0, "rotation": 0.3});
+    with_masks(
+        &mut d,
+        placed("a"),
+        &[("mask1", attach.clone()), ("mask2", Json::Null)],
+    );
+    let doc_space = mask_value(&d, "/layers/a/m2", "attachTransform");
+    set_source(&mut d, "/layers/a", "/new/b.png", Some([1024.0, 256.0])).unwrap();
+    let next = placement(&d, "/layers/a");
+    // the same node frame at attach time as now: the refitted snapshot IS the new transform
+    let refit = attach_of(&d, "/layers/a/m1");
+    assert_ne!(refit, Placement::from_json(&attach).unwrap());
+    near_placement(refit, next);
+    // the rest of the binding survives, and the document-space mask is untouched
+    assert_eq!(mask_value(&d, "/layers/a/m1", "refId"), json!("mask1"));
+    assert_eq!(mask_value(&d, "/layers/a/m1", "space"), json!("node"));
+    assert_eq!(mask_value(&d, "/layers/a/m2", "attachTransform"), doc_space);
+    assert_eq!(mask_value(&d, "/layers/a/m2", "space"), Json::Null);
+    assert_eq!(mask_value(&d, "/layers/a/m2", "refId"), json!("mask2"));
+    // one step, and undo puts the snapshot back too
+    assert_eq!(d.tree().undo_label().as_deref(), Some("Replace Image"));
+    d.undo().unwrap();
+    assert_eq!(
+        Placement::from_json(&mask_value(&d, "/layers/a/m1", "attachTransform")).unwrap(),
+        Placement::from_json(&attach).unwrap()
+    );
+}
+
+#[test]
+fn a_node_space_mask_covers_the_same_canvas_region_after_the_replace() {
+    let mut d = doc();
+    let mut n = node("a", "pixel");
+    n["sourceSize"] = json!([800.0, 600.0]);
+    n["transform2d"] =
+        json!({"x": 50.0, "y": -20.0, "scaleX": -1.25, "scaleY": 0.8, "rotation": 0.4});
+    let attach = json!({"x": 10.0, "y": 30.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.1});
+    with_masks(&mut d, n, &[("mask1", attach.clone())]);
+    let old = placement(&d, "/layers/a");
+    let attach0 = Placement::from_json(&attach).unwrap();
+    set_source(&mut d, "/layers/a", "/new.png", Some([1200.0, 500.0])).unwrap();
+    let next = placement(&d, "/layers/a");
+    let attach1 = attach_of(&d, "/layers/a/m1");
+    for (px, py) in [(0.0, 0.0), (123.0, 456.0), (-50.0, 700.0), (900.0, 90.0)] {
+        // a shape point (document space) goes into the mask buffer through the snapshot, then
+        // out through the node's placement
+        let (lx, ly) = doc_to_local(attach0, 800.0, 600.0, px, py);
+        let (bx, by) = local_to_doc(old, 800.0, 600.0, lx, ly);
+        let (lx, ly) = doc_to_local(attach1, 1200.0, 500.0, px, py);
+        let (ax, ay) = local_to_doc(next, 1200.0, 500.0, lx, ly);
+        near(ax, bx);
+        near(ay, by);
+    }
+    // without the refit the mask would have moved
+    let (lx, ly) = doc_to_local(attach0, 1200.0, 500.0, 100.0, 100.0);
+    let (ax, ay) = local_to_doc(next, 1200.0, 500.0, lx, ly);
+    let (lx, ly) = doc_to_local(attach0, 800.0, 600.0, 100.0, 100.0);
+    let (bx, by) = local_to_doc(old, 800.0, 600.0, lx, ly);
+    assert!((ax - bx).hypot(ay - by) > 1.0);
+    // and the pure rule agrees with what the command wrote
+    near_placement(
+        refit_attach_transform(attach0, old, next, [800.0, 600.0], [1200.0, 500.0]),
+        attach1,
+    );
+}
+
+#[test]
+fn set_source_on_a_locked_layer_is_refused_and_changes_nothing() {
+    let mut d = doc();
+    add(&mut d, placed("a")).unwrap();
+    lock(&mut d, "/layers/a");
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for size in [None, Some([4000.0, 2000.0])] {
+        let e = set_source(&mut d, "/layers/a", "/new/b.png", size).unwrap_err();
+        assert!(e.to_string().contains("is locked"), "{e}");
+    }
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn set_source_on_a_layer_that_is_not_a_pixel_layer_is_refused() {
+    let mut d = doc();
+    add(&mut d, node("v", "vector")).unwrap();
+    add(&mut d, node("t", "text")).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for at in ["/layers/v", "/layers/t"] {
+        let e = set_source(&mut d, at, "/new/b.png", Some([10.0, 10.0])).unwrap_err();
+        assert!(e.to_string().contains("isn't a pixel layer"), "{at}: {e}");
+    }
+    let e = set_source(&mut d, "/layers/zzz", "/new/b.png", None).unwrap_err();
+    assert!(e.to_string().contains("/layers/zzz"), "{e}");
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
 // ---- POM built-ins that write the tree ----
 
 #[test]
@@ -1093,4 +1520,136 @@ fn the_document_host_shares_its_pom_with_the_transports_host() {
     assert_eq!(document.untitled_number(), 1);
     assert_eq!(document.next_untitled(), 2);
     assert_eq!(document.untitled_number(), 2);
+}
+
+// ---- real projects (opt-in) ----
+
+/// The sidecar's op catalogue, as `list_ops` reports it: the JSON file named by
+/// `OBLIQUE_OPS` if set, else read from the sidecar's own `OPS` through `uv`. The object model
+/// needs it to know the `op.*` kinds a real project holds; an empty one would let those load as
+/// unknown nodes and round-trip without proving anything.
+fn real_catalogue() -> Arc<Catalogue> {
+    let text = match std::env::var("OBLIQUE_OPS") {
+        Ok(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")),
+        Err(_) => {
+            let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sidecar");
+            let out = std::process::Command::new("uv")
+                .arg("run")
+                .arg("--project")
+                .arg(&sidecar)
+                .args(["python", "-I", "-c"])
+                .arg(
+                    "import json, sys\nsys.path.insert(0, sys.argv[1])\nfrom ops import OPS\n\
+                     print(json.dumps([o.to_dict() for o in OPS.values()]))",
+                )
+                .arg(&sidecar)
+                .output()
+                .expect("uv: set OBLIQUE_OPS to a list_ops JSON file instead");
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap()
+        }
+    };
+    let ops: Vec<Op> = serde_json::from_str(&text).expect("the op catalogue as list_ops JSON");
+    assert!(!ops.is_empty(), "an empty op catalogue proves nothing");
+    Arc::new(Catalogue(ops))
+}
+
+/// The first place two JSON values differ, as a path and both sides.
+fn first_difference(a: &Json, b: &Json, at: &str) -> String {
+    match (a, b) {
+        (Json::Object(x), Json::Object(y)) => {
+            for k in x.keys().chain(y.keys()) {
+                if x.get(k) != y.get(k) {
+                    return match (x.get(k), y.get(k)) {
+                        (Some(p), Some(q)) => first_difference(p, q, &format!("{at}.{k}")),
+                        (p, q) => format!("{at}.{k}: {p:?} vs {q:?}"),
+                    };
+                }
+            }
+            format!("{at}: objects differ")
+        }
+        (Json::Array(x), Json::Array(y)) if x.len() == y.len() => {
+            match x.iter().zip(y).position(|(p, q)| p != q) {
+                Some(i) => first_difference(&x[i], &y[i], &format!("{at}[{i}]")),
+                None => format!("{at}: lists differ"),
+            }
+        }
+        (Json::Array(x), Json::Array(y)) => format!("{at}: {} vs {} items", x.len(), y.len()),
+        _ => format!("{at}: {a} vs {b}"),
+    }
+}
+
+/// Opens `path` through POM's file store (reading only), saves it to memory, reopens that, and
+/// returns the first difference between the two trees. Load issues on either side count.
+fn round_trip(cx: &Arc<Catalogue>, path: &str) -> Result<usize, String> {
+    let (first, report) = Document::<Oblique>::open_in(cx.clone(), FileStore, path, IdSource::Ulid)
+        .map_err(|e| e.to_string())?;
+    if !report.issues.is_empty() {
+        return Err(format!("open: {:?}", report.issues));
+    }
+    // what `save_as` would write, kept in memory so the file is never touched
+    let memory = MemoryStore::default();
+    memory.put("/saved.oblique", &first.tree().serialise());
+    let (again, report) =
+        Document::<Oblique>::open_in(cx.clone(), memory, "/saved.oblique", IdSource::Ulid)
+            .map_err(|e| format!("reopen: {e}"))?;
+    if !report.issues.is_empty() {
+        return Err(format!("reopen: {:?}", report.issues));
+    }
+    let rows = |d: &Document<Oblique>| serde_json::to_value(d.tree().rows()).unwrap();
+    let (want, got) = (rows(&first), rows(&again));
+    if want != got {
+        return Err(first_difference(&want, &got, ""));
+    }
+    if first.tree().serialise() != again.tree().serialise() {
+        return Err("the saved text differs after a reopen".into());
+    }
+    Ok(first.tree().rows().len())
+}
+
+/// Every real project opens, saves and reopens to the same tree. Opt-in:
+/// `OBLIQUE_FILES="a.oblique:b.oblique" cargo test --lib real_projects -- --ignored --nocapture`
+/// (`just coverage "<files>"`). Reads the files and never writes them.
+#[test]
+#[ignore = "needs OBLIQUE_FILES (colon-separated .oblique files)"]
+fn real_projects() {
+    let files = std::env::var("OBLIQUE_FILES").expect("OBLIQUE_FILES");
+    let files: Vec<&str> = files.split(':').filter(|f| !f.is_empty()).collect();
+    assert!(!files.is_empty(), "OBLIQUE_FILES names no files");
+    let cx = real_catalogue();
+    let mut failed = vec![];
+    for f in &files {
+        match round_trip(&cx, f) {
+            Ok(rows) => eprintln!("ok    {f} ({rows} nodes)"),
+            Err(e) => {
+                eprintln!("FAIL  {f}: {e}");
+                failed.push(f.to_string());
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+#[test]
+fn the_round_trip_check_reports_the_first_difference() {
+    assert_eq!(
+        first_difference(
+            &json!({"a": [1, {"b": 2}]}),
+            &json!({"a": [1, {"b": 3}]}),
+            ""
+        ),
+        ".a[1].b: 2 vs 3"
+    );
+    assert_eq!(
+        first_difference(&json!({"a": 1}), &json!({"a": 1, "c": 2}), ""),
+        ".c: None vs Some(Number(2))"
+    );
+    assert_eq!(
+        first_difference(&json!([1]), &json!([1, 2]), ""),
+        ": 1 vs 2 items"
+    );
 }

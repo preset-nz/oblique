@@ -93,7 +93,7 @@ beforeEach(() => {
 });
 
 describe('replacePixelSource', () => {
-  it('lands the new file: full-resolution sourceSize, footprint kept, label/blend/opacity untouched, old bitmap closed', async () => {
+  it('lands the new file: full-resolution sourceSize, label/blend/opacity untouched, old bitmap closed', async () => {
     const old = sources.get('a') as unknown as FakeBitmap;
     const { deps, decoded } = makeDeps({ '/new/b.png': [4000, 2000] });
     const before = node();
@@ -104,10 +104,8 @@ describe('replacePixelSource', () => {
     const after = node();
     expect(after.sourcePath).toBe('/new/b.png');
     expect(after.sourceSize).toEqual([4000, 2000]);
-    expect(4000 * Math.abs(after.transform2d?.scaleX ?? 0)).toBeCloseTo(512, 9);
-    expect(2000 * Math.abs(after.transform2d?.scaleY ?? 0)).toBeCloseTo(256, 9);
-    expect(after.transform2d?.rotation).toBe(0.3);
-    expect(Math.sign(after.transform2d?.scaleX ?? 0)).toBe(-1);
+    // the fit is Rust's (`layer.set_source`, tested in src-tauri); the store alone leaves it
+    expect(after.transform2d).toEqual(before.transform2d);
     expect(after.label).toBe('My layer');
     expect(after.blendMode).toBe('multiply');
     expect(after.opacity).toBe(0.5);
@@ -185,13 +183,12 @@ describe('replacePixelSource', () => {
     expect(sources.missingReason('a')).toBe('unreadable');
   });
 
-  it('relinking a missing node: the box it kept is still there to fit into', async () => {
+  it("relinking a missing node: the new size lands (the fit is Rust's)", async () => {
     const { deps } = makeDeps({ '/new/b.png': [1024, 256] });
     await replacePixelSource('a', '/not/there.png', deps);
     expect(await replacePixelSource('a', '/new/b.png', deps)).toEqual({ ok: true, missing: false });
     expect(sources.isSourceMissing('a')).toBe(false);
     expect(node().sourceSize).toEqual([1024, 256]);
-    expect(1024 * Math.abs(node().transform2d?.scaleX ?? 0)).toBeCloseTo(512, 9);
   });
 
   it('retyping the same path on a missing node retries (the file may exist now)', async () => {
@@ -285,7 +282,7 @@ describe('replacePixelSource', () => {
   });
 });
 
-describe('store.setPixelSource and node-space masks', () => {
+describe('store.setPixelSource', () => {
   const blur: Modifier = {
     id: 'm1',
     type: 'gaussian_blur',
@@ -302,33 +299,40 @@ describe('store.setPixelSource and node-space masks', () => {
     expect(node().dirty).toEqual({ draft: true, working: true });
   });
 
-  it('refits a node-space mask attachTransform so the mask stays put; leaves document-space refs alone', () => {
+  it('with a size and what Rust decided, applies them in one mutation and no fit of its own', () => {
     const attach = { x: 100, y: 40, scaleX: -1, scaleY: 1, rotation: 0.3 };
-    setScene([pixelNode('a', { modifiers: [blur, { ...blur, id: 'm2', maskId: 'mask2' }] })], {
-      mask1: {
-        id: 'mask1',
-        nodeId: 'v',
-        featherPx: 0,
-        expand: 0,
-        invert: false,
-        space: 'node',
-        attachTransform: attach,
-      },
-      mask2: { id: 'mask2', nodeId: 'v', featherPx: 0, expand: 0, invert: false },
-    });
-    useSceneStore.getState().setPixelSource('a', '/new/b.png', [1024, 256]);
-    const refs = useSceneStore.getState().scene.maskRefs;
-    const next = node().transform2d;
-    expect(refs?.mask1.attachTransform).not.toEqual(attach);
-    // Same node frame at attach time as now: the refit snapshot IS the new transform.
-    expect(refs?.mask1.attachTransform?.x).toBeCloseTo(next?.x ?? Number.NaN, 9);
-    expect(refs?.mask1.attachTransform?.scaleX).toBeCloseTo(next?.scaleX ?? Number.NaN, 9);
-    expect(refs?.mask2).toEqual({
-      id: 'mask2',
+    const mask = (id: string): VectorMaskRef => ({
+      id,
       nodeId: 'v',
       featherPx: 0,
       expand: 0,
       invert: false,
     });
+    setScene([pixelNode('a', { modifiers: [blur] })], {
+      mask1: { ...mask('mask1'), space: 'node', attachTransform: attach },
+      mask2: mask('mask2'),
+    });
+    const decided = { x: -1644, y: -704, scaleX: -0.128, scaleY: 0.128, rotation: 0.3 };
+    const refit = { ...mask('mask1'), space: 'node' as const, attachTransform: decided };
+    const calls = vi.fn();
+    const stop = useSceneStore.subscribe(calls);
+    useSceneStore.getState().setPixelSource('a', '/new/b.png', [4000, 2000], {
+      transform2d: decided,
+      maskRefs: { mask1: refit },
+    });
+    stop();
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(node().sourceSize).toEqual([4000, 2000]);
+    expect(node().transform2d).toEqual(decided);
+    const refs = useSceneStore.getState().scene.maskRefs;
+    expect(refs?.mask1).toEqual(refit);
+    expect(refs?.mask2).toEqual(mask('mask2')); // not named, so untouched
+  });
+
+  it('is a no-op for a locked node', () => {
+    setScene([pixelNode('a', { state: 'locked' })]);
+    const before = useSceneStore.getState().scene;
+    useSceneStore.getState().setPixelSource('a', '/new/b.png', [10, 10]);
+    expect(useSceneStore.getState().scene).toBe(before);
   });
 });

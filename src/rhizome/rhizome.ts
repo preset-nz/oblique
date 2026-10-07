@@ -6,6 +6,9 @@
  *   `setDocumentSize` send a command; the store changes when the update comes back, through
  *   the store's ORIGINAL action, so its dirty rules hold and Oblique's own history sees
  *   nothing.
+ * - **Replace Image** (`setPixelSource`) is commands-first too, but a step of its own, not a
+ *   drag: `layer.set_source` sends the new path and size, and Rust decides the fit. The update
+ *   coming back puts the whole result (path, size, transform, mask refits) in the store at once.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
  *   `addVectorNode`, `addTextNode` and `setTextProps` run the original action at once, then
  *   send the command.
@@ -30,12 +33,20 @@ import { bindProjectMeta } from '@/project/projectMeta';
 import { setHistoryBackend, withoutCapture } from '@/scene/history';
 import { restoreScene } from '@/scene/restore';
 import { useSceneStore } from '@/scene/store';
-import { IDENTITY_TRANSFORM_2D, type Scene, type SceneNode, type Transform2D } from '@/scene/types';
+import {
+  IDENTITY_TRANSFORM_2D,
+  isPixelNode,
+  type Scene,
+  type SceneNode,
+  type Transform2D,
+  type VectorMaskRef,
+} from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 import {
   DOCUMENT_PATH,
   firstDifference,
   LAYERS_PATH,
+  layerNode,
   layerPath,
   Mirror,
   normal,
@@ -52,6 +63,7 @@ import {
   inTauri,
   type Ran,
   type RhizomeBackend,
+  type Row,
   type Status,
   tauriBackend,
   type Update,
@@ -210,6 +222,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   const pendingTransforms = new Map<string, Transform2D>();
   let nudges = 0;
 
+  /** A discrete command (one undo step, nothing to coalesce): its update applies the result. */
+  function sendCommand(id: string, payload: unknown): void {
+    track(channel.run(id, payload)).catch(fail).finally(scheduleReconcile);
+  }
+
   /**
    * A command for an edit already made locally to `layer`. The count drops in the first
    * handler on the command's own promise, ahead of the next queued command starting, so that
@@ -240,6 +257,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     addVectorNode: stateNow().addVectorNode,
     addTextNode: stateNow().addTextNode,
     setTextProps: stateNow().setTextProps,
+    setPixelSource: stateNow().setPixelSource,
   };
 
   const withoutDirty = (node: SceneNode) => {
@@ -258,6 +276,25 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   const wrappers: Partial<State> = {
+    setPixelSource: (id, sourcePath, sourceSize) => {
+      const node = nodeOf(id);
+      if (!node || !isPixelNode(node) || node.state === 'locked') return; // Rust holds it too
+      const sameSize =
+        !sourceSize ||
+        (sourceSize[0] === node.sourceSize[0] && sourceSize[1] === node.sourceSize[1]);
+      if (sameSize && sourcePath === node.sourcePath) {
+        // Nothing for Rust to change (a missing file that came back as it was): the pixels did
+        // change, so repaint, as the store action always did. Same values, so no step and no
+        // difference for the reconcile.
+        withoutCapture(() => original.setPixelSource(id, sourcePath, sourceSize));
+        return;
+      }
+      sendCommand('layer.set_source', {
+        at: layerPath(id),
+        sourcePath,
+        ...(sourceSize ? { sourceSize } : {}),
+      });
+    },
     setNodeTransform: (id: string, t: Transform2D) => {
       const node = nodeOf(id);
       if (!node || node.state === 'locked') return; // the store's own guard; Rust holds it too
@@ -295,12 +332,40 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   // ---------------------------------------------------------------- updates
 
   /**
+   * A pixel layer whose source differs from the store's (`layer.set_source`, its undo or redo
+   * landing here): the path and size, with the transform and mask refits Rust decided, in one
+   * mutation, so no frame shows the new transform over the old size.
+   */
+  function applySourceEcho(r: Row): void {
+    const node = nodeOf(r.name);
+    if (!node || !isPixelNode(node) || r.type !== 'pixel') return;
+    const path = r.refs?.source?.file ?? '';
+    const size = val(r, 'sourceSize') as [number, number];
+    if (
+      path === node.sourcePath &&
+      size[0] === node.sourceSize[0] &&
+      size[1] === node.sourceSize[1]
+    ) {
+      return;
+    }
+    const maskRefs: Record<string, VectorMaskRef> = {};
+    const built = layerNode(mirror.rows, r, maskRefs);
+    original.setPixelSource(node.id, path, size, { transform2d: built.transform2d, maskRefs });
+  }
+
+  /**
    * An update's effect on the store, for the commands-first edits: each touched layer's
-   * transform and props, and the document size, through the original actions. Everything
-   * else (a layer added, text, paths, order) is left to the reconcile.
+   * transform and props, and the document size, through the original actions, and a pixel
+   * layer's new source with what Rust decided to go with it. Everything else (a layer added,
+   * text, paths, order) is left to the reconcile.
    */
   function applyEcho(u: Update): void {
     if (restoringNow) return;
+    // POM labels what undo, redo and a cancelled gesture commit "Undo <step>", "Redo <step>"
+    // and "Cancel <gesture>" (rhizome-core `Tree::undo`, `redo`, `cancel`). The rebuild that follows them goes through `restoreScene`, which
+    // also swaps the decoded pixels of a replaced image, but only when the path on screen still
+    // differs from the target's: echoing the source here first would leave it nothing to see.
+    const stepped = /^(Undo|Redo|Cancel)\b/.test(u.label);
     const layers = mirror.byPath(LAYERS_PATH);
     if (!layers) return;
     withoutCapture(() => {
@@ -312,8 +377,9 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         } else if (r.parent === layers.id) {
           const node = nodeOf(r.name);
           if (!node || localLayers.has(node.id)) continue;
+          if (!stepped) applySourceEcho(r);
           const t = transform2d(r);
-          const h = node.transform2d;
+          const h = nodeOf(node.id)?.transform2d;
           if (
             t &&
             (!h ||

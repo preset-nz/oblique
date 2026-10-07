@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rhizome_core::{Edit, NodeId, NodeType, Origin, Ref, Shape, Value, ValueSpec};
+use rhizome_core::{Edit, NodeId, NodeType, On, Origin, Ref, Shape, Value, ValueSpec};
 use rhizome_pom::{payload, Commands, Error, Kinds, ObjectModel, Pom};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
@@ -387,6 +387,22 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // Points a pixel layer at another file. With a size that differs from the layer's it also
+        // fits the transform into the old footprint and refits the node-space masks it
+        // consumes (image-source.md decisions 5 and 6), all in one undo step.
+        c.add(
+            "layer.set_source",
+            |_| "Replace Image".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("sourcePath").is_some_and(Json::is_string)
+            },
+            |d, p| {
+                let a: SourceArgs = payload(p)?;
+                let (_, commit) = d.edit("Replace Image", |tx| set_source(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
         // POM's other built-ins that write the tree would bypass the rules above, so they
         // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
         // commands, copy and export stay as POM has them.
@@ -437,6 +453,14 @@ struct TextArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceArgs {
+    at: String,
+    source_path: String,
+    source_size: Option<[f64; 2]>,
+}
+
+#[derive(Deserialize)]
 struct SizeArgs {
     size: Json,
 }
@@ -469,6 +493,192 @@ fn refuse_locked(tx: &Edit<'_>, at: NodeId) -> rhizome_core::Result<()> {
     let n = tx.at(at).expect("live");
     if n.value("state") == Some(Value::Choice("locked".into())) {
         return Err(structural(format!("{} is locked", n.path())));
+    }
+    Ok(())
+}
+
+/// A `Transform2D` (src/scene/types.ts): `(x, y)` is the translation of the node's source box,
+/// which scales and rotates about its own centre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Placement {
+    x: f64,
+    y: f64,
+    scale_x: f64,
+    scale_y: f64,
+    rotation: f64,
+}
+
+impl Placement {
+    fn from_json(j: &Json) -> Option<Placement> {
+        let f = |k: &str| j.get(k).and_then(Json::as_f64);
+        Some(Placement {
+            x: f("x")?,
+            y: f("y")?,
+            scale_x: f("scaleX")?,
+            scale_y: f("scaleY")?,
+            rotation: f("rotation")?,
+        })
+    }
+
+    fn to_json(self) -> Json {
+        json!({
+            "x": self.x, "y": self.y,
+            "scaleX": self.scale_x, "scaleY": self.scale_y,
+            "rotation": self.rotation,
+        })
+    }
+}
+
+/// `-1` for a negative scale, else `1` (a zero scale reads as unflipped).
+fn sign_of(n: f64) -> f64 {
+    if n < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+/// The transform that makes a new source of `new_size` fit uniformly inside the old footprint
+/// (`old_size` scaled by `old`), centred on the old centre. Rotation and flip signs survive. A
+/// collapsed old footprint (a zero scale) has no box to fit: the scale is kept and only the
+/// centre is preserved. Ported from `fitReplacedTransform` (src/scene/sourceFit.ts).
+fn fit_replaced_transform(old: Placement, old_size: [f64; 2], new_size: [f64; 2]) -> Placement {
+    let [w0, h0] = old_size;
+    let [w1, h1] = new_size;
+    let footprint_w = w0 * old.scale_x.abs();
+    let footprint_h = h0 * old.scale_y.abs();
+    let fits = footprint_w > 0.0 && footprint_h > 0.0 && w1 > 0.0 && h1 > 0.0;
+    let s = fits.then(|| (footprint_w / w1).min(footprint_h / h1));
+    Placement {
+        x: old.x + w0 / 2.0 - w1 / 2.0,
+        y: old.y + h0 / 2.0 - h1 / 2.0,
+        scale_x: s.map_or(old.scale_x, |s| s * sign_of(old.scale_x)),
+        scale_y: s.map_or(old.scale_y, |s| s * sign_of(old.scale_y)),
+        rotation: old.rotation,
+    }
+}
+
+/// A node-space mask's `attachTransform` after its consumer's source was replaced: the
+/// snapshot's rotation and centre are kept and each axis scales by the node's own scale ratio,
+/// so the mask covers the same canvas region as before. Ported from `refitAttachTransform`
+/// (src/scene/sourceFit.ts), where the algebra is derived.
+fn refit_attach_transform(
+    attach: Placement,
+    old_node: Placement,
+    new_node: Placement,
+    old_size: [f64; 2],
+    new_size: [f64; 2],
+) -> Placement {
+    let ratio = |old: f64, new: f64| if old == 0.0 { 1.0 } else { new / old };
+    Placement {
+        x: attach.x + old_size[0] / 2.0 - new_size[0] / 2.0,
+        y: attach.y + old_size[1] / 2.0 - new_size[1] / 2.0,
+        scale_x: attach.scale_x * ratio(old_node.scale_x, new_node.scale_x),
+        scale_y: attach.scale_y * ratio(old_node.scale_y, new_node.scale_y),
+        rotation: attach.rotation,
+    }
+}
+
+/// The keys a modifier mask binding carries (`mask_values`).
+const MASK_KEYS: [&str; 6] = [
+    "refId",
+    "featherPx",
+    "expand",
+    "invert",
+    "space",
+    "attachTransform",
+];
+
+/// `layer.set_source`: the path always; with a different size, the fit and the mask refits.
+fn set_source(tx: &mut Edit<'_>, a: &SourceArgs) -> rhizome_core::Result<()> {
+    let at = live(tx, &a.at)?;
+    if tx.at(at).map(|n| n.type_name() != "pixel").unwrap_or(true) {
+        return Err(structural(format!("{} isn't a pixel layer", a.at)));
+    }
+    refuse_locked(tx, at)?;
+
+    let n = tx.at(at).expect("live");
+    let old_size = match n.value("sourceSize") {
+        Some(Value::Vec2(v)) => v,
+        _ => [0.0, 0.0],
+    };
+    // an unset transform reads as its defaults: the identity
+    let pair = |key: &str, default: [f64; 2]| match n.value(key) {
+        Some(Value::Vec2(v)) => v,
+        _ => default,
+    };
+    let [x, y] = pair("transform2d.position", [0.0, 0.0]);
+    let [scale_x, scale_y] = pair("transform2d.scale", [1.0, 1.0]);
+    let rotation = match n.value("transform2d.rotation") {
+        Some(Value::Float(r)) => r,
+        _ => 0.0,
+    };
+    let old = Placement {
+        x,
+        y,
+        scale_x,
+        scale_y,
+        rotation,
+    };
+
+    // Node-space masks this layer consumes: each modifier's mask binding that follows the
+    // layer and holds its snapshot. Collected first, written after.
+    struct Refit {
+        modifier: NodeId,
+        source: NodeId,
+        values: Vec<(&'static str, Value)>,
+        attach: Placement,
+    }
+    let mut refits = vec![];
+    for modifier in n.order("modifiers") {
+        for b in modifier.bindings() {
+            if *b.on != On::slot("mask") {
+                continue;
+            }
+            if b.value("space") != Some(Value::Shaped(json!("node"))) {
+                continue;
+            }
+            let Some(Value::Shaped(j)) = b.value("attachTransform") else {
+                continue;
+            };
+            let Some(attach) = Placement::from_json(&j) else {
+                continue;
+            };
+            refits.push(Refit {
+                modifier: modifier.id(),
+                source: b.source.id(),
+                values: MASK_KEYS
+                    .iter()
+                    .filter_map(|k| Some((*k, b.value(k)?)))
+                    .collect(),
+                attach,
+            });
+        }
+    }
+
+    tx.set_ref(at, "source", Ref::file(&a.source_path))?;
+    let Some(new_size) = a.source_size.filter(|s| *s != old_size) else {
+        return Ok(());
+    };
+    let new = fit_replaced_transform(old, old_size, new_size);
+    tx.set_value(at, "sourceSize", Value::Vec2(new_size))?;
+    tx.set_value(at, "transform2d.position", Value::Vec2([new.x, new.y]))?;
+    tx.set_value(
+        at,
+        "transform2d.scale",
+        Value::Vec2([new.scale_x, new.scale_y]),
+    )?;
+    tx.set_value(at, "transform2d.rotation", Value::Float(new.rotation))?;
+    for r in refits {
+        let attach = refit_attach_transform(r.attach, old, new, old_size, new_size);
+        let values = r.values.into_iter().map(|(k, v)| {
+            if k == "attachTransform" {
+                (k, Value::Shaped(attach.to_json()))
+            } else {
+                (k, v)
+            }
+        });
+        tx.bind(r.modifier, On::slot("mask"), r.source, values)?;
     }
     Ok(())
 }

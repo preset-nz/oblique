@@ -59,15 +59,21 @@ let uninstall: () => void;
 const notify = vi.fn();
 
 /** A store and a host that hold the same scene, a running rhizome over them. */
-async function setup(nodes: SceneNode[] = [], start = true) {
-  const scene = emptyScene(nodes);
+async function setup(
+  nodes: SceneNode[] = [],
+  start = true,
+  extra: Partial<Scene> = {},
+  restore: (current: Scene, target: Scene) => Promise<void> = async (_current, target) =>
+    useSceneStore.getState().loadScene(target),
+) {
+  const scene = { ...emptyScene(nodes), ...extra };
   useSceneStore.setState({ scene });
   host = new FakeHost(scene);
   rhizome = createRhizome({
     backend: host,
     store: useSceneStore,
     notify,
-    restore: async (_current, target) => useSceneStore.getState().loadScene(target),
+    restore,
     nextFrame: async () => undefined,
     schedule: () => undefined, // the tests call reconcile themselves
   });
@@ -184,6 +190,164 @@ describe('commands first', () => {
     await settle();
     expect(node('a')?.opacity).toBe(1);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+  });
+});
+
+describe('replace image (layer.set_source)', () => {
+  const pix = (id: string) => node(id) as PixelNode | undefined;
+  const vector = (id: string): VectorNode => ({
+    ...(pixel(id) as unknown as VectorNode),
+    type: 'vector',
+    paths: [],
+    fillRule: 'nonzero',
+  });
+  const node1 = { x: 100, y: 40, scaleX: -1, scaleY: 1, rotation: 0.3 };
+  // what Rust would decide for 100x100 -> 400x200 (src-tauri holds the rule)
+  const decided = { x: -50, y: -10, scaleX: -0.25, scaleY: 0.25, rotation: 0.3 };
+
+  /** A pixel layer with a node-space mask, and a host that answers a resize as Rust would. */
+  async function withMask(restore?: (current: Scene, target: Scene) => Promise<void>) {
+    const consumer = pixel('a', {
+      transform2d: node1,
+      modifiers: [{ id: 'mod', type: 'blur', enabled: true, params: {}, maskId: 'r' }],
+    });
+    const v = vector('v');
+    delete (v as unknown as Partial<PixelNode>).sourcePath;
+    delete (v as unknown as Partial<PixelNode>).sourceSize;
+    await setup(
+      [consumer, v],
+      true,
+      {
+        maskRefs: {
+          r: {
+            id: 'r',
+            nodeId: 'v',
+            featherPx: 0,
+            expand: 0,
+            invert: false,
+            space: 'node',
+            attachTransform: node1,
+          },
+        },
+      },
+      restore,
+    );
+    host.decided = (layer, rows) => {
+      layer.values = {
+        ...layer.values,
+        'transform2d.position': [decided.x, decided.y],
+        'transform2d.scale': [decided.scaleX, decided.scaleY],
+      };
+      const mod = [...rows.values()].find((r) => r.path === '/layers/a/mod');
+      const b = mod?.bindings?.[0];
+      if (b) b.values = { ...b.values, attachTransform: decided };
+    };
+  }
+
+  it('sends the path and size, changes nothing until the update, then applies the whole result at once', async () => {
+    await withMask();
+    const seen: unknown[] = [];
+    useSceneStore.subscribe((s) => seen.push(structuredClone(s.scene.nodes[0])));
+    state().setPixelSource('a', '/new/b.png', [400, 200]);
+    expect(pix('a')?.sourcePath).toBe('/tmp/a.png'); // nothing local yet
+    await settle();
+    expect(host.runs).toHaveLength(1);
+    expect(host.runs[0].id).toBe('layer.set_source');
+    expect(host.runs[0].payload).toEqual({
+      at: '/layers/a',
+      sourcePath: '/new/b.png',
+      sourceSize: [400, 200],
+    });
+    const a = node('a') as PixelNode;
+    expect(a.sourcePath).toBe('/new/b.png');
+    expect(a.sourceSize).toEqual([400, 200]);
+    expect(a.transform2d).toEqual(decided);
+    expect(a.dirty).toEqual({ draft: true, working: true });
+    expect(state().scene.maskRefs?.r.attachTransform).toEqual(decided);
+    // no frame with the new transform over the old size, or the other way round
+    for (const n of seen as PixelNode[]) {
+      expect(n.sourceSize[0] === 400).toBe(n.transform2d?.x === decided.x);
+    }
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('without a size sends the path alone', async () => {
+    await setup([pixel('a', { transform2d: node1 })]);
+    state().setPixelSource('a', '/later.png');
+    await settle();
+    expect(host.runs[0].payload).toEqual({ at: '/layers/a', sourcePath: '/later.png' });
+    expect(pix('a')?.sourcePath).toBe('/later.png');
+    expect(pix('a')?.sourceSize).toEqual([100, 100]);
+    expect(node('a')?.transform2d).toEqual(node1);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('the same path and size (a missing file back as it was) sends nothing but still repaints', async () => {
+    await setup([pixel('a', { transform2d: node1 })]);
+    expect(node('a')?.dirty).toEqual(clean);
+    state().setPixelSource('a', '/tmp/a.png', [100, 100]);
+    state().setPixelSource('a', '/tmp/a.png');
+    await settle();
+    expect(host.runs).toHaveLength(0);
+    expect(node('a')?.dirty).toEqual({ draft: true, working: true });
+    expect(node('a')?.transform2d).toEqual(node1);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('sends nothing for a locked or a missing layer', async () => {
+    await setup([pixel('a', { state: 'locked' })]);
+    state().setPixelSource('a', '/new/b.png', [400, 200]);
+    state().setPixelSource('zzz', '/new/b.png', [400, 200]);
+    await settle();
+    expect(host.runs).toHaveLength(0);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('a refusal from the host toasts and leaves the store alone', async () => {
+    await setup([pixel('a')]);
+    host.reject.add('layer.set_source');
+    state().setPixelSource('a', '/new/b.png', [400, 200]);
+    await settle();
+    expect(pix('a')?.sourcePath).toBe('/tmp/a.png');
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+  });
+
+  it('undo goes through the restore with the replaced image still on screen, so it re-decodes', async () => {
+    const restore = vi.fn(async (_current: Scene, target: Scene) =>
+      useSceneStore.getState().loadScene(target),
+    );
+    await withMask(restore);
+    state().setPixelSource('a', '/new/b.png', [400, 200]);
+    await settle();
+    await rhizome.undo();
+    // restoreScene re-decodes only when the path on screen differs from the target's: an
+    // echo that had already put the old path back would leave the new pixels showing
+    const last = restore.mock.calls[restore.mock.calls.length - 1];
+    const current = last[0].nodes.find((n) => n.id === 'a') as PixelNode;
+    expect(current.sourcePath).toBe('/new/b.png');
+    expect(pix('a')?.sourcePath).toBe('/tmp/a.png');
+    expect(node('a')?.transform2d).toEqual(node1);
+    expect(state().scene.maskRefs?.r.attachTransform).toEqual(node1);
+    await rhizome.redo();
+    expect(pix('a')?.sourceSize).toEqual([400, 200]);
+    expect(node('a')?.transform2d).toEqual(decided);
+  });
+
+  it('Cmd+Z straight after Replace Image: the replace still lands first, so the undo has a path to swap back', async () => {
+    const restore = vi.fn(async (_current: Scene, target: Scene) =>
+      useSceneStore.getState().loadScene(target),
+    );
+    await setup([pixel('a', { transform2d: node1 })], true, {}, restore);
+    state().setPixelSource('a', '/new/b.png', [400, 200]);
+    const undone = rhizome.undo(); // not settled: the replace is still on its way
+    await undone;
+    await settle();
+    const last = restore.mock.calls[restore.mock.calls.length - 1];
+    const current = last[0].nodes.find((n) => n.id === 'a') as PixelNode;
+    expect(current.sourcePath).toBe('/new/b.png');
+    expect(pix('a')?.sourcePath).toBe('/tmp/a.png');
+    expect(pix('a')?.sourceSize).toEqual([100, 100]);
   });
 });
 

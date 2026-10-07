@@ -1,29 +1,29 @@
 import type { ImportDeps } from '@/project/import';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import { resolveSourcePath } from '@/project/resolvePath';
-import { isRefused } from '@/rhizome/refusal';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { isPixelNode } from '@/scene/types';
 
 /**
  * Point a pixel node at a different file (image-source.md). The store action
- * (`setPixelSource`) does the scene surgery in one mutation; this drives the
- * source-bitmap map and missing flag the scene deliberately doesn't contain.
+ * (`setPixelSource`) is the scene edit: under rhizome it sends `layer.set_source`, commands-first
+ * like a drag, and Rust fits the transform and refits the masks in one undo step ("Replace
+ * Image"); this drives the source-bitmap map and missing flag the scene deliberately doesn't
+ * contain.
  * Sibling to `duplicateNode.ts` and shaped like it: injected `ImportDeps`, the
  * bitmap is decoded BEFORE the store is touched, and `sources.set` runs before
  * the store action so the recomposite it triggers already has the pixels.
  *
  * `typed` is stored verbatim (no trimming, `~` expansion or absolutising). The
- * node's label is never touched. Undo/redo need nothing here: `history.ts`
- * captures the one scene change and `restoreScene` re-decodes when the path
- * differs.
+ * node's label is never touched. Undo/redo need nothing here: rhizome undoes the one step and
+ * `restoreScene` re-decodes when the path differs.
  */
 
 export type ReplaceSourceResult =
   | { ok: true; missing: boolean }
   /** `unsupported-scheme`: `strata://…` or any `scheme://` — refused, nothing changed. */
-  | { ok: false; reason: 'unsupported-scheme' | 'locked' | 'no-node' | 'stale' | 'refused' };
+  | { ok: false; reason: 'unsupported-scheme' | 'locked' | 'no-node' | 'stale' };
 
 /**
  * Per-node replace generation. A decode that comes back after the node was
@@ -40,13 +40,6 @@ export async function replacePixelSource(
   const node = useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId);
   if (!node || !isPixelNode(node)) return { ok: false, reason: 'no-node' };
   if (node.state === 'locked') return { ok: false, reason: 'locked' };
-
-  // Not on rhizome yet (Epic 21): the store action below would refuse, but only after the
-  // bitmap was swapped. Call it now for its toast and change nothing.
-  if (isRefused('setPixelSource')) {
-    useSceneStore.getState().setPixelSource(nodeId, typed);
-    return { ok: false, reason: 'refused' };
-  }
 
   const projectPath = useProjectMetaStore.getState().path;
   const resolved = resolveSourcePath(typed, projectPath);
@@ -79,7 +72,8 @@ export async function replacePixelSource(
 
   const store = useSceneStore.getState();
   if (load.ok) {
-    // No await between here and the store action.
+    // No await between the bitmap landing and the store action being called; under rhizome the
+    // scene itself changes when Rust's update comes back.
     sources.applySourceLoad(nodeId, load);
     store.setPixelSource(nodeId, typed, [load.bitmap.width, load.bitmap.height]);
     return { ok: true, missing: false };

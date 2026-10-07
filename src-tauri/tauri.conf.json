@@ -34,6 +34,19 @@
     ],
     "resources": {
       "../sidecar/dist/oblique-sidecar/": "sidecar-dist/"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["oblique"],
+        "name": "Oblique Document",
+        "role": "Editor",
+        "rank": "Owner",
+        "contentTypes": ["nz.preset.oblique.document"],
+        "exportedType": {
+          "identifier": "nz.preset.oblique.document",
+          "conformsTo": ["public.data", "public.content"]
+        }
+      }
+    ]
   }
 }

@@ -156,8 +156,9 @@ export async function writeBakedSidecar(
  * folder, so a first Save or a Save As to another folder changes what they
  * point at. Re-run the re-decode for every pixel node whose resolved file
  * differs between the old and new project path (and the background, which
- * shares the resolver), so the missing flags are true straight away. Absolute
- * paths never change.
+ * shares the resolver), so the missing flags are true straight away. A file that comes
+ * good at a different size than the node's `sourceSize` is fitted by `layer.set_source`.
+ * Absolute paths never change.
  */
 export async function recheckRelativeSources(
   previousPath: string | null,
@@ -180,10 +181,18 @@ export async function recheckRelativeSources(
     if (!load.ok) sources.remove(node.id); // never cook the old file's pixels for a path that no longer resolves
     sources.applySourceLoad(node.id, load);
     const store = useSceneStore.getState();
-    // The missing flag alone doesn't repaint the canvas; a dirty mark does. A node that comes
-    // good at a different size than its `sourceSize` used to be fitted here (a write); that
-    // write isn't on rhizome yet, so the node keeps its footprint. deferred: Epic 21 story 2
-    store.markDirty(node.id, 'draft');
+    if (
+      load.ok &&
+      (load.bitmap.width !== live.sourceSize[0] || load.bitmap.height !== live.sourceSize[1])
+    ) {
+      // Came good at a different size: `layer.set_source` fits it into the old footprint (Rust
+      // owns the rule). A real undo step, and the document is unsaved straight after the save
+      // that caused it (Epic 21 story 2, decided 1).
+      store.setPixelSource(node.id, node.sourcePath, [load.bitmap.width, load.bitmap.height]);
+    } else {
+      // The missing flag alone doesn't repaint the canvas; a dirty mark does.
+      store.markDirty(node.id, 'draft');
+    }
   }
   if (scene.background?.type === 'image' && isRelativeSourcePath(scene.background.sourcePath)) {
     await backgroundSource.reconcile(scene.background, deps, newPath, { force: true });

@@ -47,6 +47,13 @@ check:
     python3 scripts/check_python_licenses.py
     python3 scripts/check_rust_licenses.py
 
+# Opt-in: every real project opens, saves (to memory) and reopens to the same tree. Takes
+# colon-separated .oblique files and only reads them; needs `uv` for the op catalogue.
+# `just coverage ~/Documents/v2-test.oblique`
+[group('quality')]
+coverage files:
+    OBLIQUE_FILES="{{files}}" cargo test --manifest-path src-tauri/Cargo.toml --lib real_projects -- --ignored --nocapture
+
 # Licence gate only (also part of `check`) — permissive allowlist, see script header.
 [group('quality')]
 licenses:

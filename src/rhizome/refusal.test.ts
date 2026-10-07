@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { replacePixelSource } from '@/scene/replaceSource';
-import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
   actionLabel,
@@ -99,47 +97,14 @@ describe('refusal by construction', () => {
   });
 
   it('says which actions are refused, only while installed', () => {
-    expect(isRefused('setPixelSource')).toBe(false);
+    expect(isRefused('setNote')).toBe(false);
     install();
-    expect(isRefused('setPixelSource')).toBe(true);
+    expect(isRefused('setNote')).toBe(true);
+    expect(isRefused('setPixelSource')).toBe(false); // on rhizome since Epic 21 story 2
     expect(isRefused('setNodeTransform')).toBe(false);
     uninstall?.();
     uninstall = null;
-    expect(isRefused('setPixelSource')).toBe(false);
-  });
-
-  it('Replace Image bails before swapping the bitmap', async () => {
-    const node = {
-      id: 'a',
-      label: 'a',
-      type: 'pixel' as const,
-      state: 'active' as const,
-      output: 'image' as const,
-      cameraId: null,
-      modifiers: [],
-      visible: true,
-      blendMode: 'normal' as const,
-      opacity: 1,
-      dirty: { draft: false, working: false },
-      sourcePath: '/tmp/a.png',
-      sourceSize: [10, 10] as [number, number],
-    };
-    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [node] } }));
-    const held = { width: 10, height: 10, close: vi.fn() } as unknown as ImageBitmap;
-    sources.set('a', held);
-    install();
-    const decode = vi.fn();
-    const result = await replacePixelSource('a', '/tmp/b.png', {
-      readFile: async () => new Uint8Array(),
-      decode,
-    });
-    expect(result).toEqual({ ok: false, reason: 'refused' });
-    expect(decode).not.toHaveBeenCalled();
-    expect(sources.get('a')).toBe(held);
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(useSceneStore.getState().scene.nodes[0]).toBe(node);
-    sources.clearAll();
-    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [] } }));
+    expect(isRefused('setNote')).toBe(false);
   });
 
   it('names an action in words', () => {

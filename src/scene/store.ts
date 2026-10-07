@@ -8,7 +8,6 @@ import {
   useMarqueeStateStore,
 } from './marquee';
 import { hasDocumentPinnedMask } from './maskInputs';
-import { fitReplacedTransform, refitAttachTransform } from './sourceFit';
 import {
   type BlendMode,
   IDENTITY_TRANSFORM_2D,
@@ -241,17 +240,21 @@ interface SceneState {
   setBackgroundImage: (sourcePath: string, sourceSize: [number, number]) => void;
 
   /**
-   * Points a pixel node at a different file (image-source.md) — one mutation,
-   * so one undo step. `sourcePath` is stored verbatim. With `sourceSize` (the
-   * new file decoded) the node's `sourceSize` becomes the file's own size and
-   * `transform2d` is rewritten so the image fits inside the old footprint,
-   * centred on the old centre (rotation and flips kept); `space: 'node'` mask
-   * refs on the node get their `attachTransform` refitted so they stay put.
-   * Without it (the path doesn't resolve or decode) only `sourcePath` changes.
-   * Dirties the node at both levels. No-op for a missing, non-pixel or locked
-   * node. The caller owns the source bitmap (`scene/replaceSource.ts`).
+   * Writes a pixel node's source (image-source.md) — one mutation, so one undo step.
+   * `sourcePath` is stored verbatim; `sourceSize`, when given, becomes the node's own.
+   * Under rhizome the app's version of this sends `layer.set_source`, and Rust alone decides
+   * the fit (the new `transform2d` and the refitted node-space `attachTransform`s, in
+   * `src-tauri/src/document/mod.rs`); the update coming back calls THIS with `decided`, what
+   * Rust chose, so the store changes once. `decided.maskRefs` replaces those mask refs by id.
+   * No fit is computed here. Dirties the node at both levels. No-op for a missing,
+   * non-pixel or locked node. The caller owns the source bitmap (`scene/replaceSource.ts`).
    */
-  setPixelSource: (id: string, sourcePath: string, sourceSize?: [number, number]) => void;
+  setPixelSource: (
+    id: string,
+    sourcePath: string,
+    sourceSize?: [number, number],
+    decided?: { transform2d?: Transform2D; maskRefs?: Record<string, VectorMaskRef> },
+  ) => void;
 
   /**
    * Sets the composition note (composition-note.md). An empty string removes
@@ -832,47 +835,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     }));
   },
 
-  setPixelSource: (id, sourcePath, sourceSize) => {
+  setPixelSource: (id, sourcePath, sourceSize, decided) => {
     set((s) => {
       const node = s.scene.nodes.find((n) => n.id === id);
       if (!node || !isPixelNode(node) || node.state === 'locked') return s;
-
-      if (!sourceSize) {
-        return {
-          scene: {
-            ...s.scene,
-            nodes: updateNode(s.scene.nodes, id, (n) => ({
-              ...n,
-              sourcePath,
-              dirty: dirtyBoth(),
-            })),
-          },
-        };
-      }
-
-      const transform2d = fitReplacedTransform(node.transform2d, node.sourceSize, sourceSize);
-
-      // Node-space vector masks carry an attachTransform that is only valid
-      // for the sourceSize it was taken at; refit each one this node consumes.
-      let maskRefs = s.scene.maskRefs;
-      for (const mod of node.modifiers) {
-        const ref = mod.maskId ? s.scene.maskRefs?.[mod.maskId] : undefined;
-        if (!mod.maskId || !ref || ref.space !== 'node' || !ref.attachTransform) continue;
-        maskRefs = {
-          ...maskRefs,
-          [mod.maskId]: {
-            ...ref,
-            attachTransform: refitAttachTransform(
-              ref.attachTransform,
-              node.transform2d,
-              transform2d,
-              node.sourceSize,
-              sourceSize,
-            ),
-          },
-        };
-      }
-
+      const maskRefs = decided?.maskRefs
+        ? { ...s.scene.maskRefs, ...decided.maskRefs }
+        : s.scene.maskRefs;
       return {
         scene: {
           ...s.scene,
@@ -880,8 +849,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           nodes: updateNode(s.scene.nodes, id, (n) => ({
             ...n,
             sourcePath,
-            sourceSize,
-            transform2d,
+            ...(sourceSize ? { sourceSize } : {}),
+            ...(decided?.transform2d ? { transform2d: decided.transform2d } : {}),
             dirty: dirtyBoth(),
           })),
         },

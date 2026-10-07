@@ -881,7 +881,7 @@ describe('relative source paths (image-source.md)', () => {
     expect(sceneNow().nodes).toHaveLength(1); // never deleted
   });
 
-  it('a first Save re-checks relative paths: flagged missing before, resolved after; the node is not refitted', async () => {
+  it('a first Save re-checks relative paths: flagged missing before, resolved after; a different size sends layer.set_source', async () => {
     const { save } = await import('@tauri-apps/plugin-dialog');
     (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/x/proj.oblique');
     await arrange(relativeScene('plates/a.png', [200, 100]));
@@ -890,18 +890,36 @@ describe('relative source paths (image-source.md)', () => {
     const readFile = vi.fn(async () => new Uint8Array([1]));
     const decode = vi.fn(async () => ({ width: 400, height: 100, close: vi.fn() }));
     await saveProject({}, use(makeDeps({ readFile, decode })));
+    await vi.waitFor(() => expect(host.runs.map((r) => r.id)).toContain('layer.set_source'));
 
     expect(readFile).toHaveBeenCalledWith('/x/plates/a.png');
     expect(sources.isSourceMissing('n1')).toBe(false);
-    const node = sceneNow().nodes[0] as unknown as {
-      sourcePath: string;
-      sourceSize: [number, number];
-    };
+    expect(host.runs.find((r) => r.id === 'layer.set_source')?.payload).toEqual({
+      at: '/layers/n1',
+      sourcePath: 'plates/a.png',
+      sourceSize: [400, 100],
+    });
+    await vi.waitFor(() =>
+      expect((sceneNow().nodes[0] as unknown as { sourceSize: number[] }).sourceSize).toEqual([
+        400, 100,
+      ]),
+    );
+    const node = sceneNow().nodes[0] as unknown as { sourcePath: string };
     expect(node.sourcePath).toBe('plates/a.png');
-    // deferred: Epic 21 story 2 — the refit to the file's own size is a write rhizome doesn't carry yet
-    expect(node.sourceSize).toEqual([200, 100]);
-    expect(notify).not.toHaveBeenCalled(); // no "isn't on rhizome yet" toast for bookkeeping
+    expect(notify).not.toHaveBeenCalled();
     expect(useProjectMetaStore.getState().path).toBe('/x/proj.oblique');
+    // a real undo step, so the document is unsaved straight after the save that caused it
+    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
+  });
+
+  it('a first Save leaves a file of the same size alone: no command, still saved', async () => {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/x/proj.oblique');
+    await arrange(relativeScene('plates/a.png', [200, 100]));
+    sources.useSourceMissingStore.getState().setMissing('n1', true, 'relative-unsaved');
+    await saveProject({}, use(makeDeps())); // decodes 200x100
+    expect(sources.isSourceMissing('n1')).toBe(false);
+    expect(host.runs).toEqual([]); // saveAs is not a command run
     expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
   });
 
