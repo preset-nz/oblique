@@ -54,11 +54,9 @@ coverage files:
 
 # Licence check (also part of `check`). Reads files only, no network. Re-resolve with
 # `preset-compliance licences scan` after changing dependencies.
-# check_python_licenses.py stays for the sidecar: preset-compliance doesn't scan uv.lock yet.
 [group('quality')]
 licences:
     preset-compliance licences check
-    python3 scripts/check_python_licenses.py
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]

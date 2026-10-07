@@ -1,3 +1,19 @@
 # preset-compliance: https://github.com/preset-nz/compliance
 [licences]
 extends = "permissive@2"
+
+# The sidecar's freezer, dev scope. Reviewed 2026-07-10 in the old
+# check_python_licenses.py, carried over when the gate learnt uv.
+[[licences.exceptions]]
+name = "pyinstaller"
+ecosystem = "uv"
+reason = "GPL-2.0 with PyInstaller's Bootloader Exception (COPYING.txt): embedding the compiled bootloader in proprietary distributions is permitted without restriction"
+date = "2026-07-10"
+by = "Georg"
+
+[[licences.exceptions]]
+name = "pyinstaller-hooks-contrib"
+ecosystem = "uv"
+reason = "Apache-2.0 and GPL-2.0 hook definitions read by PyInstaller's analyser at build time; not embedded in the frozen output"
+date = "2026-07-10"
+by = "Georg"
