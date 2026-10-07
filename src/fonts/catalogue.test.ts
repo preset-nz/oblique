@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import { resetCatalogueLoadForTests, useFontCatalogueStore } from './catalogue';
 import { listFonts } from './fontsIpc';
@@ -70,7 +69,7 @@ describe('font catalogue store', () => {
     expect(s.byPostscript.get('Beta-Regular')).toBe(faces[2]);
   });
 
-  it('dirties every text node (both levels) when it becomes ready, without touching history', async () => {
+  it('dirties every text node (both levels) when it becomes ready', async () => {
     const f = { ...face('A', 'A-Regular'), style: 'Regular', italic: false };
     const id = useSceneStore
       .getState()
@@ -99,7 +98,6 @@ describe('font catalogue store', () => {
         ],
       },
     }));
-    history.clear();
 
     mocked.mockResolvedValue([face('A', 'A-Regular')]);
     await useFontCatalogueStore.getState().load();
@@ -107,6 +105,5 @@ describe('font catalogue store', () => {
     const nodes = useSceneStore.getState().scene.nodes;
     expect(nodes.find((n) => n.id === id)?.dirty).toEqual({ draft: true, working: true });
     expect(nodes.find((n) => n.id === pixelId)?.dirty).toEqual({ draft: false, working: false });
-    expect(history.canUndo()).toBe(false);
   });
 });

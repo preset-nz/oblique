@@ -519,7 +519,7 @@ describe('the project meta store follows the status of the document host', () =>
     await saveProject({}, use(makeDeps()));
     expect(meta()).toMatchObject({ path: '/art/m.oblique', dirtySinceSave: false });
 
-    await rhizome.undo();
+    await host.step(true); // Edit > Undo
     await settle();
     expect(meta().dirtySinceSave).toBe(true);
 
@@ -593,8 +593,8 @@ describe('newProject', () => {
     await settle();
     await newProject(async () => true);
 
-    const { undo } = await import('@/scene/history');
-    await undo();
+    await host.step(true); // Edit > Undo: the new document starts an empty history
+    await settle();
     expect(sceneNow().nodes).toHaveLength(0);
   });
 });

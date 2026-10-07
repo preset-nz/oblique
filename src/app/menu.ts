@@ -1,4 +1,5 @@
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { type Binding, useCommands } from '@preset.nz/app-kit/core';
+import { useMemo } from 'react';
 import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
@@ -16,48 +17,33 @@ import {
   saveProject,
 } from '@/project/io';
 import { duplicateNode } from '@/scene/duplicateNode';
-import { redo, undo } from '@/scene/history';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { commitActiveTextEdit } from '@/scene/textEditState';
 import { isPixelNode } from '@/scene/types';
 
 /**
- * Native macOS menu bar → webview bridge (roadmap gap "Native app menu +
- * New command", 2026-07-04). The Rust side (`src-tauri/src/menu.rs`) builds
- * the App/File/Edit menu and forwards item activation as plain Tauri
- * events; this module just listens and reuses the exact same handlers
- * `shortcuts.ts` calls for the keyboard paths, so there is one behaviour
- * per command, not two.
+ * What each menu command does: the webview half of app-kit's command table (Epic 22, slice b).
  *
- * Double-firing: on macOS, a menu item's accelerator is a native key
- * equivalent consumed by `NSMenu`/`performKeyEquivalent:` before the
- * keydown reaches the WKWebView, so the menu owns Cmd+,/N/O/I/S/Shift+Cmd+S/
- * Shift+Cmd+E/Alt+Shift+Cmd+E/Cmd+Z/Shift+Cmd+Z and the View zoom accelerators
- * (Cmd+=/Cmd+-/Cmd+0/Cmd+1, view-menu-zoom.md), View → Snap to Layers
- * (Cmd+;, snapping.md — a check item, see its handler below) and the Layer menu's
- * Cmd+]/Cmd+[ (+Shift, drag-reorder.md) exclusively — `shortcuts.ts`'s keydown
- * branches for those keys were removed rather than kept as dead/duplicate
- * paths (this is the mainstream, expected behaviour, but wasn't
- * exercisable headlessly in this environment — see the story report for
- * the manual click-test to confirm no double-fire). Cmd+, (Settings…,
- * Epic 17 story 1) never had a `shortcuts.ts` branch to remove — the menu
- * is its only source.
+ * The table itself is Rust's (`src-tauri/src/menu.rs`): ids, labels, accelerators and where each
+ * sits in the bar. app-kit builds the native menu from it and sends every activation as a
+ * `command` event carrying the id; `useCommands` finds the binding here and runs it when it is
+ * enabled, and pushes the enabled and ticked state back to the menu. So this module is only
+ * `id -> what it does`, plus the two items whose state follows the app: Replace Image… (enabled
+ * while an unlocked image layer is selected) and Snap to Layers (a tick the snap store owns).
  *
- * Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split Open
- * vs Import", 2026-07-05): two distinct handlers, not one dialog routed by
- * extension — `openProjectDialog` replaces the whole project,
- * `importImagesDialog` only ever adds node(s).
+ * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
+ * history in Rust; the host tells the webview with `history-stepped` and `rhizome/rhizome.ts`
+ * rebuilds the store from the mirror. While a text field has focus, app-kit sends `text-undo`
+ * instead and the field undoes its own typing (see `scene/textEditState.ts`).
  *
- * Listens via `getCurrentWindow().listen(...)` rather than the top-level
- * `@tauri-apps/api/event` `listen` — same wire event, but this keeps
- * `menu.ts` outside the `tauri-frame-ipc-only-via-sidecar-transport`
- * dependency-cruiser gate (architecture.md: nobody but the sidecar frame
- * transport touches `@tauri-apps/api/(core|event)` directly). The Rust
- * side's `app.emit(...)` is an unfiltered broadcast (`EventTarget::any()`
- * semantics — Tauri's own docs: "emits ... to all webviews"), so a
- * window-scoped listener receives it exactly the same as the top-level one
- * would.
+ * A menu accelerator is a native key equivalent consumed by `NSMenu` before the key reaches the
+ * webview, so the menu owns every chord in `menu.rs`'s `SHORTCUTS` and `shortcuts.ts` claims none
+ * of them. That is the mainstream behaviour but can't be exercised headlessly: click-test it.
+ *
+ * Open (Cmd+O) vs Import (Shift+Cmd+I): two distinct handlers, not one dialog routed by
+ * extension. `openProjectDialog` replaces the whole project, `importImagesDialog` only ever adds
+ * node(s).
  */
 
 /**
@@ -96,104 +82,98 @@ async function replaceSelectedImage(): Promise<void> {
   if (nodeId) await replaceImageDialog(nodeId);
 }
 
-const MENU_EVENTS: Record<string, (payload: unknown) => void | Promise<void>> = {
-  'menu://app/settings': () => openSettingsDialog(),
-  'menu://file/new': () => newProject(),
-  'menu://file/open': () => openProjectDialog(),
-  'menu://file/import': () => importImagesDialog(),
-  'menu://file/save': () => saveProject({ as: false }),
-  'menu://file/save-as': () => saveProject({ as: true }),
-  'menu://file/export-png': () => exportPng(),
-  // File → Export Proof… (Alt+Shift+Cmd+E, registration-marks-and-colour-bars.md): opens the
-  // options dialog; its Export… button runs `exportProof`. Plain Export PNG stays plain.
-  'menu://file/export-proof': () => openExportProofDialog(),
-  // The native menu owns Cmd+Z even while the inspector's Text field has
-  // focus, so an open text edit (an open history transaction) must be
-  // committed first — otherwise undo() would flush a half-finished edit or
-  // leave a new blank node orphaned (text-tool-and-inspector.md).
-  'menu://edit/undo': () => {
-    commitActiveTextEdit();
-    return undo();
-  },
-  'menu://edit/redo': () => {
-    commitActiveTextEdit();
-    return redo();
-  },
-  // Edit → Duplicate (Cmd+D, duplicate-node.md): an open text edit commits
-  // first; the copy becomes the selection so a second Cmd+D duplicates the copy.
-  'menu://edit/duplicate': async () => {
-    commitActiveTextEdit();
-    const selection = useSelectionStore.getState().selection;
-    if (selection.kind !== 'node') return;
-    const newId = await duplicateNode(selection.nodeId, tauriImportDeps);
-    if (newId) useSelectionStore.getState().selectNode(newId);
-  },
-  // View menu (view-menu-zoom.md): the same store actions the status-bar
-  // buttons call. Cmd+0/Cmd+1 used to be keydown branches in shortcuts.ts.
-  'menu://view/zoom-in': () => useViewTransformStore.getState().zoomIn(),
-  'menu://view/zoom-out': () => useViewTransformStore.getState().zoomOut(),
-  'menu://view/fit': () => useViewTransformStore.getState().fitToWindow(),
-  'menu://view/actual-size': () => useViewTransformStore.getState().reset100(),
-  // View -> Snap to Layers (snapping.md, Cmd+;). A native check item: muda
-  // toggles it on click and menu.rs sends the NEW checked state as the payload,
-  // so the menu stays the source of truth and the store only mirrors it (no
-  // invoke back to Rust to set the tick; both default to on).
-  'menu://view/snap-to-layers': (payload) => useSnapStore.getState().setEnabled(payload === true),
-  // Layer menu (drag-reorder.md): Cmd+] / Cmd+[ and the Shift variants.
-  'menu://layer/forward': () => moveSelectedLayer('forward'),
-  'menu://layer/backward': () => moveSelectedLayer('backward'),
-  'menu://layer/front': () => moveSelectedLayer('front'),
-  'menu://layer/back': () => moveSelectedLayer('back'),
-  // Layer → Replace Image… (image-source.md): enabled only for a pixel node.
-  'menu://layer/replace-image': () => replaceSelectedImage(),
-  // Same reason: Replace's undo step must not swallow a half-finished text edit.
-  'menu://type/replace-font': () => {
-    commitActiveTextEdit();
-    openReplaceFontDialog();
-  },
-  // Same again: the conversion is its own undo step, so an open edit commits first.
-  'menu://type/convert-outlines': () => {
-    commitActiveTextEdit();
-    return convertSelectedTextToOutlines();
-  },
-};
+/** Edit → Duplicate (duplicate-node.md): the copy becomes the selection, so a second one duplicates the copy. */
+async function duplicateSelected(): Promise<void> {
+  commitActiveTextEdit();
+  const selection = useSelectionStore.getState().selection;
+  if (selection.kind !== 'node') return;
+  const newId = await duplicateNode(selection.nodeId, tauriImportDeps);
+  if (newId) useSelectionStore.getState().selectNode(newId);
+}
 
-/** Installs all menu-event listeners; returns a teardown that unlistens everything. */
-export function installMenu(): () => void {
-  const win = getCurrentWindow();
-  let disposed = false;
-  const unlistens: Array<() => void> = [];
+/** The state the menu shows besides what the table says. */
+export interface MenuState {
+  /** An unlocked image layer is selected: Replace Image… is enabled. */
+  replaceableImage: boolean;
+  /** Snap to Layers is on: its tick. */
+  snapToLayers: boolean;
+}
 
-  for (const [event, handler] of Object.entries(MENU_EVENTS)) {
-    win
-      .listen(event, (e) => void handler(e.payload))
-      .then((fn) => {
-        if (disposed) {
-          fn();
-        } else {
-          unlistens.push(fn);
-        }
-      });
-  }
-
-  // Keep Layer → Replace Image… enabled only while an unlocked image layer is
-  // selected: tell Rust (which owns the item) whenever that changes. Sent as a
-  // window event, not an `invoke` — see menu.rs's EVT_LAYER_REPLACE_IMAGE_ENABLED.
-  let replaceEnabled: boolean | null = null;
-  const syncReplaceImageEnabled = () => {
-    const enabled = selectedReplaceableImage() !== null;
-    if (enabled === replaceEnabled) return;
-    replaceEnabled = enabled;
-    void win.emit('menu://layer/replace-image-enabled', enabled);
+/**
+ * The command ids `menu.rs` declares, bound to what they do. An id the table doesn't have is
+ * ignored by app-kit, and a command with no binding stays a dead menu item, which
+ * `menu.test.ts` guards against.
+ */
+export function menuBindings(state: MenuState): Record<string, Binding> {
+  const run = (f: () => unknown): Pick<Binding, 'run'> => ({ run: () => void f() });
+  return {
+    // App → Settings… (`app.settings`, app-kit's own item, Epic 17 story 1)
+    'app.settings': run(openSettingsDialog),
+    'file-new': run(newProject),
+    'file-open': run(openProjectDialog),
+    'file-import': run(importImagesDialog),
+    'file-save': run(() => saveProject({ as: false })),
+    'file-save-as': run(() => saveProject({ as: true })),
+    'file-export-png': run(exportPng),
+    // File → Export Proof… (registration-marks-and-colour-bars.md): opens the options dialog;
+    // its Export… button runs `exportProof`. Plain Export PNG stays plain.
+    'file-export-proof': run(openExportProofDialog),
+    'edit-duplicate': run(duplicateSelected),
+    // View menu (view-menu-zoom.md): the same store actions the status-bar buttons call.
+    'view-zoom-in': run(() => useViewTransformStore.getState().zoomIn()),
+    'view-zoom-out': run(() => useViewTransformStore.getState().zoomOut()),
+    'view-fit': run(() => useViewTransformStore.getState().fitToWindow()),
+    'view-actual': run(() => useViewTransformStore.getState().reset100()),
+    // View → Snap to Layers (snapping.md): the snap store is the truth and the menu follows it
+    // (`pressed`); muda has already flipped the tick by the time this runs, and the state
+    // pushed back after the flip agrees with it.
+    'view-snap-layers': {
+      pressed: state.snapToLayers,
+      run: () => useSnapStore.getState().setEnabled(!useSnapStore.getState().enabled),
+    },
+    // Layer menu (drag-reorder.md)
+    'layer-forward': run(() => moveSelectedLayer('forward')),
+    'layer-backward': run(() => moveSelectedLayer('backward')),
+    'layer-front': run(() => moveSelectedLayer('front')),
+    'layer-back': run(() => moveSelectedLayer('back')),
+    // Layer → Replace Image… (image-source.md): enabled only for an unlocked pixel node.
+    'layer-replace-image': {
+      enabled: state.replaceableImage,
+      run: () => void replaceSelectedImage(),
+    },
+    // Type menu (Epic 20): a Replace Font undo step must not swallow a half-finished text edit,
+    // and the outline conversion is its own undo step, so an open edit commits first in both.
+    'type-replace-font': {
+      run: () => {
+        commitActiveTextEdit();
+        openReplaceFontDialog();
+      },
+    },
+    'type-convert-outlines': {
+      run: () => {
+        commitActiveTextEdit();
+        void convertSelectedTextToOutlines();
+      },
+    },
   };
-  syncReplaceImageEnabled();
-  const unsubSelection = useSelectionStore.subscribe(syncReplaceImageEnabled);
-  const unsubScene = useSceneStore.subscribe(syncReplaceImageEnabled);
+}
 
-  return () => {
-    disposed = true;
-    unsubSelection();
-    unsubScene();
-    for (const fn of unlistens) fn();
-  };
+/**
+ * Binds the menu to the app: call once, from `App`. Follows the selection (Replace Image…) and
+ * the snap store (the tick), and keeps text-field undo routed.
+ */
+export function useMenuCommands(): void {
+  const selectedId = useSelectionStore((s) =>
+    s.selection.kind === 'node' ? s.selection.nodeId : null,
+  );
+  const replaceableImage = useSceneStore((s) => {
+    const node = s.scene.nodes.find((n) => n.id === selectedId);
+    return node !== undefined && isPixelNode(node) && node.state !== 'locked';
+  });
+  const snapToLayers = useSnapStore((s) => s.enabled);
+  const bindings = useMemo(
+    () => menuBindings({ replaceableImage, snapToLayers }),
+    [replaceableImage, snapToLayers],
+  );
+  useCommands(bindings);
 }

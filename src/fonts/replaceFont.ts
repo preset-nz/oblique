@@ -1,5 +1,5 @@
-import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import { isTextNode } from '@/scene/types';
 import type { FontRef } from './types';
 

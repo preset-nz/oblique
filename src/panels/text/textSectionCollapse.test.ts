@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import * as history from '@/scene/history';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, beginReEdit, useTextEditStore } from '@/scene/textEditState';
@@ -28,7 +27,6 @@ beforeEach(() => {
   useSelectionStore.setState({ selection: { kind: 'none' } });
   useTextEditStore.setState({ editing: null, focusRequest: 0, focusTarget: null });
   useTextSectionStore.setState({ collapsed: false });
-  history.clear();
 });
 
 describe('Text section collapse', () => {

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import {
@@ -24,7 +23,6 @@ function emptyScene(): Scene {
 
 beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
-  history.clear();
   useMarqueeStateStore.setState({ marquee: null, params: DEFAULT_MARQUEE_PARAMS });
 });
 
@@ -260,7 +258,7 @@ describe('fillRuleForMarquee (colour-range-select.md)', () => {
 });
 
 describe('marquee state never touches the scene store', () => {
-  it('every mutation leaves the scene reference and undo stack untouched', () => {
+  it('every mutation leaves the scene reference untouched', () => {
     const sceneBefore = useSceneStore.getState().scene;
 
     useMarqueeStateStore.getState().setMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 5, h: 5 } });
@@ -268,6 +266,5 @@ describe('marquee state never touches the scene store', () => {
     useMarqueeStateStore.getState().clear();
 
     expect(useSceneStore.getState().scene).toBe(sceneBefore);
-    expect(history.canUndo()).toBe(false);
   });
 });

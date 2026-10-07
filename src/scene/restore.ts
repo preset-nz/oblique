@@ -16,9 +16,9 @@ import {
 } from '@/scene/types';
 
 /**
- * Restoring a whole scene (moved out of `history.ts`, Epic 21 story 1): the snapshot undo
- * of Epic 13 used it, and so does rhizome's mirror (undo, redo, open and the reconcile all
- * rebuild the scene through here). The dirty flags are recomputed from an old-vs-new diff,
+ * Restoring a whole scene (Epic 21 story 1; the snapshot undo of Epic 13 it came from
+ * is gone): rhizome's mirror uses it (undo, redo, open and the reconcile all rebuild the
+ * scene through here). The dirty flags are recomputed from an old-vs-new diff,
  * never trusted from the target.
  */
 

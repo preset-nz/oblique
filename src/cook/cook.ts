@@ -535,7 +535,7 @@ export async function cookNodeFullRes(
  * Everything a node's modifier masks rasterise from that lives OUTSIDE its
  * `modifiers` array: each resolved ref + target geometry, and — when any
  * DOCUMENT-pinned mask resolves — the node's own transform2d (such masks
- * rasterise through the consumer's current frame). Mirrors history.ts's
+ * rasterise through the consumer's current frame). Mirrors `restore.ts`'s
  * `cookAffectingChanged` mask clauses.
  */
 function maskInputsKey(

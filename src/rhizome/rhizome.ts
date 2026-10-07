@@ -17,7 +17,10 @@
  *   something or the two rule sets disagree: rhizome wins through `restoreScene`, and the
  *   difference is logged.
  * - **Gestures.** `beginTransaction`/`endTransaction` become `pom_begin`/`pom_end`: a drag is
- *   one rhizome undo step. Cmd+Z is rhizome's.
+ *   one rhizome undo step.
+ * - **Undo and redo are app-kit's** (Epic 22 slice b): the Edit menu runs the document host's
+ *   history in Rust, and the host says `history-stepped` after the commit events. That is the
+ *   one cue to rebuild the store from the mirror; nothing here sends `edit.undo`.
  * - **Refusal.** Every other scene-writing action refuses with a toast (`refusal.ts`).
  * - **Startup.** The document host is made once the sidecar's op catalogue arrives
  *   (`document_init`); until then the channel is shut and edits wait in its queue.
@@ -30,9 +33,9 @@
  */
 import { notify, type SnackbarOptions } from '@preset.nz/ux-kit';
 import { bindProjectMeta } from '@/project/projectMeta';
-import { setHistoryBackend, withoutCapture } from '@/scene/history';
 import { restoreScene } from '@/scene/restore';
 import { useSceneStore } from '@/scene/store';
+import { setTransactionBackend } from '@/scene/transaction';
 import {
   IDENTITY_TRANSFORM_2D,
   isPixelNode,
@@ -99,8 +102,6 @@ export interface Rhizome {
   latestTransform(id: string): Transform2D | undefined;
   /** Re-reads the whole document and puts it in the store (open, new, undo, redo, cancel). */
   rebuild(): Promise<void>;
-  undo(): Promise<void>;
-  redo(): Promise<void>;
   isLive(): boolean;
   /** A path macOS asked to open before the front end was listening, once. */
   takeLaunchPath(): string | null;
@@ -286,7 +287,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         // Nothing for Rust to change (a missing file that came back as it was): the pixels did
         // change, so repaint, as the store action always did. Same values, so no step and no
         // difference for the reconcile.
-        withoutCapture(() => original.setPixelSource(id, sourcePath, sourceSize));
+        original.setPixelSource(id, sourcePath, sourceSize);
         return;
       }
       sendCommand('layer.set_source', {
@@ -368,36 +369,34 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     const stepped = /^(Undo|Redo|Cancel)\b/.test(u.label);
     const layers = mirror.byPath(LAYERS_PATH);
     if (!layers) return;
-    withoutCapture(() => {
-      for (const r of u.rows) {
-        if (r.path === DOCUMENT_PATH) {
-          const size = val(r, 'documentSize') as [number, number] | undefined;
-          const have = scene().documentSize;
-          if (size && (size[0] !== have[0] || size[1] !== have[1])) original.setDocumentSize(size);
-        } else if (r.parent === layers.id) {
-          const node = nodeOf(r.name);
-          if (!node || localLayers.has(node.id)) continue;
-          if (!stepped) applySourceEcho(r);
-          const t = transform2d(r);
-          const h = nodeOf(node.id)?.transform2d;
-          if (
-            t &&
-            (!h ||
-              t.x !== h.x ||
-              t.y !== h.y ||
-              t.scaleX !== h.scaleX ||
-              t.scaleY !== h.scaleY ||
-              t.rotation !== h.rotation)
-          ) {
-            original.setNodeTransform(node.id, t);
-          }
-          const have = node as unknown as Record<string, unknown>;
-          const patch: Record<string, unknown> = {};
-          for (const k of PROP_KEYS) if (have[k] !== val(r, k)) patch[k] = val(r, k);
-          if (Object.keys(patch).length > 0) original.setNodeProp(node.id, patch);
+    for (const r of u.rows) {
+      if (r.path === DOCUMENT_PATH) {
+        const size = val(r, 'documentSize') as [number, number] | undefined;
+        const have = scene().documentSize;
+        if (size && (size[0] !== have[0] || size[1] !== have[1])) original.setDocumentSize(size);
+      } else if (r.parent === layers.id) {
+        const node = nodeOf(r.name);
+        if (!node || localLayers.has(node.id)) continue;
+        if (!stepped) applySourceEcho(r);
+        const t = transform2d(r);
+        const h = nodeOf(node.id)?.transform2d;
+        if (
+          t &&
+          (!h ||
+            t.x !== h.x ||
+            t.y !== h.y ||
+            t.scaleX !== h.scaleX ||
+            t.scaleY !== h.scaleY ||
+            t.rotation !== h.rotation)
+        ) {
+          original.setNodeTransform(node.id, t);
         }
+        const have = node as unknown as Record<string, unknown>;
+        const patch: Record<string, unknown> = {};
+        for (const k of PROP_KEYS) if (have[k] !== val(r, k)) patch[k] = val(r, k);
+        if (Object.keys(patch).length > 0) original.setNodeProp(node.id, patch);
       }
-    });
+    }
   }
 
   function takeUpdate(u: Update): void {
@@ -494,17 +493,13 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     if (g) channel.end(g).catch(fail).finally(scheduleReconcile);
   }
 
-  async function step(id: 'edit.undo' | 'edit.redo'): Promise<void> {
-    endGesture();
-    // rebuild whatever the answer: the document may have moved without `committed` saying so
-    const failed = await channel.run(id).then(
-      () => false,
-      (e) => {
-        fail(e);
-        return true;
-      },
-    );
-    if (!failed) await rebuild();
+  /**
+   * Rust undid or redid a step (Edit > Undo, from app-kit): its commit events have reached the
+   * mirror, so the store is rebuilt from it whatever they said. A gesture still open here would
+   * have kept Undo disabled, so there is none to close.
+   */
+  function takeStepped(): void {
+    void rebuild().catch(fail);
   }
 
   // ---------------------------------------------------------------- files
@@ -555,7 +550,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       const off: (() => void)[] = [];
       try {
         await backend.init(catalogue(ops));
-        off.push(await backend.onUpdate(takeUpdate), await backend.onStatus(takeStatus));
+        off.push(
+          await backend.onUpdate(takeUpdate),
+          await backend.onStatus(takeStatus),
+          await backend.onHistoryStepped(takeStepped),
+        );
         launchPath = await backend.connect();
         const view = await backend.view();
         mirror.load(view);
@@ -581,9 +580,9 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     const own = { ...wrappers };
     store.setState(own);
     const undoRefusals = installRefusals(store, { notify: deps.notify, now });
-    setHistoryBackend({
+    setTransactionBackend({
       begin: () => {
-        endGesture(); // an unmatched earlier begin: close it first, as history's own does
+        endGesture(); // an unmatched earlier begin: close it first
         const g = channel.begin('Edit');
         g.catch(fail);
         gesture = g;
@@ -599,12 +598,10 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
             .catch(fail);
         }
       },
-      undo: () => step('edit.undo'),
-      redo: () => step('edit.redo'),
     });
     return () => {
       undoRefusals();
-      setHistoryBackend(null);
+      setTransactionBackend(null);
       store.setState(original as Partial<State>);
     };
   }
@@ -616,8 +613,6 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     install,
     reconcile,
     rebuild: () => rebuild(),
-    undo: () => step('edit.undo'),
-    redo: () => step('edit.redo'),
     latestTransform: (id) => pendingTransforms.get(id),
     isLive: () => live,
     takeLaunchPath: () => {

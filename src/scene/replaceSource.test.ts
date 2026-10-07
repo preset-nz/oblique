@@ -3,7 +3,6 @@ import type { ImportDeps } from '@/project/import';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
-import * as history from './history';
 import { replacePixelSource } from './replaceSource';
 import * as sources from './sources';
 import { useSceneStore } from './store';
@@ -84,12 +83,10 @@ beforeEach(() => {
   sources.clearAll();
   cache.clearAll();
   backgroundSource.clear();
-  history.clear();
   useProjectMetaStore.setState({ path: null, dirtySinceSave: false });
   sources.useSourceMissingStore.setState({ missing: {}, reasons: {} });
   setScene([pixelNode('a')]);
   sources.set('a', bitmap(512, 512) as unknown as ImageBitmap);
-  history.clear();
 });
 
 describe('replacePixelSource', () => {
@@ -116,40 +113,7 @@ describe('replacePixelSource', () => {
     expect(sources.isSourceMissing('a')).toBe(false);
   });
 
-  it('is exactly one undo step', async () => {
-    const { deps } = makeDeps({ '/new/b.png': [100, 100] });
-    await replacePixelSource('a', '/new/b.png', deps);
-    expect(history.canUndo()).toBe(true);
-    const { deps: restoreDeps } = makeDeps({ '/old/a.png': [512, 512] });
-    await history.undo(restoreDeps);
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('undo restores path, size, transform AND pixels; redo puts the new image back', async () => {
-    const original = node();
-    const { deps } = makeDeps({ '/new/b.png': [4000, 2000] });
-    await replacePixelSource('a', '/new/b.png', deps);
-    const replaced = node();
-    const replacedBitmap = sources.get('a');
-
-    const disk = makeDeps({ '/old/a.png': [512, 512], '/new/b.png': [4000, 2000] });
-    await history.undo(disk.deps);
-    expect(node().sourcePath).toBe('/old/a.png');
-    expect(node().sourceSize).toEqual([512, 512]);
-    expect(node().transform2d).toEqual(original.transform2d);
-    const restored = sources.get('a') as unknown as FakeBitmap;
-    expect(restored.width).toBe(512); // the OLD pixels, not the replacement's
-    expect(restored).not.toBe(replacedBitmap);
-    expect(node().dirty).toEqual({ draft: true, working: true });
-
-    await history.redo(disk.deps);
-    expect(node().sourcePath).toBe('/new/b.png');
-    expect(node().sourceSize).toEqual(replaced.sourceSize);
-    expect(node().transform2d).toEqual(replaced.transform2d);
-    expect((sources.get('a') as unknown as FakeBitmap).width).toBe(4000);
-  });
-
-  it('refuses strata:// and any scheme://: nothing changes and there is no undo step', async () => {
+  it('refuses strata:// and any scheme://: nothing changes', async () => {
     const { deps, reads } = makeDeps({});
     const before = useSceneStore.getState().scene;
     for (const typed of ['strata://asset/1', 'https://x.test/a.png']) {
@@ -159,7 +123,6 @@ describe('replacePixelSource', () => {
       });
     }
     expect(useSceneStore.getState().scene).toBe(before);
-    expect(history.canUndo()).toBe(false);
     expect(reads).toEqual([]);
     expect(sources.isSourceMissing('a')).toBe(false);
   });

@@ -1,0 +1,15 @@
+# app-kit's built-in menu items (Epic 22, slice b). Oblique's own New, Open…, Save and Save As…
+# stand in for File's until app-kit's take over in slice c, so every document slot is off.
+# Close is off too: Cmd+W then closes the window from the Window menu, through the same
+# close request the webview's unsaved-changes prompt already answers.
+[file]
+new = false
+open = false
+open_recent = false
+close = false
+save = false
+save_as = false
+revert = false
+
+[app]
+settings = true

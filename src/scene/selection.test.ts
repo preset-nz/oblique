@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import * as history from './history';
 import { useSelectionStore } from './selection';
 import { useSceneStore } from './store';
 import type { Scene } from './types';
@@ -17,7 +16,6 @@ function emptyScene(): Scene {
 
 beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
-  history.clear();
   useSelectionStore.setState({ selection: { kind: 'none' } });
 });
 
@@ -35,13 +33,12 @@ describe('selection store', () => {
 });
 
 describe('de-select never touches the scene store (tool-state.md acceptance)', () => {
-  it('selecting and clearing a node does not change the scene reference or create an undo step', () => {
+  it('selecting and clearing a node does not change the scene reference', () => {
     const sceneBefore = useSceneStore.getState().scene;
 
     useSelectionStore.getState().selectNode('node-1');
     useSelectionStore.getState().clear();
 
     expect(useSceneStore.getState().scene).toBe(sceneBefore);
-    expect(history.canUndo()).toBe(false);
   });
 });

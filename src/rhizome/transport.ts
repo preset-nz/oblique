@@ -1,6 +1,7 @@
 /**
  * The one module that talks to rhizome-pom-tauri (Epic 21 story 1): the `pom_*` commands, the
- * `pom://commit` and `pom://status` events, and Oblique's own `document_init` / `document_log`.
+ * `pom://commit` and `pom://status` events, Oblique's own `document_init` / `document_log`, and
+ * the document host's `history-stepped` (Epic 22 slice b).
  * Commands only (rhizome decision 46): there is no way to send a raw edit.
  *
  * Two layers:
@@ -62,6 +63,12 @@ export interface Status {
   generation: number;
 }
 
+/** What an undo or redo did (the host's `history-stepped`): the step's own name, without the verb. */
+export interface Stepped {
+  undid: boolean;
+  label: string;
+}
+
 /** One thing a load couldn't take as written (rhizome-pom `Issue`). */
 export interface Issue {
   path: string;
@@ -93,6 +100,11 @@ export interface RhizomeBackend {
   log(message: string): Promise<void>;
   onUpdate(f: (u: Update) => void): Promise<Unlisten>;
   onStatus(f: (s: Status) => void): Promise<Unlisten>;
+  /**
+   * Rust stepped the history (Edit > Undo or Redo, app-kit's): its commit and status events
+   * have been sent already, so the mirror is current when this fires.
+   */
+  onHistoryStepped(f: (s: Stepped) => void): Promise<Unlisten>;
   /** macOS asked to open a document while the front end is listening. */
   onOpenDocument(f: (path: string) => void): Promise<Unlisten>;
 }
@@ -115,6 +127,7 @@ export const tauriBackend: RhizomeBackend = {
   log: (message) => invoke<void>('document_log', { message }).catch(() => undefined),
   onUpdate: (f) => listen<Update>('pom://commit', (e) => f(e.payload)),
   onStatus: (f) => listen<Status>('pom://status', (e) => f(e.payload)),
+  onHistoryStepped: (f) => listen<Stepped>('history-stepped', (e) => f(e.payload)),
   onOpenDocument: (f) => listen<string>('pom://open-document', (e) => f(e.payload)),
 };
 

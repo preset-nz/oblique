@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
-import * as history from './history';
+import { type HistoryRehydrateDeps, restoreScene } from './restore';
+import { sceneChangedIgnoringDirty } from './sceneDiff';
 import * as sources from './sources';
 import { useSceneStore } from './store';
 import type { PixelNode, Scene, SceneNode, VectorNode, VectorPath } from './types';
@@ -65,211 +66,72 @@ function fakeBitmap(): ImageBitmap {
   return { width: 100, height: 100, close: vi.fn() } as unknown as ImageBitmap;
 }
 
-function fakeDeps(): history.HistoryRehydrateDeps {
+function fakeDeps(): HistoryRehydrateDeps {
   return {
     readFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
     decode: vi.fn(async () => ({ width: 100, height: 100, close: vi.fn() })),
   };
 }
 
+/**
+ * `restoreScene` is what rhizome's mirror uses for undo, redo and open (Epic 22 removed the
+ * snapshot history that used to drive it from the store). These tests keep what that history's
+ * tests proved about it: dirty flags recomputed from an old-vs-new diff, caches dropped and
+ * bitmaps re-decoded. A tiny snapshot undo stands in for rhizome here: it remembers the scene
+ * before each real edit and restores it the way the mirror does. It is test code only.
+ */
+const undoStack: Scene[] = [];
+const redoStack: Scene[] = [];
+let applying = false;
+
+useSceneStore.subscribe((state, prev) => {
+  if (applying || state.scene === prev.scene) return;
+  if (!sceneChangedIgnoringDirty(prev.scene, state.scene)) return; // cook churn is not an edit
+  undoStack.push(prev.scene);
+  redoStack.length = 0;
+});
+
+function reset(): void {
+  undoStack.length = 0;
+  redoStack.length = 0;
+}
+
+const canUndo = (): boolean => undoStack.length > 0;
+
+async function step(from: Scene[], to: Scene[], deps: HistoryRehydrateDeps): Promise<void> {
+  const target = from.pop();
+  if (!target) return;
+  const current = useSceneStore.getState().scene;
+  to.push(current);
+  await restoreScene(current, target, deps, (scene) => {
+    applying = true;
+    try {
+      useSceneStore.getState().loadScene(scene);
+    } finally {
+      applying = false;
+    }
+  });
+}
+
+const undo = (deps: HistoryRehydrateDeps) => step(undoStack, redoStack, deps);
+const redo = (deps: HistoryRehydrateDeps) => step(redoStack, undoStack, deps);
+
 beforeEach(() => {
   // Reset the scene FIRST — setState itself fires the module-level subscribe
   // (leftover scene from the previous test differs from a fresh empty one),
-  // so history.clear() must run after it to actually leave a clean slate.
+  // so reset() must run after it to actually leave a clean slate.
   useSceneStore.setState({ scene: emptyScene() });
   cache.clearAll();
   sources.clearAll();
   backgroundSource.clear();
-  history.clear();
-});
-
-describe('push / undo / redo invariants', () => {
-  it('undo restores the scene from before a discrete mutation', () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
-    expect(history.canUndo()).toBe(true);
-
-    return history.undo(fakeDeps()).then(() => {
-      expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-      expect(history.canUndo()).toBe(false);
-      expect(history.canRedo()).toBe(true);
-    });
-  });
-
-  it('redo re-applies an undone mutation', async () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
-    await history.undo(fakeDeps());
-    await history.redo(fakeDeps());
-
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
-    expect(history.canRedo()).toBe(false);
-    expect(history.canUndo()).toBe(true);
-  });
-
-  it('a fresh mutation after undo clears the redo stack', async () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
-    await history.undo(fakeDeps());
-    expect(history.canRedo()).toBe(true);
-
-    useSceneStore.getState().addPixelNode({ sourcePath: '/b.png', sourceSize: [10, 10] });
-    expect(history.canRedo()).toBe(false);
-  });
-
-  it('undo on an empty stack is a no-op', async () => {
-    await history.undo(fakeDeps());
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-  });
-
-  it('redo on an empty stack is a no-op', async () => {
-    await history.redo(fakeDeps());
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-  });
-
-  it('caps the undo stack at 50 entries', () => {
-    for (let i = 0; i < 60; i++) {
-      useSceneStore.getState().addPixelNode({ sourcePath: `/${i}.png`, sourceSize: [10, 10] });
-    }
-    // Internal cap isn't directly observable, so undo 50 times and expect
-    // the 51st to be a no-op (the oldest 10 pushes were evicted).
-    return (async () => {
-      for (let i = 0; i < 50; i++) {
-        await history.undo(fakeDeps());
-      }
-      expect(history.canUndo()).toBe(false);
-      const nodesLeft = useSceneStore.getState().scene.nodes.length;
-      expect(nodesLeft).toBe(10); // 60 pushed, only the newest 50 undo steps existed
-    })();
-  });
-});
-
-describe('cook-churn filtering', () => {
-  it('does not capture a dirty-only change (markDirty)', () => {
-    useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
-    history.clear();
-
-    useSceneStore.getState().markDirty('a', 'draft');
-
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('does not capture a dirty-only change (clearDirty)', () => {
-    useSceneStore.setState({
-      scene: emptyScene([pixelNode('a', { dirty: { draft: true, working: true } })]),
-    });
-    history.clear();
-
-    useSceneStore.getState().clearDirty('a', 'draft');
-
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('does capture a real edit alongside a dirty flip (setModifierParam)', () => {
-    useSceneStore.setState({
-      scene: emptyScene([
-        pixelNode('a', { modifiers: [{ id: 'm1', type: 'blur', enabled: true, params: {} }] }),
-      ]),
-    });
-    history.clear();
-
-    useSceneStore.getState().setModifierParam('a', 'm1', 'radius', 4);
-
-    expect(history.canUndo()).toBe(true);
-  });
-});
-
-describe('transaction coalescing', () => {
-  it('collapses several mutations between begin/end into one undo step', async () => {
-    useSceneStore.setState({ scene: emptyScene([pixelNode('a', { opacity: 1 })]) });
-    history.clear();
-
-    history.beginTransaction();
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.8 });
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.6 });
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.4 });
-    history.endTransaction();
-
-    expect(useSceneStore.getState().scene.nodes[0].opacity).toBe(0.4);
-
-    await history.undo(fakeDeps());
-
-    expect(useSceneStore.getState().scene.nodes[0].opacity).toBe(1);
-    expect(history.canUndo()).toBe(false); // the three scrub ticks were ONE step
-  });
-
-  it('a transaction that produces no net change pushes nothing', () => {
-    useSceneStore.setState({ scene: emptyScene([pixelNode('a', { opacity: 1 })]) });
-    history.clear();
-
-    history.beginTransaction();
-    history.endTransaction();
-
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('an unmatched beginTransaction self-heals on the next beginTransaction', () => {
-    useSceneStore.setState({ scene: emptyScene([pixelNode('a', { opacity: 1 })]) });
-    history.clear();
-
-    history.beginTransaction();
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.5 });
-    // No endTransaction — simulates a missed pointerup/pointercancel.
-    history.beginTransaction();
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.2 });
-    history.endTransaction();
-
-    // The first (unflushed) drag should have been flushed as its own step
-    // by the second beginTransaction's self-heal, so there are two steps.
-    expect(history.canUndo()).toBe(true);
-  });
-
-  it('undo/redo themselves flush any open transaction first', async () => {
-    useSceneStore.setState({ scene: emptyScene([pixelNode('a', { opacity: 1 })]) });
-    history.clear();
-
-    history.beginTransaction();
-    useSceneStore.getState().setNodeProp('a', { opacity: 0.5 });
-    // Undo called mid-drag (e.g. Cmd+Z fired while a scrub is still "open").
-    await history.undo(fakeDeps());
-
-    expect(useSceneStore.getState().scene.nodes[0].opacity).toBe(1);
-  });
-});
-
-describe('composition note (composition-note.md)', () => {
-  it('a typing session inside one transaction is one undo step', async () => {
-    history.beginTransaction();
-    useSceneStore.getState().setNote('a');
-    useSceneStore.getState().setNote('ab');
-    useSceneStore.getState().setNote('abc');
-    history.endTransaction();
-
-    await history.undo(fakeDeps());
-    expect(useSceneStore.getState().scene.note).toBeUndefined();
-    expect(history.canUndo()).toBe(false);
-
-    await history.redo(fakeDeps());
-    expect(useSceneStore.getState().scene.note).toBe('abc');
-  });
-
-  it('the note survives undo/redo of an unrelated edit', async () => {
-    useSceneStore.getState().setNote('keep me');
-    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
-
-    await history.undo(fakeDeps());
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
-    expect(useSceneStore.getState().scene.note).toBe('keep me');
-
-    await history.redo(fakeDeps());
-    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
-    expect(useSceneStore.getState().scene.note).toBe('keep me');
-  });
+  reset();
 });
 
 describe('dirty-diff correctness on restore', () => {
   it('marks a node dirty when its modifiers changed between old and restored', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().addModifier('a', 'blur', { radius: 2 });
     // addModifier already dirties per the store's own rule; clear it to
@@ -277,7 +139,7 @@ describe('dirty-diff correctness on restore', () => {
     useSceneStore.getState().clearDirty('a', 'draft');
     useSceneStore.getState().clearDirty('a', 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(useSceneStore.getState().scene.nodes[0].modifiers).toHaveLength(0);
     expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: true, working: true });
@@ -286,11 +148,11 @@ describe('dirty-diff correctness on restore', () => {
   it('leaves a node clean when only compositing fields changed (opacity)', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a', { opacity: 1 })]) });
     sources.set('a', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().setNodeProp('a', { opacity: 0.5 });
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(useSceneStore.getState().scene.nodes[0].opacity).toBe(1);
     expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: false, working: false });
@@ -299,7 +161,7 @@ describe('dirty-diff correctness on restore', () => {
   it('marks a vector node dirty when its paths changed between old and restored (undo of a path edit)', async () => {
     useSceneStore.setState({ scene: emptyScene([vectorNode('v')]) });
     sources.set('v', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().setVectorPaths('v', [
       {
@@ -316,7 +178,7 @@ describe('dirty-diff correctness on restore', () => {
     useSceneStore.getState().clearDirty('v', 'draft');
     useSceneStore.getState().clearDirty('v', 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes[0] as VectorNode;
     expect(restored.paths[0].anchors[1].point).toEqual({ x: 10, y: 0 });
@@ -335,7 +197,7 @@ describe('dirty-diff correctness on restore', () => {
       expand: 0,
       invert: false,
     });
-    history.clear();
+    reset();
 
     useSceneStore.getState().setVectorPaths('v', [
       {
@@ -352,7 +214,7 @@ describe('dirty-diff correctness on restore', () => {
       useSceneStore.getState().clearDirty(id, 'working');
     }
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
     // The consumer's own modifiers/maskId are identical on both sides of the
@@ -373,7 +235,7 @@ describe('dirty-diff correctness on restore', () => {
       expand: 0,
       invert: false,
     });
-    history.clear();
+    reset();
 
     useSceneStore
       .getState()
@@ -381,7 +243,7 @@ describe('dirty-diff correctness on restore', () => {
     useSceneStore.getState().clearDirty('p', 'draft');
     useSceneStore.getState().clearDirty('p', 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     // For an unmasked node a transform-only undo stays clean (rule 4); for a
     // vector-masked one the transform is a cook input, so undo must recook.
@@ -396,11 +258,11 @@ describe('dirty-diff correctness on restore', () => {
     });
     sources.set('a', fakeBitmap());
     sources.set('b', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().setNodeProp('a', { visible: false });
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const a = useSceneStore.getState().scene.nodes.find((n) => n.id === 'a');
     expect(a?.visible).toBe(true);
@@ -412,7 +274,7 @@ describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
   it('undo across a lock drops the baked cache and dirties both levels', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());
-    history.clear();
+    reset();
 
     // Simulate a completed lockNode: commit state: 'locked' as the store
     // action would, with a baked bitmap already in the cache.
@@ -424,7 +286,7 @@ describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
       },
     }));
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes[0];
     expect(restored.state).toBe('active');
@@ -432,10 +294,10 @@ describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
     expect(cache.get('a', 'baked')).toBeUndefined();
   });
 
-  it('redo re-locks without setting any dirty flag (rehydrate is the scheduler’s job, not history’s)', async () => {
+  it('redo re-locks without setting any dirty flag (rehydrate is the scheduler’s job, not restore’s)', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());
-    history.clear();
+    reset();
 
     cache.set('a', 'baked', fakeBitmap());
     useSceneStore.setState((s) => ({
@@ -445,10 +307,10 @@ describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
       },
     }));
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
     expect(useSceneStore.getState().scene.nodes[0].state).toBe('active');
 
-    await history.redo(fakeDeps());
+    await redo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes[0];
     expect(restored.state).toBe('locked');
@@ -463,12 +325,12 @@ describe('lock/unlock reconciliation (lock-state-machine.md)', () => {
     });
     sources.set('a', fakeBitmap());
     cache.set('a', 'baked', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().unlockNode('a');
-    expect(history.canUndo()).toBe(true);
+    expect(canUndo()).toBe(true);
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes[0];
     expect(restored.state).toBe('locked');
@@ -481,7 +343,7 @@ describe('undo-of-delete rehydration', () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());
     cache.set('a', 'draft', fakeBitmap());
-    history.clear();
+    reset();
 
     // Mirrors scene/deleteNode.ts: remove the scene node, evict cache + source.
     useSceneStore.getState().removeNode('a');
@@ -492,7 +354,7 @@ describe('undo-of-delete rehydration', () => {
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
 
     const deps = fakeDeps();
-    await history.undo(deps);
+    await undo(deps);
 
     expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
     expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: true, working: true });
@@ -503,19 +365,19 @@ describe('undo-of-delete rehydration', () => {
   it('flags source-missing instead of throwing when re-decode fails', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());
-    history.clear();
+    reset();
 
     useSceneStore.getState().removeNode('a');
     sources.remove('a');
 
-    const deps: history.HistoryRehydrateDeps = {
+    const deps: HistoryRehydrateDeps = {
       readFile: vi.fn(async () => {
         throw new Error('file gone');
       }),
       decode: vi.fn(async () => ({ width: 100, height: 100, close: vi.fn() })),
     };
 
-    await history.undo(deps);
+    await undo(deps);
 
     expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
     expect(sources.isSourceMissing('a')).toBe(true);
@@ -523,7 +385,7 @@ describe('undo-of-delete rehydration', () => {
 
   it('undo-of-add evicts the cache and source of the node being removed', async () => {
     useSceneStore.setState({ scene: emptyScene([]) });
-    history.clear();
+    reset();
 
     const nodeId = useSceneStore
       .getState()
@@ -531,23 +393,11 @@ describe('undo-of-delete rehydration', () => {
     sources.set(nodeId, fakeBitmap());
     cache.set(nodeId, 'draft', fakeBitmap());
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(useSceneStore.getState().scene.nodes).toHaveLength(0);
     expect(sources.get(nodeId)).toBeUndefined();
     expect(cache.get(nodeId, 'draft')).toBeUndefined();
-  });
-});
-
-describe('clear()', () => {
-  it('empties both stacks and drops any open transaction', () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/a.png', sourceSize: [10, 10] });
-    history.beginTransaction();
-
-    history.clear();
-
-    expect(history.canUndo()).toBe(false);
-    expect(history.canRedo()).toBe(false);
   });
 });
 
@@ -571,7 +421,7 @@ describe('text nodes', () => {
     useSceneStore.getState().clearDirty(id, 'draft');
     useSceneStore.getState().clearDirty(id, 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
     expect(node).toMatchObject({ content: 'A', dirty: { draft: true, working: true } });
@@ -585,7 +435,7 @@ describe('text nodes', () => {
     useSceneStore.getState().clearDirty(id, 'working');
     useSceneStore.getState().setNodeProp(id, { opacity: 0.5 });
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
     expect(node?.dirty).toEqual({ draft: false, working: false });
@@ -626,7 +476,7 @@ describe('a text node as a modifier-mask target', () => {
     settle(textId);
     settle(consumerId);
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(nodeById(textId)).toMatchObject({
       content: 'ROT',
@@ -641,7 +491,7 @@ describe('a text node as a modifier-mask target', () => {
     settle(textId);
     settle(consumerId);
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(nodeById(consumerId)?.dirty).toEqual({ draft: true, working: true });
   });
@@ -652,7 +502,7 @@ describe('a text node as a modifier-mask target', () => {
     settle(textId);
     settle(consumerId);
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(nodeById(textId)?.dirty).toEqual({ draft: true, working: true });
     expect(nodeById(consumerId)?.dirty).toEqual({ draft: false, working: false });
@@ -661,11 +511,11 @@ describe('a text node as a modifier-mask target', () => {
   it('undoing the text deletion restores the node and the mask ref', async () => {
     const { textId, consumerId } = setup();
     const maskId = (nodeById(consumerId) as PixelNode).modifiers[0].maskId as string;
-    history.clear();
+    reset();
     useSceneStore.getState().removeNode(textId);
     expect(useSceneStore.getState().scene.maskRefs?.[maskId]).toBeUndefined();
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(nodeById(textId)).toBeDefined();
     expect(useSceneStore.getState().scene.maskRefs?.[maskId]).toMatchObject({ nodeId: textId });
@@ -690,29 +540,29 @@ describe('mask follows node (mask-follows-node.md)', () => {
   it('toggling Follows layer on then off is two undo steps', async () => {
     maskedConsumer();
     useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', base);
-    history.clear();
+    reset();
 
     useSceneStore.getState().setMaskSpace('p', 'mod-1', 'node');
     useSceneStore.getState().setMaskSpace('p', 'mod-1', 'document');
     const maskId = useSceneStore.getState().scene.nodes[0].modifiers[0].maskId as string;
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
     expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBe('node');
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
     expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBeUndefined();
-    await history.undo(fakeDeps()); // nothing left
+    await undo(fakeDeps()); // nothing left
     expect(useSceneStore.getState().scene.maskRefs?.[maskId]?.space).toBeUndefined();
   });
 
   it('undoing a space switch dirties the consumer (the ref is a cook input)', async () => {
     maskedConsumer();
     useSceneStore.getState().setModifierVectorMask('p', 'mod-1', 'v', base);
-    history.clear();
+    reset();
     useSceneStore.getState().setMaskSpace('p', 'mod-1', 'node');
     useSceneStore.getState().clearDirty('p', 'draft');
     useSceneStore.getState().clearDirty('p', 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     expect(useSceneStore.getState().scene.nodes[0].dirty).toEqual({ draft: true, working: true });
   });
@@ -724,12 +574,12 @@ describe('mask follows node (mask-follows-node.md)', () => {
       space: 'node',
       attachTransform: attach,
     });
-    history.clear();
+    reset();
     useSceneStore.getState().setNodeTransform('p', moved);
     useSceneStore.getState().clearDirty('p', 'draft');
     useSceneStore.getState().clearDirty('p', 'working');
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
 
     const restored = useSceneStore.getState().scene.nodes.find((n) => n.id === 'p');
     expect(restored?.transform2d).toBeUndefined();
@@ -747,14 +597,14 @@ describe('undo/redo of the document background image (background-image.md)', () 
   it('undo of "set image" drops the bitmap; redo re-decodes it from the path', async () => {
     setImage();
     expect(backgroundSource.get('/bg.png')).toBeDefined();
-    expect(history.canUndo()).toBe(true);
+    expect(canUndo()).toBe(true);
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
     expect(useSceneStore.getState().scene.background).toBeUndefined();
     expect(backgroundSource.heldPath()).toBeUndefined();
 
     const deps = fakeDeps();
-    await history.redo(deps);
+    await redo(deps);
     expect(useSceneStore.getState().scene.background).toEqual({
       type: 'image',
       sourcePath: '/bg.png',
@@ -769,10 +619,10 @@ describe('undo/redo of the document background image (background-image.md)', () 
     useSceneStore.getState().setBackgroundColor('#112233');
     expect(backgroundSource.heldPath()).toBeUndefined();
 
-    await history.undo(fakeDeps());
+    await undo(fakeDeps());
     expect(backgroundSource.get('/bg.png')).toBeDefined();
 
-    await history.redo(fakeDeps()); // back to colour
+    await redo(fakeDeps()); // back to colour
     expect(backgroundSource.heldPath()).toBeUndefined();
 
     const failing = {
@@ -781,7 +631,7 @@ describe('undo/redo of the document background image (background-image.md)', () 
       }),
       decode: vi.fn(),
     };
-    await history.undo(failing);
+    await undo(failing);
     expect(useSceneStore.getState().scene.background?.type).toBe('image');
     expect(backgroundSource.heldPath()).toBeUndefined();
     expect(backgroundSource.useBackgroundSourceStore.getState().missing).toBe(true);

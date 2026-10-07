@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 
 /**
  * Composition note (composition-note.md): one plain free-text note per
@@ -22,13 +22,13 @@ export function NotesPanel() {
   const beginStep = () => {
     if (open.current) return;
     open.current = true;
-    history.beginTransaction();
+    beginTransaction();
   };
   const endStep = () => {
     clearTimeout(idle.current);
     if (!open.current) return;
     open.current = false;
-    history.endTransaction();
+    endTransaction();
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only cleanup; endStep reads refs
   useEffect(() => endStep, []);

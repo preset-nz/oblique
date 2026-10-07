@@ -371,7 +371,7 @@ export async function openProjectDialog(): Promise<void> {
 }
 
 /**
- * Cmd+I entry point (roadmap "Cmd+O is overloaded — split Open vs Import",
+ * Shift+Cmd+I entry point (was Cmd+I until Epic 22; roadmap "Cmd+O is overloaded — split Open vs Import",
  * 2026-07-05): images only, always adds node(s) via `importFiles` — never
  * touches the current project (no `loadProject` call, ever). Document-size
  * adoption rules live in `import.ts::importFile` (empty/unset doc only).

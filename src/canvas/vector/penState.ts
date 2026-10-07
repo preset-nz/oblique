@@ -17,8 +17,8 @@ import { mapVectorPaths } from './vectorTransform';
  * the scene store), so there's no cross-layer reason to push it down through
  * `scene/` the way the marquee had to. `finishClosed`/`finishOpen` are the
  * one place this store touches the scene: they call `addVectorNode` exactly
- * once (one history entry, per `scene/history.ts`'s always-on subscription —
- * no `beginTransaction`/`endTransaction` needed, this isn't a coalesced drag)
+ * once (one undo step: no `beginTransaction`/`endTransaction` needed, this isn't a
+ * coalesced drag)
  * and then reset to empty, ready for the next shape (the tool stays active,
  * "draws several shapes in a row" per the story).
  *

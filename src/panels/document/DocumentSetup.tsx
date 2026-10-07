@@ -4,8 +4,8 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { filenameOf } from '@/project/import';
 import { chooseBackgroundImageDialog } from '@/project/io';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
-import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import {
   ASPECT_PRESETS,
   BASE_PRESETS,
@@ -43,7 +43,7 @@ export function DocumentSetup() {
     clearTimeout(colourIdle.current);
     if (!colourDragging.current) return;
     colourDragging.current = false;
-    history.endTransaction();
+    endTransaction();
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only cleanup; endColourStep reads refs
   useEffect(() => endColourStep, []);
@@ -167,7 +167,7 @@ export function DocumentSetup() {
                   onChange={(e) => {
                     if (!colourDragging.current) {
                       colourDragging.current = true;
-                      history.beginTransaction();
+                      beginTransaction();
                     }
                     setBackgroundColor(e.target.value);
                     clearTimeout(colourIdle.current);

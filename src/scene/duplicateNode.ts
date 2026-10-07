@@ -15,7 +15,7 @@ import { isPixelNode } from '@/scene/types';
  * `sources.set`/`remove` close what they evict, so a shared `ImageBitmap`
  * would be closed under the survivor on the first delete.
  *
- * Undo/redo need nothing here: `history.ts` captures the scene change and
+ * Undo/redo need nothing here: rhizome records the scene change and
  * `restoreScene` re-decodes any pixel node missing from `sources`.
  */
 export async function duplicateNode(nodeId: string, deps: ImportDeps): Promise<string | null> {

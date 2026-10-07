@@ -36,7 +36,13 @@ pub fn run() {
             rhizome_pom_tauri::commands::pom_connect,
             rhizome_pom_tauri::commands::pom_new,
             rhizome_pom_tauri::commands::pom_open,
-            rhizome_pom_tauri::commands::pom_save_as
+            rhizome_pom_tauri::commands::pom_save_as,
+            preset_app_kit::app_kit_commands,
+            preset_app_kit::app_kit_menu_state,
+            preset_app_kit::app_kit_history,
+            preset_app_kit::app_kit_undo,
+            preset_app_kit::app_kit_redo,
+            preset_app_kit::app_kit_text_menu
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -46,7 +52,14 @@ pub fn run() {
             document.refresh_on_change(app.handle().clone());
             app.manage(document);
             sidecar::start(app.handle().clone());
-            menu::install(app.handle())?;
+            // The menu bar is app-kit's, with Oblique's commands on its table (`menu.rs`). It is
+            // installed as a history only, not a document (`install_history`): Undo and Redo and
+            // their titles are the host's, and File stays Oblique's own until slice c. Installing
+            // after the host is managed matters: app-kit reads its history straight away.
+            preset_app_kit::AppKit::<tauri::Wry>::new(&app.package_info().name)
+                .menu_config(menu::MENU_CONFIG)
+                .commands(menu::commands())
+                .install_history::<document::DocumentHost>(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())

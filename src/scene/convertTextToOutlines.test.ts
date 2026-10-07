@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as cache from './cache';
-import * as history from './history';
 import * as sources from './sources';
 import { useSceneStore } from './store';
 import type { PixelNode, Scene, TextNode, VectorNode, VectorPath } from './types';
@@ -53,7 +52,6 @@ function setScene(nodes: Scene['nodes'], maskRefs?: Scene['maskRefs']) {
     ...(maskRefs ? { maskRefs } : {}),
   };
   useSceneStore.setState({ scene });
-  history.clear();
 }
 
 function textNode(overrides: Partial<TextNode> = {}): TextNode {
@@ -80,7 +78,6 @@ beforeEach(() => {
   useSceneStore.setState({ scene: { ...state().scene, nodes: [] } });
   cache.clearAll();
   sources.clearAll();
-  history.clear();
 });
 
 describe('convertTextToOutlines', () => {
@@ -155,21 +152,5 @@ describe('convertTextToOutlines', () => {
     expect(state().convertTextToOutlines('p', paths)).toBeNull();
     expect(state().convertTextToOutlines(locked.id, paths)).toBeNull();
     expect(state().scene).toBe(before);
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('is exactly one history step, and undo restores the text node with its original id', async () => {
-    const text = textNode();
-    setScene([pixel('a'), text]);
-
-    state().convertTextToOutlines(text.id, paths);
-    expect(history.canUndo()).toBe(true);
-
-    await history.undo();
-    expect(history.canUndo()).toBe(false);
-    const nodes = state().scene.nodes;
-    expect(nodes.map((n) => n.id)).toEqual(['a', text.id]);
-    expect(nodes[1].type).toBe('text');
-    expect((nodes[1] as TextNode).content).toBe('WRATH');
   });
 });

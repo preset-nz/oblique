@@ -3,14 +3,14 @@ import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { defaultFontRef } from '@/fonts/resolveFont';
 import type { FontRef } from '@/fonts/types';
 import { deleteNode } from '@/scene/deleteNode';
+import { useSelectionStore } from '@/scene/selection';
+import { useSceneStore } from '@/scene/store';
 import {
   beginTransaction,
   cancelTransaction,
   endTransaction,
-  hasHistoryBackend,
-} from '@/scene/history';
-import { useSelectionStore } from '@/scene/selection';
-import { useSceneStore } from '@/scene/store';
+  hasTransactionBackend,
+} from '@/scene/transaction';
 import { isTextNode, type Point2D } from '@/scene/types';
 
 /**
@@ -25,11 +25,18 @@ import { isTextNode, type Point2D } from '@/scene/types';
  *
  * **The edit transaction is the Text field's focus.** The field calls
  * `beginTextEdit` on focus and `commitActiveTextEdit` on blur. One session =
- * one history transaction. The canvas never types: it only *asks* the field
+ * one transaction (`transaction.ts`). The canvas never types: it only *asks* the field
  * to take focus (`focusRequest`), via `beginNewTextAt` / `beginReEdit`.
  * Everything else that can end an edit (a tool change, the selection moving
- * away, the node vanishing, the menu's Undo/Redo) funnels through
+ * away, the node vanishing, the field's blur) funnels through
  * `commitActiveTextEdit`, so the rule lives in one place and is idempotent.
+ *
+ * **Undo while the field has focus is the field's own typing undo** (app-kit's text routing,
+ * Epic 22 slice b): Edit > Undo then sends `text-undo` to the webview, which runs
+ * `execCommand('undo')` on the field, and the document history is not touched. The commit
+ * rule runs when the field blurs, and app-kit's webview `undo()` blurs it first. Undo from the
+ * menu while an edit is open but the field is not focused (the instant after a T click) finds a
+ * gesture open, so rhizome refuses it and Undo is greyed.
  */
 
 export interface TextEditing {
@@ -99,7 +106,7 @@ export function commitActiveTextEdit(): void {
 
   const node = useSceneStore.getState().scene.nodes.find((n) => n.id === editing.nodeId);
   if (editing.isNew && node && isTextNode(node) && node.content.trim() === '') {
-    const rhizomeHoldsIt = hasHistoryBackend();
+    const rhizomeHoldsIt = hasTransactionBackend();
     // Rhizome holds the document: take the whole gesture (the layer's creation) back below,
     // so the blank layer goes without a removeNode and leaves no undo step.
     // Otherwise removeNode + cache eviction (a cook may already have run on the blank node).

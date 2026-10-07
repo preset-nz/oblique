@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { canUndo, clear, type HistoryRehydrateDeps, undo } from '@/scene/history';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier, PixelNode } from '@/scene/types';
 import {
@@ -134,11 +133,6 @@ function seed(nodes: PixelNode[]) {
   });
 }
 
-const fakeDeps: HistoryRehydrateDeps = {
-  readFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
-  decode: vi.fn(async () => ({ width: 100, height: 100, close: vi.fn() })),
-};
-
 function nodeById(id: string) {
   const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
   if (!node) throw new Error(`no node ${id}`);
@@ -163,8 +157,7 @@ const displayTypes = (nodeId: string) =>
 
 describe('modifier drop: display -> model round trip with the real store', () => {
   beforeEach(() => {
-    seed([]); // setState fires history's subscriber, so clear() comes after it
-    clear();
+    seed([]);
   });
 
   it('dragging the bottom (first-applied) row to the top makes it the last applied', () => {
@@ -192,19 +185,16 @@ describe('modifier drop: display -> model round trip with the real store', () =>
 
   it('own-slot drops write nothing', () => {
     seed([pixelNode('n1', [modifier('invert'), modifier('levels')])]);
-    clear();
     const before = useSceneStore.getState().scene;
     expect(dropModifier('n1', 1, 1)).toBe(false);
     expect(dropModifier('n1', 1, 2)).toBe(false);
     expect(useSceneStore.getState().scene).toBe(before);
-    expect(canUndo()).toBe(false);
   });
 });
 
 describe('layer drop with the real store', () => {
   beforeEach(() => {
     seed([pixelNode('a'), pixelNode('b'), pixelNode('c'), pixelNode('d')]);
-    clear();
   });
 
   it('dragging layer 3 above layer 0 makes it the top node', () => {
@@ -212,15 +202,6 @@ describe('layer drop with the real store', () => {
     expect(to).toBe(0);
     useSceneStore.getState().reorderNode('d', to as number);
     expect(useSceneStore.getState().scene.nodes.map((n) => n.id)).toEqual(['d', 'a', 'b', 'c']);
-  });
-
-  it('is one undo step', async () => {
-    const before = useSceneStore.getState().scene.nodes.map((n) => n.id);
-    useSceneStore.getState().reorderNode('d', moveTarget(3, 0) as number);
-    expect(canUndo()).toBe(true);
-    await undo(fakeDeps);
-    expect(canUndo()).toBe(false);
-    expect(useSceneStore.getState().scene.nodes.map((n) => n.id)).toEqual(before);
   });
 
   it('Layer menu targets drive reorderNode to the right order', () => {

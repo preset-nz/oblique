@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import * as history from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { useToolStateStore } from './toolState';
@@ -17,7 +16,6 @@ function emptyScene(): Scene {
 
 beforeEach(() => {
   useSceneStore.setState({ scene: emptyScene() });
-  history.clear();
   useToolStateStore.setState({ tool: 'pan' });
 });
 
@@ -47,7 +45,7 @@ describe('toolState store', () => {
 });
 
 describe('tool choice never touches the scene store', () => {
-  it('setTool does not change the scene reference, dirty a node, or create an undo step', () => {
+  it('setTool does not change the scene reference, or dirty a node', () => {
     const sceneBefore = useSceneStore.getState().scene;
 
     useToolStateStore.getState().setTool('move');
@@ -55,6 +53,5 @@ describe('tool choice never touches the scene store', () => {
     useToolStateStore.getState().setTool('pan');
 
     expect(useSceneStore.getState().scene).toBe(sceneBefore);
-    expect(history.canUndo()).toBe(false);
   });
 });

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { importFile } from '@/project/import';
-import * as history from '@/scene/history';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
+import * as transaction from '@/scene/transaction';
 import type { PixelNode, Scene, SceneNode, TextNode, VectorNode } from '@/scene/types';
 import { createRhizome, type Rhizome } from './rhizome';
 import { FakeHost } from './testHost';
@@ -84,6 +84,16 @@ async function setup(
   }
 }
 
+/** Edit > Undo or Redo: Rust steps, and the webview rebuilds when `history-stepped` arrives. */
+const undo = async () => {
+  await host.step(true);
+  await settle();
+};
+const redo = async () => {
+  await host.step(false);
+  await settle();
+};
+
 const node = (id: string) => useSceneStore.getState().scene.nodes.find((n) => n.id === id);
 const state = () => useSceneStore.getState();
 
@@ -162,7 +172,7 @@ describe('commands first', () => {
 
   it('is latest-wins while a command is in flight', async () => {
     await setup([pixel('a')]);
-    history.beginTransaction(); // a drag: inside a gesture, latest wins
+    transaction.beginTransaction(); // a drag: inside a gesture, latest wins
     let release: () => void = () => undefined;
     host.hold = new Promise<void>((r) => {
       release = r;
@@ -180,7 +190,7 @@ describe('commands first', () => {
     );
     expect(xs).toEqual([1, 4]);
     expect(node('a')?.transform2d).toEqual(T(4));
-    history.endTransaction();
+    transaction.endTransaction();
   });
 
   it('a refusal from the host toasts and leaves the store alone', async () => {
@@ -320,7 +330,7 @@ describe('replace image (layer.set_source)', () => {
     await withMask(restore);
     state().setPixelSource('a', '/new/b.png', [400, 200]);
     await settle();
-    await rhizome.undo();
+    await undo();
     // restoreScene re-decodes only when the path on screen differs from the target's: an
     // echo that had already put the old path back would leave the new pixels showing
     const last = restore.mock.calls[restore.mock.calls.length - 1];
@@ -329,25 +339,9 @@ describe('replace image (layer.set_source)', () => {
     expect(pix('a')?.sourcePath).toBe('/tmp/a.png');
     expect(node('a')?.transform2d).toEqual(node1);
     expect(state().scene.maskRefs?.r.attachTransform).toEqual(node1);
-    await rhizome.redo();
+    await redo();
     expect(pix('a')?.sourceSize).toEqual([400, 200]);
     expect(node('a')?.transform2d).toEqual(decided);
-  });
-
-  it('Cmd+Z straight after Replace Image: the replace still lands first, so the undo has a path to swap back', async () => {
-    const restore = vi.fn(async (_current: Scene, target: Scene) =>
-      useSceneStore.getState().loadScene(target),
-    );
-    await setup([pixel('a', { transform2d: node1 })], true, {}, restore);
-    state().setPixelSource('a', '/new/b.png', [400, 200]);
-    const undone = rhizome.undo(); // not settled: the replace is still on its way
-    await undone;
-    await settle();
-    const last = restore.mock.calls[restore.mock.calls.length - 1];
-    const current = last[0].nodes.find((n) => n.id === 'a') as PixelNode;
-    expect(current.sourcePath).toBe('/new/b.png');
-    expect(pix('a')?.sourcePath).toBe('/tmp/a.png');
-    expect(pix('a')?.sourceSize).toEqual([100, 100]);
   });
 });
 
@@ -443,9 +437,9 @@ describe('nudges', () => {
     expect(node('a')?.transform2d?.x).toBe(3);
     expect(host.runs).toHaveLength(3);
     expect(host.runs.every((r) => r.coalesce === undefined)).toBe(true);
-    await history.undo();
+    await undo();
     expect(node('a')?.transform2d?.x).toBe(2);
-    await history.undo();
+    await undo();
     expect(node('a')?.transform2d?.x).toBe(1);
   });
 
@@ -474,7 +468,7 @@ describe('an empty new text layer', () => {
     expect(node(id)).toBeUndefined();
     expect(host.runs.map((r) => r.id)).toEqual(['layer.add']); // no removal command either
     expect(notify).not.toHaveBeenCalled();
-    await history.undo(); // nothing to undo: the creation was taken back with the gesture
+    await undo(); // nothing to undo: the creation was taken back with the gesture
     expect(state().scene.nodes).toHaveLength(0);
     await expect(rhizome.reconcile()).resolves.toBe('same');
   });
@@ -523,43 +517,71 @@ describe('starting', () => {
 describe('gestures and undo', () => {
   it('a transaction is a rhizome gesture, and the drag inside it one undo step', async () => {
     await setup([pixel('a')]);
-    history.beginTransaction();
+    transaction.beginTransaction();
     for (const x of [1, 2, 3]) {
       state().setNodeTransform('a', T(x));
       await settle();
     }
-    history.endTransaction();
+    transaction.endTransaction();
     await settle();
     expect(host.trace.filter((t) => t.startsWith('begin') || t.startsWith('end'))).toEqual([
       'begin:Edit',
       'end:1',
     ]);
     expect(host.runs.every((r) => r.coalesce === 'transform:a')).toBe(true);
-    expect(history.canUndo()).toBe(false); // Oblique's own stack records nothing
     expect(node('a')?.transform2d).toEqual(T(3));
 
-    await history.undo();
+    await undo();
     expect(node('a')?.transform2d).toBeUndefined(); // the whole drag, one step
-    await history.redo();
+    await redo();
     expect(node('a')?.transform2d).toEqual(T(3));
+  });
+
+  it('Rust steps the history behind the webview: the store follows from history-stepped alone', async () => {
+    await setup([pixel('a')]);
+    state().setNodeTransform('a', T(5));
+    await settle();
+    expect(node('a')?.transform2d).toEqual(T(5));
+    const sent = host.runs.length;
+    await undo(); // the menu: Rust runs edit.undo itself, the webview sends nothing
+    expect(host.runs.length).toBe(sent + 1);
+    expect(host.trace.filter((t) => t === 'run:edit.undo')).toHaveLength(1);
+    expect(node('a')?.transform2d).toBeUndefined();
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('Undo while a gesture is open does nothing: Rust refuses it, and the item is greyed', async () => {
+    await setup([pixel('a')]);
+    state().setNodeTransform('a', T(1));
+    await settle();
+    transaction.beginTransaction();
+    await settle();
+    state().setNodeTransform('a', T(2));
+    await settle();
+    await undo();
+    expect(node('a')?.transform2d).toEqual(T(2)); // the drag is still going
+    transaction.endTransaction();
+    await settle();
+    await undo();
+    expect(node('a')?.transform2d).toEqual(T(1)); // the drag was one step
   });
 
   it('undo takes back an added layer, and nothing beyond the empty document', async () => {
     await setup();
     const id = state().addPixelNode({ sourcePath: '/x.png', sourceSize: [10, 10] });
     await settle();
-    await history.undo();
+    await undo();
     expect(node(id)).toBeUndefined();
-    await history.undo(); // no further
+    await undo(); // no further
     expect(state().scene.nodes).toHaveLength(0);
     expect(host.runs[host.runs.length - 1].id).toBe('edit.undo');
   });
 
   it('an unmatched begin is closed before the next opens', async () => {
     await setup([pixel('a')]);
-    history.beginTransaction();
-    history.beginTransaction();
-    history.endTransaction();
+    transaction.beginTransaction();
+    transaction.beginTransaction();
+    transaction.endTransaction();
     await settle();
     expect(host.trace.filter((t) => /^(begin|end)/.test(t))).toEqual([
       'begin:Edit',
@@ -571,11 +593,11 @@ describe('gestures and undo', () => {
 
   it('cancel takes the gesture back and restores the store', async () => {
     await setup([pixel('a')]);
-    history.beginTransaction();
+    transaction.beginTransaction();
     state().setNodeTransform('a', T(9));
     await settle();
     expect(node('a')?.transform2d).toEqual(T(9));
-    history.cancelTransaction();
+    transaction.cancelTransaction();
     await settle();
     expect(host.trace).toContain('cancel:1');
     expect(node('a')?.transform2d).toBeUndefined();
@@ -617,9 +639,9 @@ describe('reconcile', () => {
     useSceneStore.setState((s) => ({
       scene: { ...s.scene, nodes: s.scene.nodes.map((n) => ({ ...n, opacity: 0.3 })) },
     }));
-    history.beginTransaction();
+    transaction.beginTransaction();
     await expect(rhizome.reconcile()).resolves.toBe('skipped');
-    history.endTransaction();
+    transaction.endTransaction();
     await settle();
     host.hold = new Promise(() => undefined);
     state().setNodeProp('a', { label: 'x' });

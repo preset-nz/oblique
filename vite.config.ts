@@ -19,7 +19,14 @@ export default defineConfig(async () => ({
     // copies would mean two registries (a temporary `pnpm link` makes that
     // easy to hit). See guidance/design/tauri-scaffold.md, "Consuming a
     // path-linked package".
-    dedupe: ['react', 'react-dom', '@tauri-apps/api', '@preset.nz/ux-kit', '@preset.nz/facets'],
+    dedupe: [
+      'react',
+      'react-dom',
+      '@tauri-apps/api',
+      '@preset.nz/ux-kit',
+      '@preset.nz/facets',
+      '@preset.nz/app-kit',
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

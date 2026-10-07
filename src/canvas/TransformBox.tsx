@@ -1,6 +1,6 @@
 import { useRef } from 'react';
-import { beginTransaction, endTransaction } from '@/scene/history';
 import { useSceneStore } from '@/scene/store';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import { IDENTITY_TRANSFORM_2D, type SceneNode, type Transform2D } from '@/scene/types';
 import { CURSOR_FOR_HANDLE, SCALE_HANDLES } from './boxHandles';
 import {

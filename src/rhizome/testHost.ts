@@ -7,7 +7,17 @@
 import { textLabel } from '@/scene/store';
 import type { Scene, SceneNode } from '@/scene/types';
 import { layerPath, layerRows, rowsFromScene, val } from './adapter';
-import type { Issue, Ran, RhizomeBackend, Row, Status, Unlisten, Update, View } from './transport';
+import type {
+  Issue,
+  Ran,
+  RhizomeBackend,
+  Row,
+  Status,
+  Stepped,
+  Unlisten,
+  Update,
+  View,
+} from './transport';
 
 const clone = <T>(x: T): T => structuredClone(x);
 
@@ -53,6 +63,7 @@ export class FakeHost implements RhizomeBackend {
 
   private onCommit: ((u: Update) => void)[] = [];
   private onState: ((s: Status) => void)[] = [];
+  private onStep: ((s: Stepped) => void)[] = [];
   private onOpen: ((path: string) => void)[] = [];
   private sentStatus: string | null = null;
   private undos: Map<string, Row>[] = [];
@@ -184,6 +195,23 @@ export class FakeHost implements RhizomeBackend {
   async onStatus(f: (s: Status) => void): Promise<Unlisten> {
     this.onState.push(f);
     return () => undefined;
+  }
+  async onHistoryStepped(f: (s: Stepped) => void): Promise<Unlisten> {
+    this.onStep.push(f);
+    return () => undefined;
+  }
+
+  /**
+   * Edit > Undo or Redo, as Rust does it: the host steps (nothing while a gesture is open, which
+   * keeps Undo disabled), the commit events go out, then `history-stepped`. Not queued behind the
+   * webview's edits: the menu never goes through the channel.
+   */
+  async step(undid: boolean): Promise<void> {
+    if (this.gesture) return;
+    const ran = await this.run(undid ? 'edit.undo' : 'edit.redo');
+    if (typeof ran === 'object' && 'committed' in ran) {
+      for (const f of this.onStep) f({ undid, label: '' });
+    }
   }
 
   async run(id: string, payload: unknown = {}, coalesce?: string): Promise<Ran> {

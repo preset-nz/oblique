@@ -1,360 +1,234 @@
-//! Native macOS menu bar (roadmap gap "Native app menu + New command",
-//! 2026-07-04): App submenu (About/Services/Hide/Quit — standard macOS
-//! chrome), File (New/Open/Import/Save/Save As/Export PNG/Export Proof), Edit (Undo/Redo
-//! plus the OS-level Cut/Copy/Paste/Select All text-editing predefined
-//! items), View (Zoom In/Out, Fit in Window, Actual Size — view-menu-zoom.md;
-//! Snap to Layers check item — snapping.md),
-//! Layer (Bring Forward/Send Backward/Bring to Front/Send to Back —
-//! drag-reorder.md; Replace Image… — image-source.md), Type.
+//! Oblique's own commands, for app-kit's command table (Epic 22, slice b).
 //!
-//! Open (Cmd+O) vs Import (Cmd+I) (roadmap "Cmd+O is overloaded — split
-//! Open vs Import", 2026-07-05): genuinely different flows, not one dialog
-//! routed by extension. Open replaces the whole project (`.oblique` only);
-//! Import adds image node(s) to the current project and never touches the
-//! project file.
+//! app-kit builds the menu bar around them: the App menu with Settings…, Undo and Redo named
+//! after what they would do (from the document host's history), Cut, Copy, Paste, the Window
+//! menu. Every activation reaches the webview as app-kit's `command` event carrying the id,
+//! and what each command does lives in TypeScript (`src/app/menu.ts`), in the same functions
+//! the keyboard paths call. Rust stays plumbing (architecture.md).
 //!
-//! Rust stays plumbing per architecture.md: build the menu, forward menu
-//! events to the webview as plain events. All the actual behaviour (new
-//! project, open dialog, save, undo/redo…) lives in TypeScript and is
-//! reused unchanged from `src/app/shortcuts.ts`'s handlers via
-//! `src/app/menu.ts`.
+//! **A menu accelerator is consumed by `NSMenu` before the key reaches the webview,** so a
+//! command's chord is written here and nowhere else (`SHORTCUTS`), and held unique by a test.
 //!
-//! Edit→Copy/Paste of *app* content (nodes/modifiers/pixels) is explicitly
-//! out of scope (roadmap: needs a clipboard design decision first). The
-//! `PredefinedMenuItem::{cut,copy,paste,select_all}` items below are the
-//! OS text-editing commands for the focused responder (e.g. a layer-name
-//! text field) — orthogonal to that deferred feature, and required so
-//! replacing Tauri's `Menu::default()` doesn't regress Cmd+C/V/X/A in
-//! ordinary text inputs.
+//! **File.** New, Open…, Save and Save As… are still Oblique's own commands on their old ids,
+//! because app-kit's versions need a `Document` installed (`AppKit::install`), which also brings
+//! the close guard, relaunch restore and Finder opens: that is slice c. Until then
+//! `menu.toml` turns app-kit's File slots off and the webview flows behind these ids are
+//! unchanged.
 //!
-//! Double-firing note (also see `shortcuts.ts`): on macOS, a menu item's
-//! accelerator is a native key equivalent handled by `NSMenu` /
-//! `performKeyEquivalent:` before the key event reaches the WKWebView, so
-//! the accelerator is consumed here and the webview's `keydown` listener
-//! never sees it. This is the standard mainstream behaviour (and matches
-//! "native menu is the source of truth" for the shortcuts it owns) but
-//! could not be exercised headlessly in this environment — verify with a
-//! real click/keypress test (see report).
+//! **Open vs Import.** Open replaces the whole project (`.oblique` only); Import adds image
+//! nodes to the current one and never touches the project file.
 
-use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Listener, Runtime};
+use preset_app_kit::{shortcut, Command, MenuName};
 
-/// Bug-report contact shown in the native About panel (macOS supports
-/// `credits`, not `website`/`comments`) and the friends-build README.
-/// Epic 14 (friends build) — free, pre-release, no support SLA implied.
-const CONTACT_EMAIL: &str = "georg@preset.nz";
+/// app-kit's switches for its built-in items: every document slot off until slice c.
+pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 
-const EVT_APP_SETTINGS: &str = "menu://app/settings";
-const EVT_FILE_NEW: &str = "menu://file/new";
-const EVT_FILE_OPEN: &str = "menu://file/open";
-const EVT_FILE_IMPORT: &str = "menu://file/import";
-const EVT_FILE_SAVE: &str = "menu://file/save";
-const EVT_FILE_SAVE_AS: &str = "menu://file/save-as";
-const EVT_FILE_EXPORT_PNG: &str = "menu://file/export-png";
-const EVT_FILE_EXPORT_PROOF: &str = "menu://file/export-proof";
-const EVT_EDIT_UNDO: &str = "menu://edit/undo";
-const EVT_EDIT_REDO: &str = "menu://edit/redo";
-const EVT_EDIT_DUPLICATE: &str = "menu://edit/duplicate";
-const EVT_VIEW_ZOOM_IN: &str = "menu://view/zoom-in";
-const EVT_VIEW_ZOOM_OUT: &str = "menu://view/zoom-out";
-const EVT_VIEW_FIT: &str = "menu://view/fit";
-const EVT_VIEW_ACTUAL_SIZE: &str = "menu://view/actual-size";
-/// Payload: `bool`, the item's new checked state (see the `view-snap-layers` arm below).
-const EVT_VIEW_SNAP_LAYERS: &str = "menu://view/snap-to-layers";
-const EVT_LAYER_FORWARD: &str = "menu://layer/forward";
-const EVT_LAYER_BACKWARD: &str = "menu://layer/backward";
-const EVT_LAYER_FRONT: &str = "menu://layer/front";
-const EVT_LAYER_BACK: &str = "menu://layer/back";
-const EVT_LAYER_REPLACE_IMAGE: &str = "menu://layer/replace-image";
-/// Webview -> Rust (not a menu click): payload `bool`, whether Layer -> Replace
-/// Image… should be enabled (a pixel node is selected). Sent through the
-/// window's `emit` rather than an `invoke` so the frame-IPC dependency gate
-/// stays untouched; Rust owns the item handle and flips it.
-const EVT_LAYER_REPLACE_IMAGE_ENABLED: &str = "menu://layer/replace-image-enabled";
-const EVT_TYPE_REPLACE_FONT: &str = "menu://type/replace-font";
-const EVT_TYPE_CONVERT_OUTLINES: &str = "menu://type/convert-outlines";
+/// Every accelerator Oblique binds, by command id: written here and nowhere else, in one
+/// canonical order (`CmdOrCtrl`, `Ctrl`, `Alt`, `Shift`, then the key), and held unique by a
+/// test against what app-kit and macOS bind themselves.
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("file-new", "CmdOrCtrl+N"),
+    ("file-open", "CmdOrCtrl+O"),
+    ("file-import", shortcut::IMPORT),
+    ("file-save", "CmdOrCtrl+S"),
+    ("file-save-as", "CmdOrCtrl+Shift+S"),
+    ("file-export-png", "CmdOrCtrl+Shift+E"),
+    ("file-export-proof", "CmdOrCtrl+Alt+Shift+E"),
+    ("edit-duplicate", "CmdOrCtrl+D"),
+    // View > Zoom (view-menu-zoom.md): Cmd+= rather than Cmd+Shift+= so Zoom In needs no Shift.
+    ("view-zoom-in", shortcut::ZOOM_IN),
+    ("view-zoom-out", shortcut::ZOOM_OUT),
+    // The family reserves Cmd+0 for zoom; here it fits the canvas, Cmd+1 is 100%.
+    ("view-fit", "CmdOrCtrl+0"),
+    ("view-actual", "CmdOrCtrl+1"),
+    ("view-snap-layers", "CmdOrCtrl+;"),
+    // Layer order (drag-reorder.md). `Cmd+[` and `Cmd+]` mean Back and Forward in the family's
+    // menu standard (decision 3); Oblique keeps them for now, as the slice asks.
+    ("layer-forward", "CmdOrCtrl+]"),
+    ("layer-backward", "CmdOrCtrl+["),
+    ("layer-front", "CmdOrCtrl+Shift+]"),
+    ("layer-back", "CmdOrCtrl+Shift+["),
+    // InDesign's chord (Epic 20 story 7).
+    ("type-convert-outlines", "CmdOrCtrl+Shift+O"),
+];
 
-/// Builds and installs the app menu bar, wiring menu-item activation to
-/// webview events. Called once from `run`'s `.setup()`.
-pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let pkg_name = app.package_info().name.clone();
-    let pkg_version = app.package_info().version.to_string();
+/// A command with its accelerator from `SHORTCUTS`, if it has one.
+fn item(id: &str, label: &str) -> Command {
+    let c = Command::item(id, label);
+    match SHORTCUTS.iter().find(|(i, _)| *i == id) {
+        Some((_, accelerator)) => c.accelerator(accelerator),
+        None => c,
+    }
+}
 
-    let about_metadata = AboutMetadata {
-        name: Some(pkg_name.clone()),
-        version: Some(pkg_version),
-        copyright: Some("Free, pre-release build — no warranty.".into()),
-        credits: Some(format!("Bugs & feedback: {CONTACT_EMAIL}")),
-        ..Default::default()
-    };
+/// View > Snap to Layers (snapping.md): a check item, on to start with. The webview's store
+/// mirrors it, and the menu is told its state back (`useMenuSync`).
+fn toggle(id: &str, label: &str) -> Command {
+    let c = Command::toggle(id, label);
+    match SHORTCUTS.iter().find(|(i, _)| *i == id) {
+        Some((_, accelerator)) => c.accelerator(accelerator),
+        None => c,
+    }
+}
 
-    let app_settings =
-        MenuItem::with_id(app, "app-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+/// Every command Oblique adds to app-kit's, in menu order.
+pub fn commands() -> Vec<Command> {
+    let file = |id, label, section| item(id, label).menu(MenuName::File).section(section);
+    let view = |id, label, section| item(id, label).menu(MenuName::View).section(section);
+    let layer = |id, label, section| item(id, label).domain("Layer").section(section);
+    let text = |id, label| item(id, label).domain("Type").section(0);
+    vec![
+        file("file-new", "New", 0),
+        file("file-open", "Open…", 0),
+        file("file-import", "Import…", 0),
+        file("file-save", "Save", 1),
+        file("file-save-as", "Save As…", 1),
+        file("file-export-png", "Export PNG…", 2),
+        file("file-export-proof", "Export Proof…", 2),
+        // After Undo and Redo, before Cut, Copy and Paste.
+        item("edit-duplicate", "Duplicate")
+            .menu(MenuName::Edit)
+            .section(1),
+        view("view-zoom-in", "Zoom In", 0),
+        view("view-zoom-out", "Zoom Out", 0),
+        view("view-fit", "Fit in Window", 1),
+        view("view-actual", "Actual Size", 1),
+        toggle("view-snap-layers", "Snap to Layers")
+            .menu(MenuName::View)
+            .section(2),
+        layer("layer-forward", "Bring Forward", 0),
+        layer("layer-backward", "Send Backward", 0),
+        layer("layer-front", "Bring to Front", 1),
+        layer("layer-back", "Send to Back", 1),
+        // Image-source.md: an infrequent action, no accelerator. Enabled only while an
+        // unlocked image layer is selected; the webview says when (`useMenuSync`).
+        layer("layer-replace-image", "Replace Image…", 2).disabled(),
+        // Epic 20: Replace Font… (story 6) and Convert to Outlines (story 7).
+        text("type-replace-font", "Replace Font…"),
+        text("type-convert-outlines", "Convert to Outlines"),
+    ]
+}
 
-    let app_submenu = Submenu::with_items(
-        app,
-        &pkg_name,
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, Some(about_metadata))?,
-            &PredefinedMenuItem::separator(app)?,
-            &app_settings,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let file_new = MenuItem::with_id(app, "file-new", "New", true, Some("CmdOrCtrl+N"))?;
-    let file_open = MenuItem::with_id(app, "file-open", "Open…", true, Some("CmdOrCtrl+O"))?;
-    let file_import = MenuItem::with_id(app, "file-import", "Import…", true, Some("CmdOrCtrl+I"))?;
-    let file_save = MenuItem::with_id(app, "file-save", "Save", true, Some("CmdOrCtrl+S"))?;
-    let file_save_as = MenuItem::with_id(
-        app,
-        "file-save-as",
-        "Save As…",
-        true,
-        Some("Shift+CmdOrCtrl+S"),
-    )?;
-    let file_export_png = MenuItem::with_id(
-        app,
-        "file-export-png",
-        "Export PNG…",
-        true,
-        Some("Shift+CmdOrCtrl+E"),
-    )?;
-    let file_export_proof = MenuItem::with_id(
-        app,
-        "file-export-proof",
-        "Export Proof…",
-        true,
-        Some("Alt+Shift+CmdOrCtrl+E"),
-    )?;
+    #[test]
+    fn the_menu_config_parses_and_leaves_no_document_slot_on() {
+        let config = preset_app_kit::MenuConfig::parse(MENU_CONFIG).expect("menu.toml is valid");
+        // `install_history` refuses a config with any of these on; slice c installs the
+        // document and turns them back on.
+        assert!(config.file.document_slots_on().is_empty());
+        assert!(config.app.settings);
+    }
 
-    let file_submenu = Submenu::with_items(
-        app,
-        "File",
-        true,
-        &[
-            &file_new,
-            &file_open,
-            &file_import,
-            &PredefinedMenuItem::separator(app)?,
-            &file_save,
-            &file_save_as,
-            &PredefinedMenuItem::separator(app)?,
-            &file_export_png,
-            &file_export_proof,
-        ],
-    )?;
-
-    // Custom Undo/Redo (not PredefinedMenuItem::undo/redo, which target
-    // NSResponder's text-field undo manager, not our scene-history store)
-    // alongside the OS text-editing predefined items.
-    let edit_undo = MenuItem::with_id(app, "edit-undo", "Undo", true, Some("CmdOrCtrl+Z"))?;
-    let edit_redo = MenuItem::with_id(app, "edit-redo", "Redo", true, Some("Shift+CmdOrCtrl+Z"))?;
-
-    let edit_duplicate = MenuItem::with_id(
-        app,
-        "edit-duplicate",
-        "Duplicate",
-        true,
-        Some("CmdOrCtrl+D"),
-    )?;
-
-    let edit_submenu = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &edit_undo,
-            &edit_redo,
-            &PredefinedMenuItem::separator(app)?,
-            &edit_duplicate,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-
-    // View menu (view-menu-zoom.md): zoom commands. Cmd+= rather than
-    // Cmd+Shift+= so Zoom In needs no Shift, as in every Mac editor.
-    let view_zoom_in =
-        MenuItem::with_id(app, "view-zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
-    let view_zoom_out =
-        MenuItem::with_id(app, "view-zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
-    let view_fit = MenuItem::with_id(app, "view-fit", "Fit in Window", true, Some("CmdOrCtrl+0"))?;
-    let view_actual =
-        MenuItem::with_id(app, "view-actual", "Actual Size", true, Some("CmdOrCtrl+1"))?;
-    // Snap to Layers (snapping.md): a check item, default on. muda toggles a
-    // CheckMenuItem natively on click *before* emitting the menu event, so the
-    // menu is the source of truth and the event below carries the new state.
-    let view_snap_layers = CheckMenuItem::with_id(
-        app,
-        "view-snap-layers",
-        "Snap to Layers",
-        true,
-        true,
-        Some("CmdOrCtrl+;"),
-    )?;
-
-    let view_submenu = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[
-            &view_zoom_in,
-            &view_zoom_out,
-            &PredefinedMenuItem::separator(app)?,
-            &view_fit,
-            &view_actual,
-            &PredefinedMenuItem::separator(app)?,
-            &view_snap_layers,
-        ],
-    )?;
-
-    // Layer menu (drag-reorder.md): stacking order of the selected node, the
-    // keyboard path for the layer-row drag grip. Photoshop/Figma chords: Cmd+]
-    // forward, Cmd+[ backward, +Shift to the ends.
-    let layer_forward = MenuItem::with_id(
-        app,
-        "layer-forward",
-        "Bring Forward",
-        true,
-        Some("CmdOrCtrl+]"),
-    )?;
-    let layer_backward = MenuItem::with_id(
-        app,
-        "layer-backward",
-        "Send Backward",
-        true,
-        Some("CmdOrCtrl+["),
-    )?;
-    let layer_front = MenuItem::with_id(
-        app,
-        "layer-front",
-        "Bring to Front",
-        true,
-        Some("Shift+CmdOrCtrl+]"),
-    )?;
-    let layer_back = MenuItem::with_id(
-        app,
-        "layer-back",
-        "Send to Back",
-        true,
-        Some("Shift+CmdOrCtrl+["),
-    )?;
-
-    // Replace Image… (image-source.md, no accelerator — an infrequent action):
-    // enabled only while a pixel node is selected, so it starts disabled and the
-    // webview tells us when that changes (listener below).
-    let layer_replace_image = MenuItem::with_id(
-        app,
-        "layer-replace-image",
-        "Replace Image…",
-        false,
-        None::<&str>,
-    )?;
-
-    let layer_replace_image_enabled = layer_replace_image.clone();
-
-    let layer_submenu = Submenu::with_items(
-        app,
-        "Layer",
-        true,
-        &[
-            &layer_forward,
-            &layer_backward,
-            &PredefinedMenuItem::separator(app)?,
-            &layer_front,
-            &layer_back,
-            &PredefinedMenuItem::separator(app)?,
-            &layer_replace_image,
-        ],
-    )?;
-
-    // Type menu (Epic 20): Replace Font… (story 6, no accelerator) and Convert to
-    // Outlines (story 7, InDesign's Shift+Cmd+O).
-    let type_replace_font = MenuItem::with_id(
-        app,
-        "type-replace-font",
-        "Replace Font…",
-        true,
-        None::<&str>,
-    )?;
-    let type_convert_outlines = MenuItem::with_id(
-        app,
-        "type-convert-outlines",
-        "Convert to Outlines",
-        true,
-        Some("Shift+CmdOrCtrl+O"),
-    )?;
-    let type_submenu = Submenu::with_items(
-        app,
-        "Type",
-        true,
-        &[&type_replace_font, &type_convert_outlines],
-    )?;
-
-    let menu = Menu::with_items(
-        app,
-        &[
-            &app_submenu,
-            &file_submenu,
-            &edit_submenu,
-            &view_submenu,
-            &layer_submenu,
-            &type_submenu,
-        ],
-    )?;
-    app.set_menu(menu)?;
-
-    app.listen_any(EVT_LAYER_REPLACE_IMAGE_ENABLED, move |event| {
-        if let Ok(enabled) = serde_json::from_str::<bool>(event.payload()) {
-            let _ = layer_replace_image_enabled.set_enabled(enabled);
-        }
-    });
-
-    app.on_menu_event(move |app_handle, event| {
-        let evt = match event.id().0.as_str() {
-            "app-settings" => EVT_APP_SETTINGS,
-            "file-new" => EVT_FILE_NEW,
-            "file-open" => EVT_FILE_OPEN,
-            "file-import" => EVT_FILE_IMPORT,
-            "file-save" => EVT_FILE_SAVE,
-            "file-save-as" => EVT_FILE_SAVE_AS,
-            "file-export-png" => EVT_FILE_EXPORT_PNG,
-            "file-export-proof" => EVT_FILE_EXPORT_PROOF,
-            "edit-undo" => EVT_EDIT_UNDO,
-            "edit-redo" => EVT_EDIT_REDO,
-            "edit-duplicate" => EVT_EDIT_DUPLICATE,
-            "view-zoom-in" => EVT_VIEW_ZOOM_IN,
-            "view-zoom-out" => EVT_VIEW_ZOOM_OUT,
-            "view-fit" => EVT_VIEW_FIT,
-            "view-actual" => EVT_VIEW_ACTUAL_SIZE,
-            "view-snap-layers" => {
-                // Already toggled by muda; the webview mirrors this state.
-                let checked = view_snap_layers.is_checked().unwrap_or(true);
-                let _ = app_handle.emit(EVT_VIEW_SNAP_LAYERS, checked);
-                return;
-            }
-            "layer-forward" => EVT_LAYER_FORWARD,
-            "layer-backward" => EVT_LAYER_BACKWARD,
-            "layer-front" => EVT_LAYER_FRONT,
-            "layer-back" => EVT_LAYER_BACK,
-            "layer-replace-image" => EVT_LAYER_REPLACE_IMAGE,
-            "type-replace-font" => EVT_TYPE_REPLACE_FONT,
-            "type-convert-outlines" => EVT_TYPE_CONVERT_OUTLINES,
-            _ => return,
+    /// A chord with its modifiers in one order and `Option` spelt `Alt`, so two spellings of the
+    /// same chord compare equal.
+    fn canonical(chord: &str) -> String {
+        let mut parts: Vec<String> = chord
+            .split('+')
+            .map(|p| match p {
+                "Option" | "Opt" => "Alt".to_string(),
+                "Cmd" | "Command" | "Super" => "CmdOrCtrl".to_string(),
+                other => other.to_string(),
+            })
+            .collect();
+        let key = parts.pop().expect("a chord has a key");
+        let rank = |m: &str| {
+            ["CmdOrCtrl", "Ctrl", "Alt", "Shift"]
+                .iter()
+                .position(|x| *x == m)
         };
-        let _ = app_handle.emit(evt, ());
-    });
+        parts.sort_by_key(|m| rank(m).unwrap_or(usize::MAX));
+        parts.push(key);
+        parts.join("+")
+    }
 
-    Ok(())
+    #[test]
+    fn a_chord_is_the_same_whatever_order_it_is_written_in() {
+        assert_eq!(canonical("Alt+Shift+CmdOrCtrl+E"), "CmdOrCtrl+Alt+Shift+E");
+        assert_eq!(
+            canonical("Shift+CmdOrCtrl+S"),
+            canonical("CmdOrCtrl+Shift+S")
+        );
+        assert_eq!(
+            canonical("CmdOrCtrl+Option+P"),
+            canonical("CmdOrCtrl+Alt+P")
+        );
+    }
+
+    /// What app-kit and macOS bind in the menu bar before Oblique adds anything: Undo, Redo,
+    /// Settings…, Quit, Hide, Hide Others, Minimise, Close Window (File > Close is off, so
+    /// Window carries it), Full Screen, Cut, Copy, Paste and Select All.
+    const BUILT_IN: [&str; 13] = [
+        "CmdOrCtrl+Z",
+        "CmdOrCtrl+Shift+Z",
+        "CmdOrCtrl+,",
+        "CmdOrCtrl+Q",
+        "CmdOrCtrl+H",
+        "CmdOrCtrl+Alt+H",
+        "CmdOrCtrl+M",
+        "CmdOrCtrl+W",
+        "CmdOrCtrl+Ctrl+F",
+        "CmdOrCtrl+X",
+        "CmdOrCtrl+C",
+        "CmdOrCtrl+V",
+        "CmdOrCtrl+A",
+    ];
+
+    #[test]
+    fn no_two_commands_share_an_accelerator_or_an_id() {
+        let table = commands();
+        let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
+        for (n, id) in ids.iter().enumerate() {
+            assert!(!ids[n + 1..].contains(id), "{id} twice");
+        }
+        let mut taken: Vec<String> = BUILT_IN.iter().map(|c| canonical(c)).collect();
+        for (id, accelerator) in SHORTCUTS {
+            assert!(ids.contains(id), "{id} has a shortcut but no command");
+            let chord = canonical(accelerator);
+            assert!(
+                !taken.contains(&chord),
+                "{id} takes {accelerator}, which is taken"
+            );
+            taken.push(chord);
+        }
+    }
+
+    #[test]
+    fn import_is_shift_cmd_i_and_cmd_i_is_free() {
+        let import = SHORTCUTS.iter().find(|(id, _)| *id == "file-import");
+        assert_eq!(import.map(|(_, a)| *a), Some("CmdOrCtrl+Shift+I"));
+        assert!(SHORTCUTS.iter().all(|(_, a)| canonical(a) != "CmdOrCtrl+I"));
+    }
+
+    #[test]
+    fn every_old_id_is_still_on_the_table() {
+        let table = commands();
+        let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
+        for id in [
+            "file-new",
+            "file-open",
+            "file-import",
+            "file-save",
+            "file-save-as",
+            "file-export-png",
+            "file-export-proof",
+            "edit-duplicate",
+            "view-zoom-in",
+            "view-zoom-out",
+            "view-fit",
+            "view-actual",
+            "view-snap-layers",
+            "layer-forward",
+            "layer-backward",
+            "layer-front",
+            "layer-back",
+            "layer-replace-image",
+            "type-replace-font",
+            "type-convert-outlines",
+        ] {
+            assert!(ids.contains(&id), "{id} is gone");
+        }
+    }
 }

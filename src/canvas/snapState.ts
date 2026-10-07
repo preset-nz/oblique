@@ -8,9 +8,9 @@ export interface SnapGuides {
 
 /**
  * Ephemeral UI state for move-drag snapping (snapping.md). `enabled` mirrors
- * View -> Snap to Layers: the native check item is the source of truth (it
- * toggles itself on click) and `src/app/menu.ts` writes the checked state it is
- * sent here, so the two start in sync at `true`. Not persisted (the settings
+ * View -> Snap to Layers: the menu's click runs `src/app/menu.ts`, which flips it, and the
+ * tick is pushed back to the native item from here (app-kit's `useMenuSync`), so the two start
+ * in sync at `true`. Not persisted (the settings
  * story can pick that up). `guides` is what the Viewport overlay draws while an
  * axis is snapped; it is cleared on pointer-up. Never touches the scene store.
  */

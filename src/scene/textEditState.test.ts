@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import type { FontRef } from '@/fonts/types';
-import * as history from './history';
 import { useSelectionStore } from './selection';
 import { useSceneStore } from './store';
 import {
@@ -11,6 +10,7 @@ import {
   commitActiveTextEdit,
   useTextEditStore,
 } from './textEditState';
+import { setTransactionBackend } from './transaction';
 import type { Scene, TextNode } from './types';
 
 const font: FontRef = {
@@ -39,11 +39,9 @@ const textAt = (id: string) => scene().nodes.find((n) => n.id === id) as TextNod
 const type = (id: string, content: string) =>
   useSceneStore.getState().setTextProps(id, { content });
 
-/** An existing text node that predates the edit (its creation is not part of any later undo step). */
+/** An existing text node that predates the edit . */
 function existingText(content = 'HELLO'): string {
-  const id = useSceneStore.getState().addTextNode({ content, font, position: { x: 10, y: 60 } });
-  history.clear();
-  return id;
+  return useSceneStore.getState().addTextNode({ content, font, position: { x: 10, y: 60 } });
 }
 
 beforeEach(() => {
@@ -57,8 +55,24 @@ beforeEach(() => {
     lastUsedSize: null,
   });
   useFontCatalogueStore.setState({ status: 'idle', faces: [] });
-  history.clear();
 });
+
+afterEach(() => setTransactionBackend(null));
+
+/**
+ * Stands in for rhizome: what the edit asks of it, in order. Undo is app-kit's and rhizome's now
+ * (rhizome.test.ts holds the end-to-end steps); what this file owns is where a session's one
+ * transaction begins and ends.
+ */
+function spyOnTransactions(): string[] {
+  const calls: string[] = [];
+  setTransactionBackend({
+    begin: () => void calls.push('begin'),
+    end: () => void calls.push('end'),
+    cancel: () => void calls.push('cancel'),
+  });
+  return calls;
+}
 
 describe('textEditState store', () => {
   it('begin/end set and clear the open edit', () => {
@@ -82,10 +96,9 @@ describe('commitActiveTextEdit', () => {
     const before = scene();
     commitActiveTextEdit();
     expect(scene()).toBe(before);
-    expect(history.canUndo()).toBe(false);
   });
 
-  it('new + blank: removes the node, clears the selection, records no history', () => {
+  it('new + blank: removes the node and clears the selection', () => {
     const id = beginNewTextAt({ x: 5, y: 6 });
     expect(edit().editing).toEqual({ nodeId: id, isNew: true });
     expect(textAt(id)).toMatchObject({ content: '', position: { x: 5, y: 6 } });
@@ -96,7 +109,63 @@ describe('commitActiveTextEdit', () => {
     expect(scene().nodes).toHaveLength(0);
     expect(useSelectionStore.getState().selection).toEqual({ kind: 'none' });
     expect(edit().editing).toBeNull();
-    expect(history.canUndo()).toBe(false);
+  });
+
+  it('new + typed: one transaction for the whole session, from the click to the commit', () => {
+    const calls = spyOnTransactions();
+    const id = beginNewTextAt({ x: 0, y: 0 });
+    type(id, 'T');
+    type(id, 'THE DEAD MARCH');
+    expect(calls).toEqual(['begin']);
+    commitActiveTextEdit();
+    expect(textAt(id).content).toBe('THE DEAD MARCH');
+    expect(calls).toEqual(['begin', 'end']);
+  });
+
+  it('new + blank with rhizome behind it: the gesture is cancelled, not ended', () => {
+    const calls = spyOnTransactions();
+    const id = beginNewTextAt({ x: 0, y: 0 });
+    expect(id).toBeDefined();
+    commitActiveTextEdit();
+    expect(calls).toEqual(['begin', 'cancel']);
+    expect(edit().editing).toBeNull();
+  });
+
+  it('re-edit: the ask opens nothing, the field focus opens one transaction, the blur ends it', () => {
+    const calls = spyOnTransactions();
+    const id = existingText('HELLO');
+    expect(beginReEdit(id)).toBe(true);
+    // The ask alone opens nothing: the field's focus does.
+    expect(edit().editing).toBeNull();
+    expect(calls).toEqual([]);
+    beginTextEdit(id, false); // field focus
+    expect(edit().editing).toEqual({ nodeId: id, isNew: false });
+    type(id, 'HELLO W');
+    type(id, 'HELLO WORLD');
+    commitActiveTextEdit();
+    expect(textAt(id).content).toBe('HELLO WORLD');
+    expect(calls).toEqual(['begin', 'end']);
+  });
+
+  it('re-edit that blanks the content keeps the node (only new blank nodes are discarded)', () => {
+    const calls = spyOnTransactions();
+    const id = existingText('HELLO');
+    beginReEdit(id);
+    beginTextEdit(id, false);
+    type(id, '');
+    commitActiveTextEdit();
+    expect(textAt(id).content).toBe('');
+    expect(calls).toEqual(['begin', 'end']);
+  });
+
+  it('is idempotent: a second commit does nothing', () => {
+    const calls = spyOnTransactions();
+    const id = beginNewTextAt({ x: 0, y: 0 });
+    type(id, 'A');
+    commitActiveTextEdit();
+    commitActiveTextEdit();
+    expect(calls).toEqual(['begin', 'end']);
+    expect(scene().nodes).toHaveLength(1);
   });
 
   it('new + whitespace-only is still blank', () => {
@@ -104,59 +173,6 @@ describe('commitActiveTextEdit', () => {
     type(id, '  \n ');
     commitActiveTextEdit();
     expect(scene().nodes).toHaveLength(0);
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('new + typed: exactly one undo step for the whole session', async () => {
-    const id = beginNewTextAt({ x: 0, y: 0 });
-    type(id, 'T');
-    type(id, 'TH');
-    type(id, 'THE DEAD MARCH');
-    commitActiveTextEdit();
-
-    expect(textAt(id).content).toBe('THE DEAD MARCH');
-    expect(history.canUndo()).toBe(true);
-
-    await history.undo();
-    expect(scene().nodes).toHaveLength(0);
-    expect(history.canUndo()).toBe(false);
-
-    await history.redo();
-    expect(scene().nodes).toHaveLength(1);
-    expect(scene().nodes[0].id).toBe(id);
-  });
-
-  it('Cmd+Z while editing (commit, then undo) leaves no node, and redo brings it back', async () => {
-    const id = beginNewTextAt({ x: 0, y: 0 });
-    type(id, 'HELLO');
-
-    // What menu.ts does for menu://edit/undo.
-    commitActiveTextEdit();
-    await history.undo();
-
-    expect(scene().nodes).toHaveLength(0);
-    expect(edit().editing).toBeNull();
-    expect(history.canUndo()).toBe(false);
-
-    await history.redo();
-    expect(textAt(id).content).toBe('HELLO');
-  });
-
-  it('re-edit: one undo step restores the original words', async () => {
-    const id = existingText('HELLO');
-    expect(beginReEdit(id)).toBe(true);
-    // The ask alone opens nothing: the field's focus does.
-    expect(edit().editing).toBeNull();
-    beginTextEdit(id, false); // field focus
-    expect(edit().editing).toEqual({ nodeId: id, isNew: false });
-    type(id, 'HELLO W');
-    type(id, 'HELLO WORLD');
-    commitActiveTextEdit();
-
-    expect(textAt(id).content).toBe('HELLO WORLD');
-    await history.undo();
-    expect(textAt(id).content).toBe('HELLO');
-    expect(history.canUndo()).toBe(false);
   });
 
   it('re-edit that changes nothing records no step', () => {
@@ -164,81 +180,39 @@ describe('commitActiveTextEdit', () => {
     beginReEdit(id);
     beginTextEdit(id, false);
     commitActiveTextEdit(); // field blur
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('re-edit that blanks the content keeps the node (only new blank nodes are discarded)', () => {
-    const id = existingText('HELLO');
-    beginReEdit(id);
-    beginTextEdit(id, false);
-    type(id, '');
-    commitActiveTextEdit();
-    expect(textAt(id).content).toBe('');
-    expect(history.canUndo()).toBe(true);
-  });
-
-  it('is idempotent: a second commit does nothing', async () => {
-    const id = beginNewTextAt({ x: 0, y: 0 });
-    type(id, 'A');
-    commitActiveTextEdit();
-    commitActiveTextEdit();
-    await history.undo();
-    expect(history.canUndo()).toBe(false);
   });
 });
 
 describe('the edit transaction is the field focus (dogfood-revisions.md)', () => {
-  it('a new node: the field focusing after the T click opens no second transaction', async () => {
+  it('a new node: the field focusing after the T click opens no second transaction', () => {
+    const calls = spyOnTransactions();
     const id = beginNewTextAt({ x: 0, y: 0 });
     beginTextEdit(id, false); // the field's onFocus
     expect(edit().editing).toEqual({ nodeId: id, isNew: true });
     type(id, 'ABC');
     commitActiveTextEdit(); // blur
-    await history.undo();
-    expect(scene().nodes).toHaveLength(0);
-    expect(history.canUndo()).toBe(false);
+    expect(calls).toEqual(['begin', 'end']);
   });
 
-  it('new + blank: focus then blur leaves no node and no history entry', () => {
+  it('typing on after a commit while the caret stays in the field opens a fresh transaction', () => {
+    const calls = spyOnTransactions();
+    const id = existingText('HELLO');
+    beginTextEdit(id, false);
+    type(id, 'HELLO WORLD');
+    commitActiveTextEdit();
+    // the caret is still in the field: the next keystroke re-opens an edit (the field's onChange)
+    beginTextEdit(id, false);
+    type(id, 'HELLO!');
+    commitActiveTextEdit();
+    expect(calls).toEqual(['begin', 'end', 'begin', 'end']);
+  });
+
+  it('new + blank: focus then blur leaves no node', () => {
     const id = beginNewTextAt({ x: 0, y: 0 });
     beginTextEdit(id, false);
     commitActiveTextEdit();
     expect(scene().nodes).toHaveLength(0);
     expect(useSelectionStore.getState().selection).toEqual({ kind: 'none' });
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('re-edit through focus and blur is one undo step', async () => {
-    const id = existingText('HELLO');
-    beginReEdit(id);
-    beginTextEdit(id, false);
-    type(id, 'HELLO W');
-    type(id, 'HELLO WORLD');
-    commitActiveTextEdit();
-    await history.undo();
-    expect(textAt(id).content).toBe('HELLO');
-    expect(history.canUndo()).toBe(false);
-  });
-
-  it('Cmd+Z while the field is focused commits, then undoes; typing on opens a fresh edit', async () => {
-    const id = existingText('HELLO');
-    beginTextEdit(id, false);
-    type(id, 'HELLO WORLD');
-
-    // menu://edit/undo while focused.
-    commitActiveTextEdit();
-    await history.undo();
-    expect(textAt(id).content).toBe('HELLO');
-    expect(edit().editing).toBeNull();
-
-    // The caret is still in the field: the next keystroke re-opens an edit (what
-    // the field's onChange does) and is again exactly one undo step.
-    beginTextEdit(id, false);
-    type(id, 'HELLO!');
-    commitActiveTextEdit();
-    await history.undo();
-    expect(textAt(id).content).toBe('HELLO');
-    expect(history.canUndo()).toBe(false);
   });
 
   it('beginTextEdit ignores a locked or missing node', () => {
@@ -325,12 +299,13 @@ describe('beginReEdit', () => {
 
 describe('other ways an edit ends', () => {
   it('the selection moving away commits', () => {
+    const calls = spyOnTransactions();
     const id = beginNewTextAt({ x: 0, y: 0 });
     type(id, 'KEEP');
     useSelectionStore.getState().clear();
     expect(edit().editing).toBeNull();
     expect(textAt(id).content).toBe('KEEP');
-    expect(history.canUndo()).toBe(true);
+    expect(calls).toEqual(['begin', 'end']);
   });
 
   it('the node vanishing under the edit (project load) closes it', () => {

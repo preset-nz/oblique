@@ -27,8 +27,8 @@ import {
   useFontPreferencesStore,
 } from '@/fonts/preferences';
 import { cn } from '@/lib/utils';
-import { beginTransaction, endTransaction } from '@/scene/history';
 import { beginTextEdit, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import type { OptionalColourFieldDef, TextScopeContext } from './textScope';
 
 /**

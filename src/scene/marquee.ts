@@ -22,7 +22,7 @@ interface Rect {
  * The local `Point`/`Rect` shapes are structurally identical to
  * `canvas/marquees/marqueeGeometry.ts`'s.
  *
- * Deliberately never touches `scene/store.ts` or `scene/history.ts` — no
+ * Deliberately never touches `scene/store.ts` — no
  * undo integration, no `.oblique` persistence, no dirty flags, zero cooks
  * fired (epic acceptance: marquees are ephemeral overlay state, not scene
  * state). `selection-to-mask.md`'s apply action is what turns a marquee

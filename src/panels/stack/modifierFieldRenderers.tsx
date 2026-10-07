@@ -6,7 +6,7 @@ import { LabelTip } from '@/components/LabelTip';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
 import { useEyedropperStore } from '@/scene/eyedropperState';
-import { beginTransaction, endTransaction } from '@/scene/history';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import { snapToIntegerStep } from './integerStepFix';
 import type {
   ModifierColorFieldDef,

@@ -9,7 +9,7 @@ import {
 /**
  * What a modifier's `maskId` resolves to, as cook inputs: the
  * `VectorMaskRef` plus the referenced node's live geometry. Shared by
- * history.ts (an undo that only changes the referenced shape must dirty the
+ * `restore.ts` (an undo that only changes the referenced shape must dirty the
  * consumer) and cook.ts's race guard (a mask-source edit landing mid-cook
  * must leave the consumer dirty) so both read the same definition of
  * "the mask changed".
@@ -56,7 +56,7 @@ export function resolvedMaskInput(
  * rasterise through the consumer's CURRENT transform2d, so only they make the
  * consumer's transform a cook input — the one predicate behind
  * `setNodeTransform`'s dirty exception, cook.ts's race-guard key and
- * history.ts's `cookAffectingChanged`. A consumer whose masks are all
+ * `restore.ts`'s `cookAffectingChanged`. A consumer whose masks are all
  * node-pinned goes back to "transform never recooks".
  */
 export function hasDocumentPinnedMask(

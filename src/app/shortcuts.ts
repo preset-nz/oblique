@@ -10,7 +10,7 @@ import { useToolStateStore } from '@/canvas/toolState';
  * New/Open/Import/Save/Save As/Export PNG/Undo/Redo used to be handled here
  * too (Open was a combined Open-or-Import dialog before the roadmap
  * "Cmd+O is overloaded — split Open vs Import" split, 2026-07-05: Cmd+O is
- * now Open (projects only), Cmd+I is the new Import (images only)). As of
+ * now Open (projects only), Import (images only) was Cmd+I, now Shift+Cmd+I). As of
  * the native menu bar (`src-tauri/src/menu.rs` + `src/app/menu.ts`, roadmap
  * "Native app menu + New command") those accelerators are declared on the
  * menu items instead and have been removed from here — on macOS a menu

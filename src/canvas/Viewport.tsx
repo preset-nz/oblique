@@ -7,7 +7,6 @@ import { currentTransform } from '@/rhizome/rhizome';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
 import { useEyedropperStore } from '@/scene/eyedropperState';
-import { beginTransaction, endTransaction } from '@/scene/history';
 import {
   fillRuleForMarquee,
   isMaskableMarquee,
@@ -19,6 +18,7 @@ import { onlyNoteChanged } from '@/scene/sceneDiff';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from '@/scene/textEditState';
+import { beginTransaction, endTransaction } from '@/scene/transaction';
 import { IDENTITY_TRANSFORM_2D, isTextNode, isVectorNode } from '@/scene/types';
 import { ColourSelectOverlay } from './colourSelect/ColourSelectOverlay';
 import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel';
