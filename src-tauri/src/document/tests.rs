@@ -1,12 +1,19 @@
 //! The object model's contracts, with no window: every write is a command, one undo step
 //! each, and the domain rules (locks, labels, soft max) hold however the webview behaves.
 
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
+use preset_app_kit::{edit_titles, Document as _, DocumentState, History as _, HistoryState};
 use rhizome_core::{IdSource, On, Value};
 use rhizome_pom::{Document, FileStore, Host, MemoryStore, Outcome, Pom};
+use rhizome_pom_tauri::PomHost;
 use serde_json::{json, Value as Json};
+use tauri::test::{mock_app, MockRuntime};
+use tauri::Listener as _;
 
+use super::host::{DOCUMENT_OPENED, HISTORY_STEPPED, NOT_READY};
 use super::{
     fit_replaced_transform, refit_attach_transform, Catalogue, DocumentHost, Oblique, Op, OpParam,
     Placement,
@@ -1497,29 +1504,320 @@ fn a_param_with_only_a_min_keeps_it_and_is_unbounded_above() {
     assert_eq!(floor.range.map(|r| r.0), Some(1.0));
 }
 
+// ---- the document host as app-kit's History and Document (Epic 22, slice a) ----
+
+/// What the mock app heard: (event name, payload JSON), in order.
+type Heard = Arc<Mutex<Vec<(String, String)>>>;
+
+/// A mock app, listening to everything the host and rhizome's transport emit.
+fn app_hearing() -> (tauri::App<MockRuntime>, Heard) {
+    let app = mock_app();
+    let heard = Heard::default();
+    for name in [
+        "pom://commit",
+        "pom://status",
+        HISTORY_STEPPED,
+        DOCUMENT_OPENED,
+    ] {
+        let heard = heard.clone();
+        app.listen_any(name, move |e| {
+            heard
+                .lock()
+                .unwrap()
+                .push((name.to_string(), e.payload().to_string()));
+        });
+    }
+    (app, heard)
+}
+
+fn names(heard: &Heard) -> Vec<String> {
+    heard
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect()
+}
+
+/// The payload of the one event called `name`.
+fn payload(heard: &Heard, name: &str) -> Json {
+    let all = heard.lock().unwrap();
+    let mut it = all.iter().filter(|(n, _)| n == name);
+    let (_, p) = it.next().unwrap_or_else(|| panic!("no {name} event"));
+    assert!(it.next().is_none(), "more than one {name} event");
+    serde_json::from_str(p).unwrap()
+}
+
+/// A host with its document, over a store.
+fn ready(store: &MemoryStore) -> (DocumentHost, PomHost) {
+    let host = DocumentHost::new();
+    let transport = host.init(pom(store)).expect("first init");
+    (host, transport)
+}
+
+fn has_layer(transport: &PomHost, id: &str) -> bool {
+    let at = format!("/layers/{id}");
+    transport
+        .host()
+        .view()
+        .rows
+        .iter()
+        .any(|r| r.path.to_string() == at)
+}
+
+fn add_layer(transport: &PomHost, id: &str) {
+    transport
+        .host()
+        .run("layer.add", &json!({ "node": node(id, "pixel") }), None)
+        .unwrap();
+}
+
 #[test]
 fn the_document_host_shares_its_pom_with_the_transports_host() {
-    let (document, transport) = DocumentHost::new(pom(&MemoryStore::default()));
-    let told = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let (document, transport) = ready(&MemoryStore::default());
+    let told = Arc::new(AtomicU32::new(0));
     let seen = told.clone();
     document.on_change(move || {
-        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        seen.fetch_add(1, Ordering::SeqCst);
     });
 
     // a command through the transport's host (what `pom_run` calls) ...
-    transport
-        .host()
-        .run("layer.add", &json!({ "node": node("a", "pixel") }), None)
-        .unwrap();
+    add_layer(&transport, "a");
 
-    // ... is in the document Oblique's own Rust reads, and the hook heard of it
-    document.pom().read(|d| {
-        assert!(d.tree().at("/layers/a").is_some());
-    });
-    assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(document.untitled_number(), 1);
-    assert_eq!(document.next_untitled(), 2);
-    assert_eq!(document.untitled_number(), 2);
+    // ... is in the document the host reads, and the hook heard of it
+    assert!(has_layer(&transport, "a"));
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn before_init_the_document_is_untitled_and_saved_with_nothing_to_undo() {
+    let (app, heard) = app_hearing();
+    let host = DocumentHost::new();
+    assert!(!host.is_ready());
+    assert_eq!(host.untitled_number(), 1);
+    assert_eq!(host.path(), None);
+    assert!(!host.is_unsaved());
+    assert_eq!(
+        (host.undo_label(), host.redo_label()),
+        (None, None),
+        "nothing to undo or redo"
+    );
+    assert!(host.undo_labels().is_empty() && host.redo_labels().is_empty());
+    let state = DocumentState::of(&host);
+    assert_eq!(
+        (state.name.as_str(), state.title.as_str()),
+        ("Untitled-1", "Untitled-1")
+    );
+    let titles = edit_titles(&HistoryState::of(&host), false);
+    assert_eq!((titles.undo.as_str(), titles.undo_enabled), ("Undo", false));
+    assert_eq!((titles.redo.as_str(), titles.redo_enabled), ("Redo", false));
+
+    // undo and redo have nothing to do, and say nothing
+    host.undo(app.handle()).unwrap();
+    host.redo(app.handle()).unwrap();
+    // save and new say the document isn't ready, and change nothing
+    assert_eq!(
+        host.save(app.handle(), Path::new("/a.oblique")),
+        Err(NOT_READY.into())
+    );
+    assert_eq!(host.new_document(app.handle(), 2), Err(NOT_READY.into()));
+    assert_eq!(host.untitled_number(), 1);
+    assert!(names(&heard).is_empty());
+}
+
+#[test]
+fn an_open_before_init_is_held_and_applied_after_it() {
+    let store = MemoryStore::default();
+    {
+        // a saved document to open: one layer, written through a Pom of its own
+        let (_, transport) = ready(&store);
+        add_layer(&transport, "kept");
+        transport
+            .host()
+            .save_as(Path::new("/held.oblique"))
+            .unwrap();
+    }
+    let (app, heard) = app_hearing();
+    let host = DocumentHost::new();
+
+    // before the catalogue: held (the newest request wins), nothing opens, nothing is heard
+    host.open(app.handle(), Path::new("/older.oblique"))
+        .unwrap();
+    host.open(app.handle(), Path::new("/held.oblique")).unwrap();
+    assert!(!host.is_ready() && host.path().is_none());
+    assert!(names(&heard).is_empty());
+
+    // init alone does not apply it (the transport isn't managed yet) ...
+    let transport = host.init(pom(&store)).expect("first init");
+    assert!(host.is_ready() && host.path().is_none());
+    assert!(names(&heard).is_empty());
+
+    // ... apply_held does, and emits as any open does
+    assert_eq!(host.apply_held(app.handle()), Ok(true));
+    assert_eq!(host.path(), Some(PathBuf::from("/held.oblique")));
+    assert!(!host.is_unsaved());
+    assert!(has_layer(&transport, "kept"));
+    let heard_names = names(&heard);
+    assert!(heard_names.contains(&"pom://status".to_string()));
+    assert_eq!(
+        heard_names.last().map(String::as_str),
+        Some(DOCUMENT_OPENED),
+        "document-opened comes after the transport's events"
+    );
+    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+
+    // it was held once
+    assert_eq!(host.apply_held(app.handle()), Ok(false));
+}
+
+#[test]
+fn a_held_open_that_fails_leaves_an_untitled_document() {
+    let (app, heard) = app_hearing();
+    let host = DocumentHost::new();
+    host.open(app.handle(), Path::new("/missing.oblique"))
+        .unwrap();
+    host.init(pom(&MemoryStore::default())).unwrap();
+    assert!(host.apply_held(app.handle()).is_err());
+    assert!(host.is_ready());
+    assert_eq!(host.path(), None);
+    assert!(!names(&heard).contains(&DOCUMENT_OPENED.to_string()));
+    // and it is not held again
+    assert_eq!(host.apply_held(app.handle()), Ok(false));
+}
+
+#[test]
+fn init_fills_the_host_once() {
+    let host = DocumentHost::new();
+    assert!(host.init(pom(&MemoryStore::default())).is_some());
+    assert!(host.init(pom(&MemoryStore::default())).is_none());
+}
+
+#[test]
+fn an_open_after_init_opens_at_once() {
+    let store = MemoryStore::default();
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&store);
+    add_layer(&transport, "a");
+    host.save(app.handle(), Path::new("/doc.oblique")).unwrap();
+    add_layer(&transport, "b");
+    assert!(host.is_unsaved());
+    heard.lock().unwrap().clear();
+
+    host.open(app.handle(), Path::new("/doc.oblique")).unwrap();
+    assert_eq!(host.path(), Some(PathBuf::from("/doc.oblique")));
+    assert!(!host.is_unsaved(), "a fresh open is saved");
+    assert!(host.undo_labels().is_empty(), "with an empty history");
+    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+}
+
+#[test]
+fn undo_and_redo_titles_come_from_the_status() {
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    let step = transport.host().status().undo.expect("a step to undo");
+
+    // app-kit's menu titles, read through History from POM's status
+    assert_eq!(host.undo_label().as_deref(), Some(step.as_str()));
+    assert_eq!(host.undo_labels(), vec![step.clone()]);
+    let titles = edit_titles(&HistoryState::of(&host), false);
+    assert_eq!(titles.undo, format!("Undo {step}"));
+    assert!(titles.undo_enabled);
+    assert_eq!((titles.redo.as_str(), titles.redo_enabled), ("Redo", false));
+
+    heard.lock().unwrap().clear();
+    host.undo(app.handle()).unwrap();
+    assert!(!has_layer(&transport, "a"));
+    assert_eq!(host.undo_label(), None);
+    assert_eq!(host.redo_label().as_deref(), Some(step.as_str()));
+    assert_eq!(host.redo_labels(), vec![step.clone()]);
+    let titles = edit_titles(&HistoryState::of(&host), false);
+    assert_eq!(titles.redo, format!("Redo {step}"));
+    assert!(titles.redo_enabled && !titles.undo_enabled);
+
+    // rhizome's commit reaches the webview's mirror, then history-stepped, with the bare label
+    let heard_names = names(&heard);
+    assert_eq!(
+        heard_names.last().map(String::as_str),
+        Some(HISTORY_STEPPED),
+        "{heard_names:?}"
+    );
+    assert!(heard_names.contains(&"pom://commit".to_string()));
+    assert_eq!(
+        payload(&heard, HISTORY_STEPPED),
+        json!({"undid": true, "label": step})
+    );
+
+    heard.lock().unwrap().clear();
+    host.redo(app.handle()).unwrap();
+    assert!(has_layer(&transport, "a"));
+    assert_eq!(host.redo_label(), None);
+    assert_eq!(
+        payload(&heard, HISTORY_STEPPED),
+        json!({"undid": false, "label": step})
+    );
+}
+
+#[test]
+fn undo_with_nothing_to_undo_is_quiet() {
+    let (app, heard) = app_hearing();
+    let (host, _transport) = ready(&MemoryStore::default());
+    host.undo(app.handle()).unwrap();
+    host.redo(app.handle()).unwrap();
+    assert!(!names(&heard).contains(&HISTORY_STEPPED.to_string()));
+}
+
+#[test]
+fn unsaved_is_derived_not_flagged() {
+    let (app, _heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    assert!(!host.is_unsaved());
+
+    add_layer(&transport, "a");
+    assert!(host.is_unsaved());
+    host.save(app.handle(), Path::new("/doc.oblique")).unwrap();
+    assert!(!host.is_unsaved());
+    assert_eq!(host.path(), Some(PathBuf::from("/doc.oblique")));
+
+    add_layer(&transport, "b");
+    assert!(host.is_unsaved());
+    // back to what is on disk: saved again, without a save
+    host.undo(app.handle()).unwrap();
+    assert!(!host.is_unsaved());
+    host.redo(app.handle()).unwrap();
+    assert!(host.is_unsaved());
+}
+
+#[test]
+fn new_replaces_the_document_and_takes_app_kits_number() {
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    host.save(app.handle(), Path::new("/doc.oblique")).unwrap();
+    heard.lock().unwrap().clear();
+
+    host.new_document(app.handle(), 2).unwrap();
+    assert_eq!(host.untitled_number(), 2);
+    assert_eq!(host.path(), None);
+    assert!(!host.is_unsaved());
+    assert!(host.undo_labels().is_empty());
+    let state = DocumentState::of(&host);
+    assert_eq!(state.name, "Untitled-2");
+    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+}
+
+#[test]
+fn the_change_hook_may_be_scheduled_while_the_document_is_locked() {
+    // `refresh_on_change` sets the hook; a command runs it under the Pom's lock. It must only
+    // queue the refresh, so the command returns (a refresh run inline would lock the Pom
+    // again from inside its own lock and hang here).
+    let app = mock_app();
+    let (host, transport) = ready(&MemoryStore::default());
+    host.refresh_on_change(app.handle().clone());
+    for id in ["a", "b", "c"] {
+        add_layer(&transport, id);
+    }
+    assert!(host.is_unsaved());
 }
 
 // ---- real projects (opt-in) ----

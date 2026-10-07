@@ -39,6 +39,12 @@ pub fn run() {
             rhizome_pom_tauri::commands::pom_save_as
         ])
         .setup(|app| {
+            use tauri::Manager;
+            // The host exists from launch (app-kit finds it with `app.state`); its document
+            // arrives with `document_init`, once the sidecar's op catalogue is in.
+            let document = document::DocumentHost::new();
+            document.refresh_on_change(app.handle().clone());
+            app.manage(document);
             sidecar::start(app.handle().clone());
             menu::install(app.handle())?;
             Ok(())

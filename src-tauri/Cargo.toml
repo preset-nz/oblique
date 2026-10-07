@@ -34,7 +34,12 @@ rustybuzz = "0.20"
 rhizome-core = "0.1.4"
 rhizome-pom = "0.1.4"
 rhizome-pom-tauri = "0.1.4"
+# The family's app behaviour (Epic 22): Undo/Redo titles, File commands, the close guard. Slice a
+# implements its History and Document on the document host; the menu and install come after.
+preset-app-kit = "0.1.2"
 
 [dev-dependencies]
+# A mock app, so the host's emitted events can be heard in tests.
+tauri = { version = "2", features = ["test"] }
 # Golden-render test rasteriser only (text/raster_tests.rs); nothing ships. BSD-3-Clause.
 tiny-skia = "0.11"

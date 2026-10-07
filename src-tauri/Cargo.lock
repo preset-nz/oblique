@@ -2323,6 +2323,7 @@ name = "oblique"
 version = "0.2.0-alpha"
 dependencies = [
  "fontdb",
+ "preset-app-kit",
  "rhizome-core",
  "rhizome-pom",
  "rhizome-pom-tauri",
@@ -2589,6 +2590,20 @@ name = "precomputed-hash"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
+
+[[package]]
+name = "preset-app-kit"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5304a39f7000c4e2a59be42c919e81a704264754ac26301797982720c6ac8efa"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin-dialog",
+ "tauri-plugin-window-state",
+ "toml 0.9.12+spec-1.1.0",
+]
 
 [[package]]
 name = "proc-macro-crate"
@@ -3663,6 +3678,21 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73736611e14142408d15353e21e3cca2f12a3cfb523ad0ce85999b6d2ef1a704"
+dependencies = [
+ "bitflags 2.13.0",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

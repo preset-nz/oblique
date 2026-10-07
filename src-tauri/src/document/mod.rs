@@ -778,21 +778,32 @@ pub fn document_log(message: String) {
     eprintln!("[document] {message}");
 }
 
-/// Makes the document host once the webview has the op catalogue, and manages it. A reloaded
-/// webview finds it already there.
+/// Fills the document host once the webview has the op catalogue, and manages the transport's
+/// host over it. The host itself is managed at launch (`lib.rs`), because app-kit asks for it
+/// before there is a document; a reloaded webview finds it already filled.
+///
+/// An `open` the host held until now (a restored document, a Finder open) is applied last, so
+/// it emits to a webview whose transport state exists. If it fails the document stays
+/// untitled: the failure is logged and `document_init` still succeeds, or the webview would
+/// never get a document at all.
 #[tauri::command]
 pub fn document_init<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     ops: Vec<Op>,
 ) -> Result<(), String> {
     use tauri::Manager;
-    if app.try_state::<rhizome_pom_tauri::PomHost>().is_some() {
+    let host = app.state::<DocumentHost>();
+    if host.is_ready() {
         return Ok(());
     }
     let pom =
         Pom::<Oblique>::files_in(Arc::new(Catalogue(ops))).map_err(|e: Error| e.to_string())?;
-    let (document, transport) = DocumentHost::new(pom);
+    let Some(transport) = host.init(pom) else {
+        return Ok(());
+    };
     app.manage(transport);
-    app.manage(document);
+    if let Err(e) = host.apply_held(&app) {
+        eprintln!("[document] the held open failed: {e}");
+    }
     Ok(())
 }
