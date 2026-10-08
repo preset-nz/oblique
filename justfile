@@ -23,15 +23,10 @@ install:
 kernels:
     uv sync --project sidecar --reinstall-package oblique-kernels
 
+# Run the app in its Tauri window. There is no browser-only mode (family rule, 2026-10-08).
 [group('dev')]
-run target="desktop":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{target}}" in
-        desktop) pnpm tauri dev ;;
-        web)     pnpm dev ;;
-        *) echo "unknown target: {{target}}" >&2; exit 1 ;;
-    esac
+run:
+    pnpm tauri dev
 
 [group('quality')]
 check:
