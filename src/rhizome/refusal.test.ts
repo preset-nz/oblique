@@ -37,8 +37,13 @@ describe('refusal by construction', () => {
     expect([...refused, ...ON_RHIZOME, ...INTERNAL].sort()).toEqual([...all].sort());
     // a typo in either list would quietly refuse nothing
     for (const name of [...ON_RHIZOME, ...INTERNAL]) expect(all).toContain(name);
-    for (const name of ['removeNode', 'addModifier', 'lockNode', 'setBackgroundColor']) {
+    for (const name of ['addModifier', 'lockNode', 'setBackgroundColor']) {
       expect(refused).toContain(name);
+    }
+    // the layer edits moved in Epic 21 story 3
+    for (const name of ['removeNode', 'reorderNode', 'duplicateNode']) {
+      expect(refused).not.toContain(name);
+      expect(ON_RHIZOME).toContain(name);
     }
   });
 
@@ -80,7 +85,7 @@ describe('refusal by construction', () => {
     install();
     uninstall?.();
     uninstall = null;
-    expect(useSceneStore.getState().removeNode).toBe(originals.removeNode);
+    expect(useSceneStore.getState().lockNode).toBe(originals.lockNode);
   });
 
   it('toasts once per action per window, so a scrub does not flood', () => {
@@ -108,7 +113,7 @@ describe('refusal by construction', () => {
   });
 
   it('names an action in words', () => {
-    expect(actionLabel('removeNode')).toBe('Remove node');
+    expect(actionLabel('lockNode')).toBe('Lock node');
     expect(actionLabel('setModifierVectorMask')).toBe('Set modifier vector mask');
   });
 });

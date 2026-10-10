@@ -18,7 +18,7 @@ use tauri::Listener as _;
 use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
     fit_replaced_transform, refit_attach_transform, Catalogue, DocumentHost, Oblique, Op, OpParam,
-    Placement,
+    Placement, DUPLICATE_OFFSET_PX,
 };
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
@@ -1409,6 +1409,461 @@ fn set_source_on_a_layer_that_is_not_a_pixel_layer_is_refused() {
     }
     let e = set_source(&mut d, "/layers/zzz", "/new/b.png", None).unwrap_err();
     assert!(e.to_string().contains("/layers/zzz"), "{e}");
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+// ---- layer edits: layer.remove, layer.reorder, layer.duplicate ----
+
+/// Runs `edit`, which must be one undo step named `label`: undo gives back the exact tree it
+/// started from, and redo the exact tree it made.
+fn is_one_undo_step(
+    d: &mut Document<Oblique>,
+    label: &str,
+    edit: impl FnOnce(&mut Document<Oblique>),
+) {
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    edit(d);
+    assert_eq!(d.tree().history_len(), steps + 1, "one undo step");
+    assert_eq!(d.tree().undo_label(), Some(label));
+    let after = d.tree().serialise();
+    assert_ne!(after, before, "the edit changed something");
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before, "undo restores the exact tree");
+    assert_eq!(d.tree().history_len(), steps);
+    d.redo().unwrap();
+    assert_eq!(d.tree().serialise(), after, "redo gives the edit back");
+}
+
+fn remove(d: &mut Document<Oblique>, at: &str) -> rhizome_pom::Result<Outcome> {
+    d.run("layer.remove", &json!({ "at": at }))
+}
+
+fn reorder(d: &mut Document<Oblique>, at: &str, to: i64) -> rhizome_pom::Result<Outcome> {
+    d.run("layer.reorder", &json!({ "at": at, "to": to }))
+}
+
+fn duplicate(
+    d: &mut Document<Oblique>,
+    at: &str,
+    id: &str,
+    modifiers: &[&str],
+    masks: &[Option<&str>],
+) -> rhizome_pom::Result<Outcome> {
+    d.run(
+        "layer.duplicate",
+        &json!({"at": at, "id": id, "modifierIds": modifiers, "maskIds": masks}),
+    )
+}
+
+/// The mask bindings on a modifier: (source layer name, refId).
+fn masks_of(d: &Document<Oblique>, modifier: &str) -> Vec<(String, String)> {
+    d.tree()
+        .at(modifier)
+        .unwrap()
+        .bindings()
+        .iter()
+        .map(|b| {
+            let Some(Value::Text(r)) = b.value("refId") else {
+                panic!("no refId")
+            };
+            (b.source.name().to_string(), r)
+        })
+        .collect()
+}
+
+#[test]
+fn remove_deletes_the_layer_and_its_modifiers_in_one_undo_step() {
+    let mut d = doc();
+    let mut n = node("b", "pixel");
+    n["modifiers"] =
+        json!([{"id": "m1", "type": "blur", "enabled": true, "params": {"radius": 12.0}}]);
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, n).unwrap();
+    add(&mut d, node("c", "text")).unwrap();
+    is_one_undo_step(&mut d, "Delete Layer", |d| {
+        remove(d, "/layers/b").unwrap();
+        assert_eq!(stack(d), ["c", "a"]);
+        assert!(d.tree().at("/layers/b").is_none());
+        assert!(d.tree().at("/layers/b/m1").is_none());
+    });
+    // the redo is still in force: now bring it back and check the layer is whole
+    d.undo().unwrap();
+    assert_eq!(stack(&d), ["c", "b", "a"]);
+    assert!(d.tree().at("/layers/b/m1").is_some());
+}
+
+#[test]
+fn remove_takes_the_bindings_sourced_from_the_removed_layer_with_it() {
+    let mut d = doc();
+    // `a` consumes the vector layer `v` through two modifiers, `w` through none; `z` is a
+    // second consumer of `v`
+    with_masks(
+        &mut d,
+        placed("a"),
+        &[
+            (
+                "r1",
+                json!({"x": 1.0, "y": 2.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0}),
+            ),
+            ("r2", Json::Null),
+        ],
+    );
+    add(&mut d, node("w", "vector")).unwrap();
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("v".into(), "r1".into())]);
+
+    is_one_undo_step(&mut d, "Delete Layer", |d| {
+        let Outcome::Committed(c) = remove(d, "/layers/v").unwrap() else {
+            panic!("not committed")
+        };
+        // no modifier keeps a dangling mask ...
+        for m in ["/layers/a/m1", "/layers/a/m2"] {
+            assert!(d.tree().at(m).unwrap().bindings().is_empty(), "{m}");
+        }
+        // ... and the patch the webview's mirror applies names those modifiers, or it would
+        // keep a binding to a layer that is gone
+        let patch = d.tree().patch(&c.changes);
+        let rows: Vec<String> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+        assert!(rows.contains(&"/layers/a/m1".to_string()), "{rows:?}");
+        assert!(rows.contains(&"/layers/a/m2".to_string()), "{rows:?}");
+        assert!(rows.contains(&"/layers".to_string()), "{rows:?}");
+        for m in &patch.rows {
+            assert!(m.bindings.is_empty(), "{}", m.path);
+        }
+        assert_eq!(patch.removed.len(), 1);
+    });
+    // undo brought both back: the layer and the masks that point at it
+    d.undo().unwrap();
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("v".into(), "r1".into())]);
+    assert_eq!(masks_of(&d, "/layers/a/m2"), [("v".into(), "r2".into())]);
+    assert_eq!(mask_value(&d, "/layers/a/m1", "space"), json!("node"));
+}
+
+#[test]
+fn removing_a_consumer_leaves_the_mask_layer_alone() {
+    let mut d = doc();
+    with_masks(&mut d, placed("a"), &[("r1", Json::Null)]);
+    remove(&mut d, "/layers/a").unwrap();
+    assert_eq!(stack(&d), ["v"]);
+}
+
+#[test]
+fn remove_allows_a_locked_layer() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    lock(&mut d, "/layers/a");
+    is_one_undo_step(&mut d, "Delete Layer", |d| {
+        remove(d, "/layers/a").unwrap();
+        assert!(stack(d).is_empty());
+    });
+}
+
+#[test]
+fn the_layer_commands_refuse_what_is_not_a_layer_and_change_nothing() {
+    let mut d = doc();
+    let mut n = node("a", "pixel");
+    n["modifiers"] = json!([{"id": "m1", "type": "blur", "enabled": true, "params": {}}]);
+    add(&mut d, n).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for at in [
+        "/layers/a/m1",
+        "/document/document",
+        "/layers",
+        "/layers/zzz",
+    ] {
+        for e in [
+            remove(&mut d, at),
+            reorder(&mut d, at, 0),
+            duplicate(&mut d, at, "x", &[], &[]),
+        ] {
+            assert!(e.is_err(), "{at}");
+        }
+    }
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+/// The store's `reorderNode`: splice out, splice in (src/scene/store.ts).
+fn spliced(stack: &[&str], id: &str, to: usize) -> Vec<String> {
+    let mut v: Vec<String> = stack.iter().map(|s| s.to_string()).collect();
+    let from = v.iter().position(|s| s == id).unwrap();
+    let n = v.remove(from);
+    v.insert(to, n);
+    v
+}
+
+#[test]
+fn reorder_matches_the_stores_for_top_bottom_and_middle_moves() {
+    for (id, to) in [
+        ("d", 3),
+        ("a", 0),
+        ("c", 2),
+        ("b", 0),
+        ("a", 1),
+        ("d", 1),
+        ("c", 3),
+        ("b", 3),
+    ] {
+        let mut d = doc();
+        for l in ["a", "b", "c", "d"] {
+            add(&mut d, node(l, "pixel")).unwrap(); // the stack is d, c, b, a
+        }
+        let want = spliced(&["d", "c", "b", "a"], id, to);
+        let at = format!("/layers/{id}");
+        is_one_undo_step(&mut d, "Move Layer", |d| {
+            reorder(d, &at, to as i64).unwrap();
+            assert_eq!(stack(d), want, "{id} to {to}");
+        });
+    }
+}
+
+#[test]
+fn reorder_clamps_an_index_out_of_range_to_the_nearest_end() {
+    let mut d = doc();
+    for l in ["a", "b", "c"] {
+        add(&mut d, node(l, "pixel")).unwrap(); // c, b, a
+    }
+    reorder(&mut d, "/layers/c", 99).unwrap();
+    assert_eq!(stack(&d), ["b", "a", "c"]);
+    reorder(&mut d, "/layers/c", -5).unwrap();
+    assert_eq!(stack(&d), ["c", "b", "a"]);
+}
+
+#[test]
+fn reorder_to_where_it_already_is_is_not_a_step() {
+    let mut d = doc();
+    for l in ["a", "b", "c"] {
+        add(&mut d, node(l, "pixel")).unwrap();
+    }
+    let steps = d.tree().history_len();
+    assert!(matches!(
+        reorder(&mut d, "/layers/b", 1).unwrap(),
+        Outcome::Nothing
+    ));
+    assert!(matches!(
+        reorder(&mut d, "/layers/c", -3).unwrap(),
+        Outcome::Nothing
+    ));
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn reorder_allows_a_locked_layer_and_touches_nothing_else() {
+    let mut d = doc();
+    for l in ["a", "b", "c"] {
+        add(&mut d, node(l, "pixel")).unwrap();
+    }
+    lock(&mut d, "/layers/c");
+    let Outcome::Committed(c) = reorder(&mut d, "/layers/c", 2).unwrap() else {
+        panic!("not committed")
+    };
+    assert_eq!(stack(&d), ["b", "a", "c"]);
+    // compositing only: the order changed, no layer's own values did
+    let patch = d.tree().patch(&c.changes);
+    let rows: Vec<String> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+    assert_eq!(rows, ["/layers"]);
+}
+
+fn masked_original(d: &mut Document<Oblique>) {
+    let attach = json!({"x": 5.0, "y": 6.0, "scaleX": 2.0, "scaleY": 1.5, "rotation": 0.4});
+    let mut layer = placed("a");
+    layer["label"] = json!("Photo");
+    with_masks(d, layer, &[("r1", attach), ("r2", Json::Null)]);
+    d.edit("Prepare", |tx| {
+        tx.set_value("/layers/a/m1", "params.radius", Value::Float(12.0))?;
+        tx.set_value("/layers/a/m2", "enabled", Value::Bool(false))?;
+        // m2 has no mask
+        tx.unbind("/layers/a/m2", On::slot("mask"), "/layers/v")
+    })
+    .unwrap();
+}
+
+#[test]
+fn duplicate_copies_the_label_offset_state_modifiers_and_masks() {
+    let mut d = doc();
+    masked_original(&mut d);
+    assert_eq!(stack(&d), ["v", "a"]);
+    let original = Placement {
+        x: 100.0,
+        y: 40.0,
+        scale_x: -1.0,
+        scale_y: 1.0,
+        rotation: 0.3,
+    };
+    is_one_undo_step(&mut d, "Duplicate Layer", |d| {
+        duplicate(d, "/layers/a", "a2", &["n1", "n2"], &[Some("q1"), None]).unwrap();
+        // directly above the original
+        assert_eq!(stack(d), ["v", "a2", "a"]);
+        assert_eq!(
+            value(d, "/layers/a2", "label"),
+            Some(Value::Text("Photo copy".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/a2", "state"),
+            Some(Value::Choice("active".into()))
+        );
+        let copy = placement(d, "/layers/a2");
+        near_placement(
+            copy,
+            Placement {
+                x: original.x + DUPLICATE_OFFSET_PX,
+                y: original.y + DUPLICATE_OFFSET_PX,
+                ..original
+            },
+        );
+        assert_eq!(source_of(d, "/layers/a2"), "/old/a.png");
+        assert_eq!(
+            value(d, "/layers/a2", "sourceSize"),
+            Some(Value::Vec2([512.0, 512.0]))
+        );
+        // fresh modifier ids, in the original's order, with the original's values
+        let order: Vec<String> = d
+            .tree()
+            .at("/layers/a2")
+            .unwrap()
+            .order("modifiers")
+            .iter()
+            .map(|n| n.name().to_string())
+            .collect();
+        assert_eq!(order, ["n1", "n2"]);
+        assert_eq!(
+            value(d, "/layers/a2/n1", "params.radius"),
+            Some(Value::Float(12.0))
+        );
+        assert_eq!(
+            value(d, "/layers/a2/n2", "enabled"),
+            Some(Value::Bool(false))
+        );
+        // the mask: same source, same values, a fresh refId; the unmasked one stays unmasked
+        assert_eq!(masks_of(d, "/layers/a2/n1"), [("v".into(), "q1".into())]);
+        assert!(d.tree().at("/layers/a2/n2").unwrap().bindings().is_empty());
+        for key in ["featherPx", "expand", "invert", "space", "attachTransform"] {
+            assert_eq!(
+                mask_value(d, "/layers/a2/n1", key),
+                mask_value(d, "/layers/a/m1", key),
+                "{key}"
+            );
+        }
+        // the original is untouched
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("v".into(), "r1".into())]);
+        near_placement(placement(d, "/layers/a"), original);
+        assert_eq!(
+            value(d, "/layers/a", "label"),
+            Some(Value::Text("Photo".into()))
+        );
+    });
+}
+
+#[test]
+fn duplicating_a_layer_that_was_never_moved_puts_the_copy_at_the_offset() {
+    let mut d = doc();
+    add(&mut d, node("a", "vector")).unwrap();
+    assert!(!d
+        .tree()
+        .at("/layers/a")
+        .unwrap()
+        .is_set("transform2d.position"));
+    duplicate(&mut d, "/layers/a", "a2", &[], &[]).unwrap();
+    near_placement(
+        placement(&d, "/layers/a2"),
+        Placement {
+            x: DUPLICATE_OFFSET_PX,
+            y: DUPLICATE_OFFSET_PX,
+            ..identity()
+        },
+    );
+    assert_eq!(
+        value(&d, "/layers/a2", "fillRule"),
+        Some(Value::Choice("nonzero".into()))
+    );
+    assert_eq!(
+        value(&d, "/layers/a2", "paths"),
+        value(&d, "/layers/a", "paths")
+    );
+}
+
+#[test]
+fn duplicating_a_text_layer_copies_its_text() {
+    let mut d = doc();
+    add(&mut d, node("t", "text")).unwrap();
+    duplicate(&mut d, "/layers/t", "t2", &[], &[]).unwrap();
+    for key in [
+        "content", "font", "fontSize", "fill", "stroke", "position", "align",
+    ] {
+        assert_eq!(
+            value(&d, "/layers/t2", key),
+            value(&d, "/layers/t", key),
+            "{key}"
+        );
+    }
+    // the label no longer follows the content: "Hello copy" isn't the content's own label
+    assert_eq!(
+        value(&d, "/layers/t2", "label"),
+        Some(Value::Text("Hello copy".into()))
+    );
+}
+
+#[test]
+fn a_duplicate_of_a_locked_layer_is_active() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    lock(&mut d, "/layers/a");
+    duplicate(&mut d, "/layers/a", "a2", &[], &[]).unwrap();
+    assert_eq!(
+        value(&d, "/layers/a2", "state"),
+        Some(Value::Choice("active".into()))
+    );
+    assert_eq!(
+        value(&d, "/layers/a", "state"),
+        Some(Value::Choice("locked".into()))
+    );
+}
+
+#[test]
+fn a_duplicate_can_be_duplicated_and_stays_above_its_original() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, node("b", "pixel")).unwrap();
+    duplicate(&mut d, "/layers/a", "a2", &[], &[]).unwrap();
+    duplicate(&mut d, "/layers/a2", "a3", &[], &[]).unwrap();
+    assert_eq!(stack(&d), ["b", "a3", "a2", "a"]);
+    assert_eq!(
+        value(&d, "/layers/a3", "label"),
+        Some(Value::Text("Layer copy copy".into()))
+    );
+    near_placement(
+        placement(&d, "/layers/a3"),
+        Placement {
+            x: 2.0 * DUPLICATE_OFFSET_PX,
+            y: 2.0 * DUPLICATE_OFFSET_PX,
+            ..identity()
+        },
+    );
+}
+
+#[test]
+fn duplicate_refuses_a_taken_id_and_ids_that_do_not_match_the_modifiers() {
+    let mut d = doc();
+    masked_original(&mut d);
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    // the layer id is taken
+    assert!(duplicate(&mut d, "/layers/a", "v", &["n1", "n2"], &[Some("q1"), None]).is_err());
+    // too few modifier ids, too few mask ids, a masked modifier with no mask id
+    assert!(duplicate(&mut d, "/layers/a", "a2", &["n1"], &[Some("q1")]).is_err());
+    assert!(duplicate(&mut d, "/layers/a", "a2", &["n1", "n2"], &[Some("q1")]).is_err());
+    assert!(duplicate(&mut d, "/layers/a", "a2", &["n1", "n2"], &[None, None]).is_err());
+    // a modifier id twice
+    assert!(duplicate(
+        &mut d,
+        "/layers/a",
+        "a2",
+        &["n1", "n1"],
+        &[Some("q1"), None]
+    )
+    .is_err());
     assert_eq!(d.tree().serialise(), before);
     assert_eq!(d.tree().history_len(), steps);
 }

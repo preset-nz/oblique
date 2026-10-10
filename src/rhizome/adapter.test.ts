@@ -6,6 +6,7 @@ import {
   Mirror,
   normal,
   PARAM_PREFIX,
+  reorderMoves,
   rowsFromScene,
   sceneFromRows,
   transform2d,
@@ -258,5 +259,42 @@ describe('the mirror', () => {
     expect(m.apply({ ...update(5, [layers]), removed: [row.id] })).toBe('applied');
     expect(m.byPath(layerPath('v1'))).toBeUndefined();
     expect(m.scene()?.nodes.map((n) => n.id)).toEqual(['p1', 't1']);
+  });
+});
+
+describe('reorderMoves', () => {
+  /** Applies the calls the way the store's reorderNode does. */
+  const applied = (start: string[], moves: { id: string; to: number }[]) => {
+    const v = [...start];
+    for (const m of moves) {
+      v.splice(v.indexOf(m.id), 1);
+      v.splice(m.to, 0, m.id);
+    }
+    return v;
+  };
+
+  it('is one call for one move, up or down, to either end or the middle', () => {
+    const start = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of start) {
+      for (let to = 0; to < start.length; to++) {
+        const target = applied(start, [{ id, to }]);
+        const moves = reorderMoves(start, target);
+        expect(applied(start, moves), `${id} to ${to}`).toEqual(target);
+        expect(moves.length, `${id} to ${to}`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('gets any other order right, too', () => {
+    const start = ['a', 'b', 'c', 'd', 'e'];
+    const target = ['c', 'a', 'e', 'b', 'd'];
+    expect(applied(start, reorderMoves(start, target))).toEqual(target);
+  });
+
+  it('does nothing for the same order, or for layers that were added or removed', () => {
+    expect(reorderMoves(['a', 'b'], ['a', 'b'])).toEqual([]);
+    expect(reorderMoves(['a', 'b'], ['a'])).toEqual([]);
+    expect(reorderMoves(['a'], ['a', 'b'])).toEqual([]);
+    expect(reorderMoves(['a', 'b'], ['a', 'c'])).toEqual([]);
   });
 });

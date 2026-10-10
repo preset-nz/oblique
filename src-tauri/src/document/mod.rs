@@ -27,6 +27,10 @@ pub use host::DocumentHost;
 
 pub const EXTENSION: &str = "oblique";
 
+/// How far a duplicate sits from its original in x and y, in document pixels
+/// (src/scene/store.ts `DUPLICATE_OFFSET_PX`).
+pub const DUPLICATE_OFFSET_PX: f64 = 16.0;
+
 const BLEND: &[&str] = &[
     "normal",
     "multiply",
@@ -403,6 +407,66 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // Deletes a layer and its modifiers. rhizome drops every binding the layer was the
+        // source of (`State::forget`), so no modifier keeps a dangling mask: the rule the
+        // store's `pruneMaskState` applies, written once. A locked layer may go, as today.
+        c.add(
+            "layer.remove",
+            |_| "Delete Layer".into(),
+            |_, p| p.get("at").is_some_and(Json::is_string),
+            |d, p| {
+                let a: AtArgs = payload(p)?;
+                let (_, commit) = d.edit("Delete Layer", |tx| {
+                    let at = layer_at(tx, &a.at)?;
+                    tx.remove(at)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Moves a layer to index `to` of the stack (index 0 = top) with the store's
+        // `reorderNode` semantics: splice out, splice in. An index out of range is clamped to
+        // the nearest end, so a stale or careless caller still moves the layer to the edge.
+        // Compositing only, so a locked layer may move (lock-state-machine.md).
+        c.add(
+            "layer.reorder",
+            |_| "Move Layer".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string) && p.get("to").is_some_and(Json::is_i64)
+            },
+            |d, p| {
+                let a: ReorderArgs = payload(p)?;
+                let (_, commit) = d.edit("Move Layer", |tx| {
+                    let at = layer_at(tx, &a.at)?;
+                    let mut stack = stack_of(tx);
+                    let from = stack
+                        .iter()
+                        .position(|id| *id == at)
+                        .ok_or_else(|| structural(format!("{} isn't in the stack", a.at)))?;
+                    stack.remove(from);
+                    let to = a.to.clamp(0, stack.len() as i64) as usize;
+                    stack.insert(to, at);
+                    tx.set_order("/layers", "stack", stack)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // The copy of a layer, with the ids TypeScript picked (it selects the copy at once, so
+        // this follows the store's own `duplicateNode`): `copyNode`'s rules, written once.
+        c.add(
+            "layer.duplicate",
+            |_| "Duplicate Layer".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("id").is_some_and(Json::is_string)
+                    && p.get("modifierIds").is_some_and(Json::is_array)
+                    && p.get("maskIds").is_some_and(Json::is_array)
+            },
+            |d, p| {
+                let a: DuplicateArgs = payload(p)?;
+                let (_, commit) = d.edit("Duplicate Layer", |tx| duplicate_layer(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
         // POM's other built-ins that write the tree would bypass the rules above, so they
         // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
         // commands, copy and export stay as POM has them.
@@ -461,6 +525,28 @@ struct SourceArgs {
 }
 
 #[derive(Deserialize)]
+struct AtArgs {
+    at: String,
+}
+
+#[derive(Deserialize)]
+struct ReorderArgs {
+    at: String,
+    to: i64,
+}
+
+/// `modifier_ids[i]` and `mask_ids[i]` belong to the original's i-th modifier; a modifier
+/// with no mask has `null` for its mask id.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DuplicateArgs {
+    at: String,
+    id: String,
+    modifier_ids: Vec<String>,
+    mask_ids: Vec<Option<String>>,
+}
+
+#[derive(Deserialize)]
 struct SizeArgs {
     size: Json,
 }
@@ -495,6 +581,20 @@ fn refuse_locked(tx: &Edit<'_>, at: NodeId) -> rhizome_core::Result<()> {
         return Err(structural(format!("{} is locked", n.path())));
     }
     Ok(())
+}
+
+/// The layer at `at`: a pixel, vector or text node directly under `/layers`. The layer
+/// commands refuse anything else, so none of them reaches a modifier (story 4's) or the document.
+fn layer_at(tx: &Edit<'_>, at: &str) -> rhizome_core::Result<NodeId> {
+    let id = live(tx, at)?;
+    let n = tx.at(id).expect("live");
+    let under_layers = n
+        .parent()
+        .is_some_and(|p| p.path().to_string() == "/layers");
+    if !under_layers || !["pixel", "vector", "text"].contains(&n.type_name()) {
+        return Err(structural(format!("{at} isn't a layer")));
+    }
+    Ok(id)
 }
 
 /// A `Transform2D` (src/scene/types.ts): `(x, y)` is the translation of the node's source box,
@@ -681,6 +781,149 @@ fn set_source(tx: &mut Edit<'_>, a: &SourceArgs) -> rhizome_core::Result<()> {
         tx.bind(r.modifier, On::slot("mask"), r.source, values)?;
     }
     Ok(())
+}
+
+/// What a layer's copy takes from the original besides its own identity.
+const NOT_COPIED: [&str; 5] = [
+    "label",
+    "state",
+    "transform2d.position",
+    "transform2d.scale",
+    "transform2d.rotation",
+];
+
+/// A modifier of the original, read out before the copy is written.
+struct ModifierCopy {
+    type_name: String,
+    id: String,
+    values: Vec<(String, Value)>,
+    /// The mask binding: its source, and its values with the new `refId` already in.
+    mask: Option<(NodeId, Vec<(&'static str, Value)>)>,
+}
+
+/// `layer.duplicate`: `copyNode` (src/scene/store.ts) in the tree. Label `"<label> copy"`,
+/// active and never locked, the transform offset by `DUPLICATE_OFFSET_PX` (an unmoved original
+/// reads as the identity), modifiers copied under fresh ids, each mask binding copied onto the
+/// copy's modifier with the same source and values under a fresh `refId`, and the copy
+/// inserted directly above the original.
+fn duplicate_layer(tx: &mut Edit<'_>, a: &DuplicateArgs) -> rhizome_core::Result<()> {
+    let src = layer_at(tx, &a.at)?;
+    let stack = stack_of(tx);
+    let index = stack
+        .iter()
+        .position(|id| *id == src)
+        .ok_or_else(|| structural(format!("{} isn't in the stack", a.at)))?;
+
+    // Everything is read first and written after: `tx.at` borrows the tree.
+    let n = tx.at(src).expect("live");
+    let modifiers = n.order("modifiers");
+    if a.modifier_ids.len() != modifiers.len() || a.mask_ids.len() != modifiers.len() {
+        return Err(structural(format!(
+            "{} has {} modifiers, but {} ids and {} mask ids came",
+            a.at,
+            modifiers.len(),
+            a.modifier_ids.len(),
+            a.mask_ids.len()
+        )));
+    }
+    let kind = n.type_name().to_string();
+    let values: Vec<(String, Value)> = n
+        .stored_values()
+        .filter(|(k, _)| !NOT_COPIED.contains(k))
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    let refs: Vec<(String, Ref)> = n
+        .node_type()
+        .map(|t| t.refs().to_vec())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|k| Some((k.clone(), n.reference(&k)?.clone())))
+        .collect();
+    let label = match n.value("label") {
+        Some(Value::Text(s)) => s,
+        _ => String::new(),
+    };
+    let pair = |key: &str, default: [f64; 2]| match n.value(key) {
+        Some(Value::Vec2(v)) => v,
+        _ => default,
+    };
+    let [x, y] = pair("transform2d.position", [0.0, 0.0]);
+    let scale = pair("transform2d.scale", [1.0, 1.0]);
+    let rotation = match n.value("transform2d.rotation") {
+        Some(Value::Float(r)) => r,
+        _ => 0.0,
+    };
+    let mut copies = vec![];
+    for (i, m) in modifiers.iter().enumerate() {
+        let mask = match m.bindings().into_iter().find(|b| *b.on == On::slot("mask")) {
+            None => None,
+            Some(b) => {
+                let ref_id = a.mask_ids[i].clone().ok_or_else(|| {
+                    structural(format!(
+                        "{}: a masked modifier came with no mask id",
+                        m.path()
+                    ))
+                })?;
+                let values = MASK_KEYS
+                    .iter()
+                    .filter_map(|k| {
+                        let v = if *k == "refId" {
+                            Value::Text(ref_id.clone())
+                        } else {
+                            b.value(k)?
+                        };
+                        Some((*k, v))
+                    })
+                    .collect();
+                Some((b.source.id(), values))
+            }
+        };
+        copies.push(ModifierCopy {
+            type_name: m.type_name().to_string(),
+            id: a.modifier_ids[i].clone(),
+            values: m
+                .stored_values()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            mask,
+        });
+    }
+
+    let copy = tx.add("/layers", &kind, &a.id)?;
+    for (k, v) in values {
+        tx.set_value(copy, &k, v)?;
+    }
+    for (k, r) in refs {
+        tx.set_ref(copy, k.as_str(), r)?;
+    }
+    tx.set_value(copy, "label", Value::Text(format!("{label} copy")))?;
+    tx.set_value(copy, "state", Value::Choice("active".into()))?;
+    let offset = DUPLICATE_OFFSET_PX;
+    tx.set_value(
+        copy,
+        "transform2d.position",
+        Value::Vec2([x + offset, y + offset]),
+    )?;
+    tx.set_value(copy, "transform2d.scale", Value::Vec2(scale))?;
+    tx.set_value(copy, "transform2d.rotation", Value::Float(rotation))?;
+
+    let mut order = vec![];
+    for m in copies {
+        let node = tx.add(copy, &m.type_name, &m.id)?;
+        order.push(node);
+        for (k, v) in m.values {
+            tx.set_value(node, &k, v)?;
+        }
+        if let Some((source, values)) = m.mask {
+            tx.bind(node, On::slot("mask"), source, values)?;
+        }
+    }
+    if !order.is_empty() {
+        tx.set_order(copy, "modifiers", order)?;
+    }
+    let mut stack = stack;
+    stack.insert(index, copy);
+    tx.set_order("/layers", "stack", stack)
 }
 
 fn stack_of(tx: &Edit<'_>) -> Vec<NodeId> {

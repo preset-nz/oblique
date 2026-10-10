@@ -6,6 +6,7 @@ import { importFiles, tauriImportDeps } from '@/project/import';
 import { currentTransform } from '@/rhizome/rhizome';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
+import { deleteNode } from '@/scene/deleteNode';
 import { useEyedropperStore } from '@/scene/eyedropperState';
 import {
   fillRuleForMarquee,
@@ -447,7 +448,7 @@ export function Viewport() {
               activeAnchor.anchorIndex,
             );
             if (result === null) {
-              useSceneStore.getState().removeNode(node.id);
+              deleteNode(node.id); // the layer and what the app holds for it
               clearSelection();
             } else {
               useSceneStore.getState().setVectorPaths(node.id, result);

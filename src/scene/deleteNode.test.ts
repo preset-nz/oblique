@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as cache from './cache';
 import { deleteNode } from './deleteNode';
 import * as prefixStore from './prefixStore';
@@ -97,5 +97,39 @@ describe('deleteNode', () => {
 
     const [b] = useSceneStore.getState().scene.nodes;
     expect(b.dirty).toEqual({ draft: false, working: false });
+  });
+
+  describe('when the store drops the layer later (a command that has to come back first)', () => {
+    const { removeNode } = useSceneStore.getState();
+    afterEach(() => useSceneStore.setState({ removeNode }));
+
+    it('evicts only once the layer is gone from the scene', () => {
+      useSceneStore.setState({ removeNode: vi.fn() }); // sent, not yet answered
+      const bitmap = fakeBitmap();
+      cache.set('a', 'draft', bitmap);
+      sources.set('a', bitmap);
+
+      deleteNode('a');
+      expect(cache.get('a', 'draft')).toBe(bitmap);
+      expect(sources.get('a')).toBe(bitmap);
+      expect(bitmap.close).not.toHaveBeenCalled();
+
+      // the update lands: the layer goes
+      removeNode('a');
+      expect(cache.get('a', 'draft')).toBeUndefined();
+      expect(sources.get('a')).toBeUndefined();
+      expect(bitmap.close).toHaveBeenCalled();
+    });
+
+    it('a refused remove (the layer stays) evicts nothing', () => {
+      useSceneStore.setState({ removeNode: vi.fn() });
+      const bitmap = fakeBitmap();
+      cache.set('a', 'draft', bitmap);
+      deleteNode('a');
+      useSceneStore.setState({ bakingNodeIds: new Set(['b']) }); // other store changes
+      expect(cache.get('a', 'draft')).toBe(bitmap);
+      expect(bitmap.close).not.toHaveBeenCalled();
+      removeNode('a'); // leave nothing waiting for later tests
+    });
   });
 });

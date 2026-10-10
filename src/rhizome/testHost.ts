@@ -1,6 +1,7 @@
 /**
- * A fake document host for the tests: the commands moved so far (`layer.add`, `values.set`,
- * `text.set`, `document.set_size`, `layer.set_source`, undo and redo, gestures), applied to rows built with the
+ * A fake document host for the tests: the commands moved so far (`layer.add`, `layer.remove`,
+ * `layer.reorder`, `layer.duplicate`, `values.set`, `text.set`, `document.set_size`,
+ * `layer.set_source`, undo and redo, gestures), applied to rows built with the
  * adapter's `rowsFromScene`, and emitted as updates before the command answers, as Tauri
  * does. A stand-in for src-tauri/src/document, whose own tests hold the real rules.
  *
@@ -8,7 +9,7 @@
  * `openFile`, `newFile` and `saveFile` play what the document host does for them, in its order
  * (status events, then `document-opened` or `document-saved`).
  */
-import { textLabel } from '@/scene/store';
+import { DUPLICATE_OFFSET_PX, textLabel } from '@/scene/store';
 import type { Scene, SceneNode } from '@/scene/types';
 import { layerPath, layerRows, rowsFromScene, val } from './adapter';
 import type {
@@ -308,6 +309,28 @@ export class FakeHost implements RhizomeBackend {
             this.decided?.(row, this.rows, size);
           }
         });
+      case 'layer.remove':
+        return this.commit('Delete Layer', () => this.removeLayer(p.at as string));
+      case 'layer.reorder': {
+        const stack = this.layerStack(p.at as string);
+        const to = Math.min(Math.max(p.to as number, 0), stack.length - 1);
+        const row = this.at(p.at as string);
+        if (stack.indexOf(row.id) === to) return 'nothing';
+        return this.commit('Move Layer', () => {
+          stack.splice(stack.indexOf(row.id), 1);
+          stack.splice(to, 0, row.id);
+          this.at('/layers').orders = { stack };
+        });
+      }
+      case 'layer.duplicate':
+        return this.commit('Duplicate Layer', () =>
+          this.duplicateLayer(
+            p.at as string,
+            p.id as string,
+            p.modifierIds as string[],
+            p.maskIds as (string | null)[],
+          ),
+        );
       case 'document.set_size':
         return this.commit('Document Size', () => {
           this.setValue(this.at('/document/document'), 'documentSize', p.size);
@@ -352,6 +375,85 @@ export class FakeHost implements RhizomeBackend {
     layers.orders = { stack: [rows[0].id, ...(layers.orders?.stack ?? [])] };
   }
 
+  /** The row at `path`, which must be a layer; and the stack it sits in (a copy). */
+  private layerStack(path: string): string[] {
+    const row = this.at(path);
+    if (row.parent !== 'row:layers') throw new Error(`${path} isn't a layer`);
+    return [...(this.at('/layers').orders?.stack ?? [])];
+  }
+
+  /** `layer.remove`: the layer, its modifiers, and every binding sourced from it. */
+  private removeLayer(path: string): void {
+    const layer = this.at(path);
+    this.layerStack(path);
+    const gone = new Set([layer.id]);
+    for (const r of this.rows.values()) if (r.parent === layer.id) gone.add(r.id);
+    for (const id of gone) this.rows.delete(id);
+    for (const r of this.rows.values()) {
+      if (!r.bindings) continue;
+      const kept = r.bindings.filter((b) => !gone.has(b.source));
+      if (kept.length === r.bindings.length) continue;
+      if (kept.length > 0) r.bindings = kept;
+      else delete r.bindings;
+    }
+    const layers = this.at('/layers');
+    layers.orders = { stack: (layers.orders?.stack ?? []).filter((id) => !gone.has(id)) };
+  }
+
+  /**
+   * `layer.duplicate`, from the original's rows and the ids in the payload (copyNode's rules,
+   * as Rust applies them): "<label> copy", active, offset, fresh modifier and mask ids, directly
+   * above the original.
+   */
+  private duplicateLayer(
+    path: string,
+    id: string,
+    modifierIds: string[],
+    maskIds: (string | null)[],
+  ): void {
+    const src = this.at(path);
+    const stack = this.layerStack(path);
+    const mods = (src.orders?.modifiers ?? []).map((mid) => this.rows.get(mid) as Row);
+    if (modifierIds.length !== mods.length || maskIds.length !== mods.length) {
+      throw new Error('ids and modifiers differ');
+    }
+    if (this.rows.has(`row:layer:${id}`)) throw new Error(`${id} already exists`);
+    const copyId = `row:layer:${id}`;
+    const copy = clone(src);
+    copy.id = copyId;
+    copy.path = layerPath(id);
+    copy.name = id;
+    this.setValue(copy, 'label', `${val(src, 'label')} copy`);
+    this.setValue(copy, 'state', 'active');
+    const position = (val(src, 'transform2d.position') as [number, number] | undefined) ?? [0, 0];
+    const scale = (val(src, 'transform2d.scale') as [number, number] | undefined) ?? [1, 1];
+    const rotation = (val(src, 'transform2d.rotation') as number | undefined) ?? 0;
+    this.setValue(copy, 'transform2d.position', [
+      position[0] + DUPLICATE_OFFSET_PX,
+      position[1] + DUPLICATE_OFFSET_PX,
+    ]);
+    this.setValue(copy, 'transform2d.scale', scale);
+    this.setValue(copy, 'transform2d.rotation', rotation);
+    const copies = mods.map((m, i) => {
+      const mc = clone(m);
+      mc.name = modifierIds[i];
+      mc.id = `row:modifier:${id}:${modifierIds[i]}`;
+      mc.path = `${copy.path}/${modifierIds[i]}`;
+      mc.parent = copyId;
+      if (mc.bindings) {
+        const fresh = maskIds[i];
+        if (!fresh) throw new Error(`${m.path}: a masked modifier came with no mask id`);
+        mc.bindings = mc.bindings.map((b) => ({ ...b, values: { ...b.values, refId: fresh } }));
+      }
+      return mc;
+    });
+    if (copies.length > 0) copy.orders = { modifiers: copies.map((m) => m.id) };
+    this.rows.set(copy.id, copy);
+    for (const m of copies) this.rows.set(m.id, m);
+    stack.splice(stack.indexOf(src.id), 0, copyId);
+    this.at('/layers').orders = { stack };
+  }
+
   /** One commit: the edit, the undo snapshot (one per gesture), and the update. */
   private commit(label: string, edit: () => void): Ran {
     const before = clone(this.rows);
@@ -370,7 +472,7 @@ export class FakeHost implements RhizomeBackend {
       label,
       changes: [],
       rows: clone([...this.rows.values()]),
-      removed: [],
+      removed: [...before.keys()].filter((rid) => !this.rows.has(rid)),
       generation: this.generation,
     };
     for (const f of this.onCommit) f(update);

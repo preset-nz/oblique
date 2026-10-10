@@ -96,8 +96,13 @@ const DEFAULT_FONT_SIZE = 72;
  * triggers at once (the store is cleared first, so a re-entrant trigger — the
  * selection watcher reacting to `clearSelection()` below — finds nothing open).
  *
- * A new node whose content is blank is removed *before* the transaction ends:
- * the transaction then sees no net change, so no undo step is recorded.
+ * A new node whose content is blank goes without an undo step. On rhizome (Epic 21 story 3,
+ * where `removeNode` is a command now) that is deliberate: the layer's creation sits inside
+ * the edit's gesture, so the gesture is cancelled and the creation is taken back with it. A
+ * `layer.remove` here would be a second step beside the add (rhizome has no commit outside
+ * history), and no step at all is what a blank layer that never existed should leave.
+ * Without a backend (the store's own tests) the node is deleted before the transaction ends,
+ * so the transaction sees no net change.
  */
 export function commitActiveTextEdit(): void {
   const { editing, end } = useTextEditStore.getState();
@@ -108,7 +113,8 @@ export function commitActiveTextEdit(): void {
   if (editing.isNew && node && isTextNode(node) && node.content.trim() === '') {
     const rhizomeHoldsIt = hasTransactionBackend();
     // Rhizome holds the document: take the whole gesture (the layer's creation) back below,
-    // so the blank layer goes without a removeNode and leaves no undo step.
+    // so the blank layer goes without a layer.remove and leaves no undo step; the rebuild that
+    // follows the cancel evicts the layer's cook cache and decoded source (`restoreScene`).
     // Otherwise removeNode + cache eviction (a cook may already have run on the blank node).
     if (!rhizomeHoldsIt) deleteNode(editing.nodeId);
     const selection = useSelectionStore.getState().selection;

@@ -23,6 +23,9 @@ export const ON_RHIZOME = [
   'addTextNode',
   'setTextProps',
   'setPixelSource',
+  'removeNode',
+  'reorderNode',
+  'duplicateNode',
 ] as const;
 
 /** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */

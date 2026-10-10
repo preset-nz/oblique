@@ -9,9 +9,15 @@
  * - **Replace Image** (`setPixelSource`) is commands-first too, but a step of its own, not a
  *   drag: `layer.set_source` sends the new path and size, and Rust decides the fit. The update
  *   coming back puts the whole result (path, size, transform, mask refits) in the store at once.
+ * - **Layer edits** (story 3): `removeNode` (`layer.remove`) and `reorderNode`
+ *   (`layer.reorder`) are commands-first, each a step of its own. Their update changes the
+ *   store through the original action (`applyEcho`), so the cache eviction a delete needs runs
+ *   once the layer is really gone (`scene/deleteNode.ts`). `duplicateNode` is local first: the
+ *   caller selects the copy at once, so the original runs, picks the ids, and `layer.duplicate`
+ *   carries them.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
- *   `addVectorNode`, `addTextNode` and `setTextProps` run the original action at once, then
- *   send the command.
+ *   `addVectorNode`, `addTextNode`, `duplicateNode` and `setTextProps` run the original action
+ *   at once, then send the command.
  * - **Reconcile.** When nothing is queued and no gesture is open, the scene rebuilt from the
  *   mirror is compared with the store (cook state aside). A difference means rhizome refused
  *   something or the two rule sets disagree: rhizome wins through `restoreScene`, and the
@@ -65,6 +71,7 @@ import {
   Mirror,
   normal,
   PROP_KEYS,
+  reorderMoves,
   transform2d,
   transformChanges,
   val,
@@ -286,6 +293,9 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     addTextNode: stateNow().addTextNode,
     setTextProps: stateNow().setTextProps,
     setPixelSource: stateNow().setPixelSource,
+    removeNode: stateNow().removeNode,
+    reorderNode: stateNow().reorderNode,
+    duplicateNode: stateNow().duplicateNode,
   };
 
   const withoutDirty = (node: SceneNode) => {
@@ -348,6 +358,28 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     addPixelNode: addLocal(original.addPixelNode),
     addVectorNode: addLocal(original.addVectorNode),
     addTextNode: addLocal(original.addTextNode),
+    removeNode: (id) => {
+      if (!nodeOf(id)) return;
+      sendCommand('layer.remove', { at: layerPath(id) });
+    },
+    reorderNode: (id, to) => {
+      if (!nodeOf(id)) return;
+      // Rust clamps `to`; the store follows when the update comes back
+      sendCommand('layer.reorder', { at: layerPath(id), to });
+    },
+    duplicateNode: (id) => {
+      const newId = original.duplicateNode(id);
+      const copy = newId ? nodeOf(newId) : undefined;
+      if (!newId || !copy) return newId;
+      // the ids the original picked go to Rust: a mask id per modifier, null where unmasked
+      sendLocal(newId, 'layer.duplicate', {
+        at: layerPath(id),
+        id: newId,
+        modifierIds: copy.modifiers.map((m) => m.id),
+        maskIds: copy.modifiers.map((m) => m.maskId ?? null),
+      });
+      return newId;
+    },
     setTextProps: (id, patch) => {
       const before = scene();
       original.setTextProps(id, patch);
@@ -384,10 +416,12 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   /**
    * An update's effect on the store, for the commands-first edits: each touched layer's
    * transform and props, and the document size, through the original actions, and a pixel
-   * layer's new source with what Rust decided to go with it. Everything else (a layer added,
-   * text, paths, order) is left to the reconcile.
+   * layer's new source with what Rust decided to go with it. A layer deleted (`gone`, the names
+   * of the layer rows the update removed) and a new stack order go through the original
+   * `removeNode` and `reorderNode`. Everything else (a layer added, text, paths) is left to the
+   * reconcile.
    */
-  function applyEcho(u: Update): void {
+  function applyEcho(u: Update, gone: string[]): void {
     if (restoringNow) return;
     // POM labels what undo, redo and a cancelled gesture commit "Undo <step>", "Redo <step>"
     // and "Cancel <gesture>" (rhizome-core `Tree::undo`, `redo`, `cancel`). The rebuild that follows them goes through `restoreScene`, which
@@ -396,6 +430,16 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     const stepped = /^(Undo|Redo|Cancel)\b/.test(u.label);
     const layers = mirror.byPath(LAYERS_PATH);
     if (!layers) return;
+    // Not for undo, redo and cancel: the rebuild that follows them goes through `restoreScene`,
+    // which needs the layer still in the store to evict what it held.
+    if (!stepped) {
+      for (const id of gone) if (nodeOf(id)) original.removeNode(id);
+      const target = (layers.orders?.stack ?? []).flatMap(
+        (rid) => mirror.rows.get(rid)?.name ?? [],
+      );
+      const current = scene().nodes.map((n) => n.id);
+      for (const m of reorderMoves(current, target)) original.reorderNode(m.id, m.to);
+    }
     for (const r of u.rows) {
       if (r.path === DOCUMENT_PATH) {
         const size = val(r, 'documentSize') as [number, number] | undefined;
@@ -428,13 +472,19 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
 
   function takeUpdate(u: Update): void {
     if (!live) return;
+    // the layers this update deletes, named before the mirror forgets their rows
+    const layersRow = mirror.byPath(LAYERS_PATH);
+    const gone = u.removed.flatMap((rid) => {
+      const row = mirror.rows.get(rid);
+      return row && layersRow && row.parent === layersRow.id ? row.name : [];
+    });
     const result = mirror.apply(u);
     if (result === 'gap') {
       void reload().catch(fail);
       return;
     }
     if (result === 'stale') return;
-    applyEcho(u);
+    applyEcho(u, gone);
     scheduleReconcile();
   }
 

@@ -289,6 +289,42 @@ export function rowsFromScene(scene: Scene): Map<string, Row> {
   return rows;
 }
 
+// ---------------------------------------------------------------- stack order
+
+/**
+ * The `reorderNode(id, to)` calls (splice out, splice in) that turn the layer order `current`
+ * into `target`, for the same layers in another order. A move (what `layer.reorder` does) is
+ * one call; anything else falls back to placing each layer in turn. Empty when the two lists
+ * don't hold the same layers: an add or a remove is not a reorder.
+ */
+export function reorderMoves(current: string[], target: string[]): { id: string; to: number }[] {
+  if (current.length !== target.length || !target.every((id) => current.includes(id))) return [];
+  const cur = [...current];
+  const moves: { id: string; to: number }[] = [];
+  const move = (list: string[], id: string, to: number) => {
+    list.splice(list.indexOf(id), 1);
+    list.splice(to, 0, id);
+  };
+  const differs = (k: number) => cur[k] !== target[k];
+  const first = cur.findIndex((_, k) => differs(k));
+  if (first === -1) return [];
+  const last = cur.length - 1 - [...cur].reverse().findIndex((_, k) => differs(cur.length - 1 - k));
+  for (const [id, to] of [
+    [cur[first], last],
+    [cur[last], first],
+  ] as const) {
+    const trial = [...cur];
+    move(trial, id, to);
+    if (trial.every((x, k) => x === target[k])) return [{ id, to }];
+  }
+  for (let k = 0; k < target.length; k++) {
+    if (cur[k] === target[k]) continue;
+    move(cur, target[k], k);
+    moves.push({ id: target[k], to: k });
+  }
+  return moves;
+}
+
 // ---------------------------------------------------------------- the mirror
 
 /** The document as rows, by id (rhizome decision 48): a view, then updates. */

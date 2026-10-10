@@ -1,11 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { importFile } from '@/project/import';
+import * as cache from '@/scene/cache';
+import { deleteNode } from '@/scene/deleteNode';
 import * as sources from '@/scene/sources';
-import { useSceneStore } from '@/scene/store';
+import { DUPLICATE_OFFSET_PX, useSceneStore } from '@/scene/store';
 import { beginNewTextAt, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
 import * as transaction from '@/scene/transaction';
-import type { PixelNode, Scene, SceneNode, TextNode, VectorNode } from '@/scene/types';
+import type {
+  PixelNode,
+  Scene,
+  SceneNode,
+  TextNode,
+  VectorMaskRef,
+  VectorNode,
+} from '@/scene/types';
 import { createRhizome, type DocumentEvents, type Rhizome } from './rhizome';
 import { FakeHost } from './testHost';
 
@@ -52,6 +61,9 @@ const T = (x: number) => ({ x, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
 const settle = async () => {
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
 };
+
+/** The store's own actions, before rhizome wraps them: what a layer edit must come to. */
+const originals = { ...useSceneStore.getState() };
 
 let host: FakeHost;
 let rhizome: Rhizome;
@@ -835,17 +847,382 @@ describe('a document replaced from Rust (app-kit: open, Revert, restore, Finder,
   });
 });
 
+// ---------------------------------------------------------------- layer edits (story 3)
+
+const vectorLayer = (id: string, over: Partial<VectorNode> = {}): VectorNode => ({
+  id,
+  label: 'Layer',
+  type: 'vector',
+  state: 'active',
+  output: 'image',
+  cameraId: null,
+  modifiers: [],
+  visible: true,
+  blendMode: 'normal',
+  opacity: 1,
+  dirty: clean,
+  paths: [],
+  fillRule: 'nonzero',
+  ...over,
+});
+
+const textLayer = (id: string): TextNode => ({
+  id,
+  label: 'Hi',
+  type: 'text',
+  state: 'active',
+  output: 'image',
+  cameraId: null,
+  modifiers: [],
+  visible: true,
+  blendMode: 'normal',
+  opacity: 1,
+  dirty: clean,
+  content: 'Hi',
+  font,
+  fontSize: 72,
+  tracking: 0,
+  kerning: 100,
+  lineHeight: 1.2,
+  align: 'left',
+  fill: '#ffffff',
+  stroke: null,
+  position: { x: 1, y: 2 },
+});
+
+const ref = (over: Partial<VectorMaskRef> = {}): VectorMaskRef => ({
+  id: 'r1',
+  nodeId: 'v',
+  featherPx: 3,
+  expand: 1,
+  invert: true,
+  space: 'node',
+  attachTransform: { x: 5, y: 6, scaleX: 2, scaleY: 1.5, rotation: 0.4 },
+  ...over,
+});
+
+/** Layer `m` has a blurred, masked modifier (mask `r1` from the vector layer `v`) and a plain one. */
+function maskedScene(): { nodes: SceneNode[]; extra: Partial<Scene> } {
+  const v = vectorLayer('v', { label: 'Shape' });
+  const m = pixel('m', {
+    label: 'Photo',
+    transform2d: { x: 100, y: 40, scaleX: -1, scaleY: 1, rotation: 0.3 },
+    modifiers: [
+      { id: 'mod1', type: 'blur', enabled: true, params: { radius: 12 }, maskId: 'r1' },
+      { id: 'mod2', type: 'sharpen', enabled: false, params: {} },
+    ],
+  });
+  return { nodes: [v, m, pixel('z')], extra: { maskRefs: { r1: ref() } } };
+}
+
+/** What the store's original action makes of `scene`, for `run` to be compared with. */
+function plainResult(nodes: SceneNode[], extra: Partial<Scene>, run: () => void): Scene {
+  useSceneStore.setState({ scene: { ...emptyScene(nodes), ...extra } });
+  run();
+  return useSceneStore.getState().scene;
+}
+
+describe('layer edits: remove (layer.remove)', () => {
+  it('sends the command and changes the store only when the update comes back', async () => {
+    await setup([pixel('a'), pixel('b')]);
+    state().removeNode('a');
+    expect(node('a')).toBeDefined(); // nothing local yet
+    await settle();
+    expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+      { id: 'layer.remove', payload: { at: '/layers/a' } },
+    ]);
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['b']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('prunes the masks the layer was the source of, with no reconcile difference', async () => {
+    const { nodes, extra } = maskedScene();
+    await setup(nodes, true, extra);
+    state().removeNode('v');
+    await settle();
+    expect(node('v')).toBeUndefined();
+    expect(node('m')?.modifiers.map((m) => m.maskId)).toEqual([undefined, undefined]);
+    expect(state().scene.maskRefs).toEqual({});
+    // the store's own action comes to the same
+    const want = plainResult(nodes, extra, () => originals.removeNode('v'));
+    expect(state().scene.nodes.map((n) => n.modifiers)).toEqual(want.nodes.map((n) => n.modifiers));
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('undo brings the layer and its masks back, redo takes them away again', async () => {
+    const { nodes, extra } = maskedScene();
+    await setup(nodes, true, extra);
+    state().removeNode('v');
+    await settle();
+    await undo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['v', 'm', 'z']);
+    expect(node('m')?.modifiers[0].maskId).toBe('r1');
+    expect(state().scene.maskRefs).toEqual({ r1: ref() });
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    await redo();
+    expect(node('v')).toBeUndefined();
+    expect(node('m')?.modifiers[0].maskId).toBeUndefined();
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('removes a locked layer, as the store always did', async () => {
+    await setup([pixel('a', { state: 'locked' }), pixel('b')]);
+    state().removeNode('a');
+    await settle();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['b']);
+  });
+
+  it('sends nothing for a layer the store does not have', async () => {
+    await setup([pixel('a')]);
+    state().removeNode('nope');
+    await settle();
+    expect(host.runs).toHaveLength(0);
+  });
+
+  it('a refusal from the host toasts and leaves the layer, and deleteNode evicts nothing', async () => {
+    await setup([pixel('a'), pixel('b')]);
+    const bitmap = { width: 1, height: 1, close: vi.fn() } as unknown as ImageBitmap;
+    cache.set('a', 'draft', bitmap);
+    host.reject.add('layer.remove');
+    deleteNode('a');
+    await settle();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    expect(node('a')).toBeDefined();
+    expect(cache.get('a', 'draft')).toBe(bitmap);
+    expect(bitmap.close).not.toHaveBeenCalled();
+    cache.clearAll();
+  });
+
+  it('deleteNode evicts when the update shows the layer gone, not when the command is sent', async () => {
+    await setup([pixel('a'), pixel('b')]);
+    const bitmap = { width: 1, height: 1, close: vi.fn() } as unknown as ImageBitmap;
+    cache.set('a', 'draft', bitmap);
+    sources.set('a', bitmap);
+    let release: () => void = () => undefined;
+    host.hold = new Promise<void>((r) => {
+      release = r;
+    });
+    deleteNode('a');
+    await settle();
+    expect(host.runs).toHaveLength(1); // sent, not yet answered
+    expect(node('a')).toBeDefined();
+    expect(cache.get('a', 'draft')).toBe(bitmap);
+    host.hold = null;
+    release();
+    await settle();
+    expect(node('a')).toBeUndefined();
+    expect(cache.get('a', 'draft')).toBeUndefined();
+    expect(sources.get('a')).toBeUndefined();
+    expect(bitmap.close).toHaveBeenCalled();
+  });
+});
+
+describe('layer edits: reorder (layer.reorder)', () => {
+  const ids = () => state().scene.nodes.map((n) => n.id);
+  const four = () => ['a', 'b', 'c', 'd'].map((id) => pixel(id));
+
+  it.each([
+    ['a', 3],
+    ['d', 0],
+    ['b', 2],
+    ['c', 0],
+    ['a', 1],
+    ['d', 2],
+    ['b', 3],
+  ])(
+    "moving %s to %i comes to what the store's reorderNode does, with no reconcile difference",
+    async (id, to) => {
+      const want = plainResult(four(), {}, () => originals.reorderNode(id, to)).nodes.map(
+        (n) => n.id,
+      );
+      await setup(four());
+      state().reorderNode(id, to);
+      expect(ids()).toEqual(['a', 'b', 'c', 'd']); // nothing local yet
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'layer.reorder', payload: { at: `/layers/${id}`, to } },
+      ]);
+      expect(ids()).toEqual(want);
+      // compositing only: nothing is dirtied (dirty rule 4)
+      for (const n of state().scene.nodes) expect(n.dirty).toEqual(clean);
+      await expect(rhizome.reconcile()).resolves.toBe('same');
+      expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+    },
+  );
+
+  it('is one undo step: undo puts the order back, redo moves it again', async () => {
+    await setup(four());
+    state().reorderNode('d', 0);
+    await settle();
+    expect(ids()).toEqual(['d', 'a', 'b', 'c']);
+    await undo();
+    expect(ids()).toEqual(['a', 'b', 'c', 'd']);
+    await redo();
+    expect(ids()).toEqual(['d', 'a', 'b', 'c']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('clamps an index past the end to the end, and moving to where it is changes nothing', async () => {
+    await setup(four());
+    state().reorderNode('a', 99);
+    await settle();
+    expect(ids()).toEqual(['b', 'c', 'd', 'a']);
+    state().reorderNode('a', 3); // already there
+    await settle();
+    expect(ids()).toEqual(['b', 'c', 'd', 'a']);
+    await undo(); // the one step undone is the first move; the second was never a step
+    expect(ids()).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('moves a locked layer: it is compositing only', async () => {
+    await setup([pixel('a', { state: 'locked' }), pixel('b')]);
+    state().reorderNode('a', 1);
+    await settle();
+    expect(ids()).toEqual(['b', 'a']);
+  });
+
+  it('sends nothing for a layer the store does not have', async () => {
+    await setup(four());
+    state().reorderNode('nope', 0);
+    await settle();
+    expect(host.runs).toHaveLength(0);
+  });
+});
+
+describe('layer edits: duplicate (layer.duplicate)', () => {
+  it('runs the original at once and sends the ids it picked', async () => {
+    const { nodes, extra } = maskedScene();
+    await setup(nodes, true, extra);
+    const id = state().duplicateNode('m') as string;
+    const copy = node(id);
+    expect(copy).toBeDefined(); // local first: there at once
+    expect(copy?.label).toBe('Photo copy');
+    await settle();
+    expect(host.runs).toHaveLength(1);
+    expect(host.runs[0].id).toBe('layer.duplicate');
+    expect(host.runs[0].payload).toEqual({
+      at: '/layers/m',
+      id,
+      modifierIds: copy?.modifiers.map((m) => m.id),
+      maskIds: [copy?.modifiers[0].maskId, null],
+    });
+    expect(copy?.modifiers[0].maskId).toBeTruthy();
+    expect(copy?.modifiers[0].maskId).not.toBe('r1');
+  });
+
+  it("comes to what the store's duplicate comes to: no reconcile difference, masks included", async () => {
+    const { nodes, extra } = maskedScene();
+    await setup(nodes, true, extra);
+    const id = state().duplicateNode('m') as string;
+    await settle();
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+    // directly above the original, offset, active, a fresh ref carrying the original's values
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['v', id, 'm', 'z']);
+    expect(node(id)?.transform2d).toEqual({
+      x: 100 + DUPLICATE_OFFSET_PX,
+      y: 40 + DUPLICATE_OFFSET_PX,
+      scaleX: -1,
+      scaleY: 1,
+      rotation: 0.3,
+    });
+    const newRef = state().scene.maskRefs?.[node(id)?.modifiers[0].maskId as string];
+    expect(newRef).toEqual({ ...ref(), id: node(id)?.modifiers[0].maskId });
+    expect(state().scene.maskRefs?.r1).toEqual(ref());
+  });
+
+  it('undo takes the copy and its mask away, redo brings them back', async () => {
+    const { nodes, extra } = maskedScene();
+    await setup(nodes, true, extra);
+    const id = state().duplicateNode('m') as string;
+    await settle();
+    await undo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['v', 'm', 'z']);
+    expect(Object.keys(state().scene.maskRefs ?? {})).toEqual(['r1']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    await redo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['v', id, 'm', 'z']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('a locked layer is copied active, and a layer never moved is copied at the offset', async () => {
+    await setup([pixel('a', { state: 'locked' })]);
+    const id = state().duplicateNode('a') as string;
+    await settle();
+    expect(node(id)?.state).toBe('active');
+    expect(node('a')?.state).toBe('locked');
+    expect(node(id)?.transform2d).toEqual({
+      x: DUPLICATE_OFFSET_PX,
+      y: DUPLICATE_OFFSET_PX,
+      scaleX: 1,
+      scaleY: 1,
+      rotation: 0,
+    });
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('vector and text layers too', async () => {
+    const text = textLayer('t');
+    const shape = vectorLayer('s');
+    await setup([text, shape]);
+    state().duplicateNode('t');
+    state().duplicateNode('s');
+    await settle();
+    expect(state().scene.nodes).toHaveLength(4);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.runs.map((r) => r.id)).toEqual(['layer.duplicate', 'layer.duplicate']);
+  });
+
+  it('sends nothing for a layer the store does not have, and returns null', async () => {
+    await setup([pixel('a')]);
+    expect(state().duplicateNode('nope')).toBeNull();
+    await settle();
+    expect(host.runs).toHaveLength(0);
+  });
+
+  it('a refusal from the host toasts, and the reconcile takes the copy back', async () => {
+    await setup([pixel('a')]);
+    host.reject.add('layer.duplicate');
+    state().duplicateNode('a');
+    await settle();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    await expect(rhizome.reconcile()).resolves.toBe('restored');
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['a']);
+  });
+});
+
+describe('layer edits in a row', () => {
+  it('duplicate, move the copy up and delete the original, each one undo step', async () => {
+    await setup([pixel('a'), pixel('b')]);
+    const id = state().duplicateNode('b') as string;
+    state().reorderNode(id, 0);
+    state().removeNode('b');
+    await settle();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual([id, 'a']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    await undo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual([id, 'a', 'b']);
+    await undo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['a', id, 'b']);
+    await undo();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+});
+
 describe('refusing what has not moved', () => {
   it('toasts and changes nothing for an action rhizome does not carry', async () => {
     await setup([pixel('a')]);
     const before = state().scene;
-    state().removeNode('a');
+    void state().lockNode('a', async () => ({}) as ImageBitmap);
     state().addModifier('a', 'blur', {});
     await settle();
     expect(state().scene).toBe(before);
     expect(host.runs).toHaveLength(0);
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'warning', message: "Remove node isn't on rhizome yet" }),
+      expect.objectContaining({ kind: 'warning', message: "Lock node isn't on rhizome yet" }),
     );
   });
 });
