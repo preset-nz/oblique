@@ -6,7 +6,7 @@ import { beginTransaction, endTransaction } from '@/scene/transaction';
  * Composition note (composition-note.md): one plain free-text note per
  * project. One undo step per editing session — the transaction opens on
  * focus and closes on blur, after 1 s of typing idle, and on unmount (the
- * same bounding as the background colour picker in `DocumentSetup.tsx`:
+ * same bounding as the background colour picker in `DocumentFields.tsx`:
  * blur isn't guaranteed, and a transaction left open would swallow unrelated
  * later edits into this step).
  */

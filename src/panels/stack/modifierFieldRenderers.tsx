@@ -240,7 +240,7 @@ function EyedropperButton({
 /**
  * Colour op params render as a native `<input type="color">` swatch plus a
  * read-only hex readout, matching the in-app precedent for the document
- * background colour control (`DocumentSetup.tsx`) rather than the shared
+ * background colour control (`DocumentFields.tsx`) rather than the shared
  * package's plain text-input `ColorRenderer` builtin. Registered for the
  * `color` kind, overriding that builtin the same way the number/slider/select
  * renderers override theirs.

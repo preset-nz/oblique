@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
+import { openDocumentSettingsDialog } from '@/panels/document/DocumentSettingsDialog';
 import { openExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
@@ -105,6 +106,15 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
     // App → Settings… (`app.settings`, app-kit's own item, Epic 17 story 1)
     'app.settings': run(openSettingsDialog),
     'file-import': run(importImagesDialog),
+    // File → Document Settings… (Epic 22 slice d): the fields the inspector shows with nothing
+    // selected. An open text edit commits first, as its neighbours do: the size change is its
+    // own undo step.
+    'file-document-settings': {
+      run: () => {
+        commitActiveTextEdit();
+        openDocumentSettingsDialog();
+      },
+    },
     'file-export-png': run(exportPng),
     // File → Export Proof… (registration-marks-and-colour-bars.md): opens the options dialog;
     // its Export… button runs `exportProof`. Plain Export PNG stays plain.

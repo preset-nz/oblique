@@ -6,7 +6,7 @@ import { ToolbarRail } from '@/canvas/ToolbarRail';
 import { Viewport } from '@/canvas/Viewport';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { DocumentSetup } from '@/panels/document/DocumentSetup';
+import { DocumentSettingsDialog } from '@/panels/document/DocumentSettingsDialog';
 import { ExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { MissingFontsDialog } from '@/panels/fonts/MissingFontsDialog';
 import { ReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
@@ -35,8 +35,6 @@ export function Layout() {
           {/* Title bar */}
           <div className="border-b border-neutral-800 px-4 py-3 flex items-center gap-3">
             <span className="text-sm font-medium">{PRODUCT_NAME}</span>
-            <div className="flex-1" />
-            <DocumentSetup />
           </div>
 
           {/* Main grid */}
@@ -85,6 +83,7 @@ export function Layout() {
           <SnackbarViewport className="bottom-10" />
         </div>
         <SettingsDialog />
+        <DocumentSettingsDialog />
         <ExportProofDialog />
         <MissingFontsDialog />
         <ReplaceFontDialog />

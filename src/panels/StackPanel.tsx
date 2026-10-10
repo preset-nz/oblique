@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 // updates). See bootstrap.ts for the singleton rationale.
 import './stack/bootstrap';
 import { Icons } from '@preset.nz/ux-kit';
+import { DocumentFields } from '@/panels/document/DocumentFields';
 import { ImageInspector } from '@/panels/image/ImageInspector';
 import { AddModifier } from '@/panels/stack/AddModifier';
 import { LayerList } from '@/panels/stack/LayerList';
@@ -17,6 +18,19 @@ import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { isPixelNode, isTextNode } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
+
+/**
+ * The inspector with nothing selected: the document's own fields, the same component File →
+ * Document Settings… opens in a dialog (menu standard decision 11).
+ */
+function DocumentInspector() {
+  return (
+    <div className="flex flex-col gap-3 border-t border-neutral-800 pt-3">
+      <span className="text-xs font-medium text-neutral-200">Document</span>
+      <DocumentFields />
+    </div>
+  );
+}
 
 /**
  * Real modifier stack panel (Epic 04 stack-rows) — replaces the Epic 02
@@ -63,7 +77,12 @@ export function StackPanel() {
   }, [nodes, selection, selectNode]);
 
   if (nodes.length === 0) {
-    return <div className="text-neutral-500 text-sm">No layers yet — import an image.</div>;
+    return (
+      <div className="flex flex-col gap-3 text-sm text-neutral-200">
+        <div className="text-neutral-500">No layers yet — import an image.</div>
+        <DocumentInspector />
+      </div>
+    );
   }
 
   const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
@@ -73,9 +92,7 @@ export function StackPanel() {
     return (
       <div className="flex flex-col gap-3 text-sm text-neutral-200">
         <LayerList selectedNodeId={null} onSelectNode={selectNode} />
-        <div className="border-t border-neutral-800 pt-3 text-xs text-neutral-500">
-          No layer selected.
-        </div>
+        <DocumentInspector />
       </div>
     );
   }

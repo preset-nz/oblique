@@ -13,7 +13,7 @@
 //! against the document host (`AppKit::install`), which also brings the close guard, relaunch
 //! restore and Finder opens. Oblique adds Import… and Export after them: sections 4 and 5, past
 //! app-kit's own (New and Open 0, Close 2, Save, Save As… and Revert 3), as the menu standard
-//! orders File.
+//! orders File. Document Settings… follows in section 6, the Page Setup group.
 //!
 //! **Open vs Import.** Open replaces the whole project (`.oblique` only); Import adds image
 //! nodes to the current one and never touches the project file.
@@ -30,6 +30,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-import", shortcut::IMPORT),
     ("file-export-png", "CmdOrCtrl+Shift+E"),
     ("file-export-proof", "CmdOrCtrl+Alt+Shift+E"),
+    // Affinity's Document Setup chord (menu standard decision 11); Shift+Cmd+P stays Page Setup.
+    ("file-document-settings", "CmdOrCtrl+Alt+P"),
     ("edit-duplicate", "CmdOrCtrl+D"),
     // View > Zoom (view-menu-zoom.md): Cmd+= rather than Cmd+Shift+= so Zoom In needs no Shift.
     ("view-zoom-in", shortcut::ZOOM_IN),
@@ -77,6 +79,8 @@ pub fn commands() -> Vec<Command> {
         file("file-import", "Import…", 4),
         file("file-export-png", "Export PNG…", 5),
         file("file-export-proof", "Export Proof…", 5),
+        // The Page Setup group, after Export (menu standard decision 11).
+        file("file-document-settings", "Document Settings…", 6),
         // After Undo and Redo, before Cut, Copy and Paste.
         item("edit-duplicate", "Duplicate")
             .menu(MenuName::Edit)
@@ -200,6 +204,16 @@ mod tests {
     }
 
     #[test]
+    fn document_settings_is_opt_cmd_p_in_the_page_setup_group_after_export() {
+        let chord = SHORTCUTS.iter().find(|(id, _)| *id == "file-document-settings");
+        assert_eq!(chord.map(|(_, a)| *a), Some("CmdOrCtrl+Alt+P"));
+        // Shift+Cmd+P stays Page Setup, so nothing here takes it.
+        assert!(SHORTCUTS
+            .iter()
+            .all(|(_, a)| canonical(a) != "CmdOrCtrl+Shift+P"));
+    }
+
+    #[test]
     fn every_id_the_webview_binds_is_still_on_the_table() {
         let table = commands();
         let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
@@ -207,6 +221,7 @@ mod tests {
             "file-import",
             "file-export-png",
             "file-export-proof",
+            "file-document-settings",
             "edit-duplicate",
             "view-zoom-in",
             "view-zoom-out",
