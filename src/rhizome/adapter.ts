@@ -32,6 +32,9 @@ export const PARAM_PREFIX = 'params.';
 export const DOCUMENT_PATH = '/document/document';
 export const LAYERS_PATH = '/layers';
 export const layerPath = (id: string): string => `${LAYERS_PATH}/${id}`;
+/** A modifier's path: under its layer, named by its id. */
+export const modifierPath = (layerId: string, modId: string): string =>
+  `${layerPath(layerId)}/${modId}`;
 
 export const val = (r: Row, key: string): unknown => r.values?.[key];
 export const isSet = (r: Row, key: string): boolean => r.set?.includes(key) ?? false;

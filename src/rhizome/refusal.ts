@@ -26,6 +26,15 @@ export const ON_RHIZOME = [
   'removeNode',
   'reorderNode',
   'duplicateNode',
+  'addModifier',
+  'removeModifier',
+  'reorderModifier',
+  'setModifierParam',
+  'setModifierEnabled',
+  'setModifierVectorMask',
+  'removeModifierMask',
+  'setMaskSpace',
+  'applyMarqueeAsVectorMask',
 ] as const;
 
 /** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */

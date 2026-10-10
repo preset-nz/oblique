@@ -15,9 +15,15 @@
  *   once the layer is really gone (`scene/deleteNode.ts`). `duplicateNode` is local first: the
  *   caller selects the copy at once, so the original runs, picks the ids, and `layer.duplicate`
  *   carries them.
+ * - **Modifiers and masks** (story 4): `removeModifier`, `reorderModifier`, `setModifierParam`,
+ *   `setModifierEnabled`, `setModifierVectorMask`, `removeModifierMask` and `setMaskSpace` are
+ *   commands-first (`modifier.*`, `mask.*`); a param or mask-number scrub inside a gesture is
+ *   latest-wins, so one drag is one undo step. Their update changes the store through the
+ *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier` and
+ *   `applyMarqueeAsVectorMask` are local first: the caller uses the id, or the new layer, at once.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
- *   `addVectorNode`, `addTextNode`, `duplicateNode` and `setTextProps` run the original action
- *   at once, then send the command.
+ *   `addVectorNode`, `addTextNode`, `duplicateNode`, `addModifier`, `applyMarqueeAsVectorMask`
+ *   and `setTextProps` run the original action at once, then send the command.
  * - **Reconcile.** When nothing is queued and no gesture is open, the scene rebuilt from the
  *   mirror is compared with the store (cook state aside). A difference means rhizome refused
  *   something or the two rule sets disagree: rhizome wins through `restoreScene`, and the
@@ -56,6 +62,9 @@ import { setTransactionBackend } from '@/scene/transaction';
 import {
   IDENTITY_TRANSFORM_2D,
   isPixelNode,
+  isTextNode,
+  isVectorNode,
+  type Modifier,
   type Scene,
   type SceneNode,
   type Transform2D,
@@ -69,7 +78,9 @@ import {
   layerNode,
   layerPath,
   Mirror,
+  modifierPath,
   normal,
+  PARAM_PREFIX,
   PROP_KEYS,
   reorderMoves,
   transform2d,
@@ -158,17 +169,21 @@ const REPEAT_TOAST_MS = 2000;
  * object model needs, with absent fields left out rather than null.
  */
 function catalogue(ops: unknown[]): unknown[] {
-  return (ops as { name: string; params?: Record<string, unknown>[] }[]).map((op) => ({
-    name: op.name,
-    params: (op.params ?? []).map((p) => ({
-      name: p.name,
-      type: p.type,
-      default: p.default ?? undefined,
-      min: p.min ?? undefined,
-      max: p.max ?? undefined,
-      choices: p.choices ?? undefined,
-    })),
-  }));
+  return (ops as { name: string; label?: string; params?: Record<string, unknown>[] }[]).map(
+    (op) => ({
+      name: op.name,
+      label: op.label ?? undefined,
+      params: (op.params ?? []).map((p) => ({
+        name: p.name,
+        label: p.label ?? undefined,
+        type: p.type,
+        default: p.default ?? undefined,
+        min: p.min ?? undefined,
+        max: p.max ?? undefined,
+        choices: p.choices ?? undefined,
+      })),
+    }),
+  );
 }
 
 const isCommitted = (ran: Ran): ran is { committed: { seq: number; label: string } } =>
@@ -263,17 +278,20 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   /**
-   * A command for an edit already made locally to `layer`. The count drops in the first
+   * A command for an edit already made locally to `layers`. The count drops in the first
    * handler on the command's own promise, ahead of the next queued command starting, so that
    * command's update isn't taken for an echo of this one.
    */
-  function sendLocal(layer: string, id: string, payload: unknown): void {
-    localLayers.set(layer, (localLayers.get(layer) ?? 0) + 1);
+  function sendLocal(layers: string | string[], id: string, payload: unknown): void {
+    const named = typeof layers === 'string' ? [layers] : layers;
+    for (const layer of named) localLayers.set(layer, (localLayers.get(layer) ?? 0) + 1);
     const sent = channel.run(id, payload);
     const settled = () => {
-      const left = (localLayers.get(layer) ?? 1) - 1;
-      if (left > 0) localLayers.set(layer, left);
-      else localLayers.delete(layer);
+      for (const layer of named) {
+        const left = (localLayers.get(layer) ?? 1) - 1;
+        if (left > 0) localLayers.set(layer, left);
+        else localLayers.delete(layer);
+      }
       scheduleReconcile();
     };
     sent.then(settled, settled);
@@ -296,6 +314,15 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     removeNode: stateNow().removeNode,
     reorderNode: stateNow().reorderNode,
     duplicateNode: stateNow().duplicateNode,
+    addModifier: stateNow().addModifier,
+    removeModifier: stateNow().removeModifier,
+    reorderModifier: stateNow().reorderModifier,
+    setModifierParam: stateNow().setModifierParam,
+    setModifierEnabled: stateNow().setModifierEnabled,
+    setModifierVectorMask: stateNow().setModifierVectorMask,
+    removeModifierMask: stateNow().removeModifierMask,
+    setMaskSpace: stateNow().setMaskSpace,
+    applyMarqueeAsVectorMask: stateNow().applyMarqueeAsVectorMask,
   };
 
   const withoutDirty = (node: SceneNode) => {
@@ -311,6 +338,39 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       if (node) sendLocal(id, 'layer.add', { node: withoutDirty(node) });
       return id;
     };
+  }
+
+  const modifierOf = (nodeId: string, modId: string): Modifier | undefined =>
+    nodeOf(nodeId)?.modifiers.find((m) => m.id === modId);
+
+  /** The modifier, if the store has it on a layer that isn't locked (Rust holds the lock too). */
+  function editable(nodeId: string, modId: string): Modifier | undefined {
+    const node = nodeOf(nodeId);
+    return node && node.state !== 'locked' ? modifierOf(nodeId, modId) : undefined;
+  }
+
+  /**
+   * A scrub's command: inside a gesture latest wins (one drag, one undo step); outside one each
+   * is a step of its own, as it always was.
+   */
+  function sendScrub(key: string, id: string, payload: unknown): void {
+    if (gesture) void sendDrag(key, id, payload);
+    else sendCommand(id, payload);
+  }
+
+  /**
+   * The params a caller gave `addModifier` that differ from the op's defaults. Rust holds the
+   * defaults, so a plain Add sends none; Duplicate Modifier passes the modifier's own values.
+   * An op the cache doesn't know sends them all (Rust refuses the op anyway).
+   */
+  function ownParams(type: string, params: Modifier['params']): { params?: Modifier['params'] } {
+    const op = useOpsCacheStore.getState().ops.find((o) => o.name === type);
+    const own = Object.fromEntries(
+      Object.entries(params).filter(
+        ([name, v]) => v !== op?.params.find((p) => p.name === name)?.default,
+      ),
+    );
+    return Object.keys(own).length > 0 ? { params: own } : {};
   }
 
   const wrappers: Partial<State> = {
@@ -380,6 +440,89 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       });
       return newId;
     },
+    addModifier: (nodeId, type, defaults) => {
+      const modId = original.addModifier(nodeId, type, defaults);
+      // a locked or missing layer: the original added nothing, and there is nothing to send
+      if (!modifierOf(nodeId, modId)) return modId;
+      sendLocal(nodeId, 'modifier.add', {
+        at: layerPath(nodeId),
+        id: modId,
+        type,
+        ...ownParams(type, defaults),
+      });
+      return modId;
+    },
+    removeModifier: (nodeId, modId) => {
+      if (!editable(nodeId, modId)) return;
+      sendCommand('modifier.remove', { at: modifierPath(nodeId, modId) });
+    },
+    reorderModifier: (nodeId, modId, toIndex) => {
+      if (!editable(nodeId, modId)) return;
+      // Rust clamps `toIndex`; the store follows when the update comes back
+      sendCommand('modifier.reorder', { at: modifierPath(nodeId, modId), to: toIndex });
+    },
+    setModifierParam: (nodeId, modId, key, value) => {
+      if (!editable(nodeId, modId)) return;
+      sendScrub(`modifier:${nodeId}:${modId}:${key}`, 'modifier.set', {
+        at: modifierPath(nodeId, modId),
+        key: `${PARAM_PREFIX}${key}`,
+        value,
+      });
+    },
+    setModifierEnabled: (nodeId, modId, enabled) => {
+      if (!editable(nodeId, modId)) return;
+      sendCommand('modifier.set', {
+        at: modifierPath(nodeId, modId),
+        key: 'enabled',
+        value: enabled,
+      });
+    },
+    setModifierVectorMask: (nodeId, modId, vectorNodeId, ref) => {
+      const mod = editable(nodeId, modId);
+      // the id the mask has, or will take (the store's rule, `mask_ref_id` in Rust)
+      const maskId = mod?.maskId ?? modId;
+      const source = nodeOf(vectorNodeId);
+      if (!mod || !source || !(isVectorNode(source) || isTextNode(source))) return maskId;
+      sendScrub(`mask:${nodeId}:${modId}`, 'mask.attach', {
+        at: modifierPath(nodeId, modId),
+        source: layerPath(vectorNodeId),
+        featherPx: ref.featherPx,
+        expand: ref.expand,
+        invert: ref.invert,
+        ...(ref.space ? { space: ref.space } : {}),
+        ...(ref.attachTransform ? { attachTransform: ref.attachTransform } : {}),
+      });
+      return maskId;
+    },
+    removeModifierMask: (nodeId, modId) => {
+      if (!editable(nodeId, modId)?.maskId) return;
+      sendCommand('mask.detach', { at: modifierPath(nodeId, modId) });
+    },
+    setMaskSpace: (nodeId, modId, space) => {
+      const maskId = editable(nodeId, modId)?.maskId;
+      const ref = maskId ? scene().maskRefs?.[maskId] : undefined;
+      // already in that space: no command, as the store's own no-op
+      if (!ref || (ref.space ?? 'document') === space) return;
+      sendCommand('mask.set_space', { at: modifierPath(nodeId, modId), space });
+    },
+    applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
+      // The original builds the layer and the mask here at once (the caller's UI reads them),
+      // without sending a command of its own part by part; one command carries the whole edit.
+      const made = original.applyMarqueeAsVectorMask(nodeId, modId, marquee, params);
+      const vector = made ? nodeOf(made.vectorNodeId) : undefined;
+      if (!made || !vector || !isVectorNode(vector)) return made;
+      sendLocal([nodeId, made.vectorNodeId], 'mask.from_marquee', {
+        at: modifierPath(nodeId, modId),
+        vectorId: made.vectorNodeId,
+        paths: vector.paths,
+        fillRule: vector.fillRule,
+        label: vector.label,
+        featherPx: params.featherPx,
+        expand: params.expand,
+        invert: params.invert,
+      });
+      return made;
+    },
     setTextProps: (id, patch) => {
       const before = scene();
       original.setTextProps(id, patch);
@@ -414,6 +557,42 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   /**
+   * A layer's modifiers as the mirror has them, put in the store through the original actions
+   * (so each marks the consumer dirty as the store always did): a modifier removed, a new
+   * order, an `enabled` or param value, a mask attached, changed or taken off (feather, expand,
+   * invert, space). A modifier the mirror has and the store hasn't is a local-first add the
+   * store makes itself, and anything else is left to the reconcile.
+   */
+  function applyModifierEcho(nodeId: string): void {
+    const row = mirror.byPath(layerPath(nodeId));
+    if (!nodeOf(nodeId) || !row) return;
+    const refs: Record<string, VectorMaskRef> = {};
+    const want = layerNode(mirror.rows, row, refs).modifiers;
+    const wantIds = want.map((m) => m.id);
+    for (const m of nodeOf(nodeId)?.modifiers ?? []) {
+      if (!wantIds.includes(m.id)) original.removeModifier(nodeId, m.id);
+    }
+    const haveIds = (nodeOf(nodeId)?.modifiers ?? []).map((m) => m.id);
+    for (const m of reorderMoves(haveIds, wantIds)) original.reorderModifier(nodeId, m.id, m.to);
+    for (const w of want) {
+      const have = modifierOf(nodeId, w.id);
+      if (!have) continue;
+      if (have.enabled !== w.enabled) original.setModifierEnabled(nodeId, w.id, w.enabled);
+      for (const [key, v] of Object.entries(w.params)) {
+        if (have.params[key] !== v) original.setModifierParam(nodeId, w.id, key, v);
+      }
+      const ref = w.maskId ? refs[w.maskId] : undefined;
+      const mine = have.maskId ? scene().maskRefs?.[have.maskId] : undefined;
+      if (!ref) {
+        if (have.maskId) original.removeModifierMask(nodeId, w.id);
+      } else if (firstDifference(mine, ref) !== null) {
+        const { id: _id, nodeId: source, ...numbers } = ref;
+        original.setModifierVectorMask(nodeId, w.id, source, numbers);
+      }
+    }
+  }
+
+  /**
    * An update's effect on the store, for the commands-first edits: each touched layer's
    * transform and props, and the document size, through the original actions, and a pixel
    * layer's new source with what Rust decided to go with it. A layer deleted (`gone`, the names
@@ -440,6 +619,8 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       const current = scene().nodes.map((n) => n.id);
       for (const m of reorderMoves(current, target)) original.reorderNode(m.id, m.to);
     }
+    // the layers whose modifiers this update touched: a modifier row, or the layer row itself
+    const modified = new Set<string>();
     for (const r of u.rows) {
       if (r.path === DOCUMENT_PATH) {
         const size = val(r, 'documentSize') as [number, number] | undefined;
@@ -466,8 +647,13 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         const patch: Record<string, unknown> = {};
         for (const k of PROP_KEYS) if (have[k] !== val(r, k)) patch[k] = val(r, k);
         if (Object.keys(patch).length > 0) original.setNodeProp(node.id, patch);
+        if (!stepped) modified.add(node.id);
+      } else if (!stepped) {
+        const owner = r.parent ? mirror.rows.get(r.parent) : undefined;
+        if (owner?.parent === layers.id && r.type.startsWith('op.')) modified.add(owner.name);
       }
     }
+    for (const id of modified) if (!localLayers.has(id)) applyModifierEcho(id);
   }
 
   function takeUpdate(u: Update): void {

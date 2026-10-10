@@ -31,17 +31,43 @@ const install = () => {
 };
 
 describe('refusal by construction', () => {
+  it('refuses these eight, each waiting for its story (Epic 21 stories 5 and 6)', () => {
+    expect(refusedActions(useSceneStore.getState()).sort()).toEqual([
+      'convertTextToOutlines',
+      'lockNode',
+      'setBackgroundColor',
+      'setBackgroundImage',
+      'setNote',
+      'setVectorFillRule',
+      'setVectorPaths',
+      'unlockNode',
+    ]);
+  });
+
   it('classifies every action on the store: carried, internal, or refused', () => {
     const all = actionNames(useSceneStore.getState());
     const refused = refusedActions(useSceneStore.getState());
     expect([...refused, ...ON_RHIZOME, ...INTERNAL].sort()).toEqual([...all].sort());
     // a typo in either list would quietly refuse nothing
     for (const name of [...ON_RHIZOME, ...INTERNAL]) expect(all).toContain(name);
-    for (const name of ['addModifier', 'lockNode', 'setBackgroundColor']) {
+    for (const name of ['lockNode', 'setBackgroundColor']) {
       expect(refused).toContain(name);
     }
-    // the layer edits moved in Epic 21 story 3
-    for (const name of ['removeNode', 'reorderNode', 'duplicateNode']) {
+    // the layer edits moved in Epic 21 story 3, the modifiers and masks in story 4
+    for (const name of [
+      'removeNode',
+      'reorderNode',
+      'duplicateNode',
+      'addModifier',
+      'removeModifier',
+      'reorderModifier',
+      'setModifierParam',
+      'setModifierEnabled',
+      'setModifierVectorMask',
+      'removeModifierMask',
+      'setMaskSpace',
+      'applyMarqueeAsVectorMask',
+    ]) {
       expect(refused).not.toContain(name);
       expect(ON_RHIZOME).toContain(name);
     }
@@ -52,7 +78,7 @@ describe('refusal by construction', () => {
     const state = useSceneStore.getState();
     const before = state.scene;
     const refused = refusedActions(originals as never);
-    expect(refused.length).toBeGreaterThan(10);
+    expect(refused.length).toBeGreaterThan(0);
     for (const name of refused) {
       notify.mockClear();
       const call = (state as unknown as Record<string, (...a: unknown[]) => unknown>)[name];
@@ -114,6 +140,6 @@ describe('refusal by construction', () => {
 
   it('names an action in words', () => {
     expect(actionLabel('lockNode')).toBe('Lock node');
-    expect(actionLabel('setModifierVectorMask')).toBe('Set modifier vector mask');
+    expect(actionLabel('setVectorFillRule')).toBe('Set vector fill rule');
   });
 });

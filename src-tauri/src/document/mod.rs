@@ -86,12 +86,18 @@ const TEXT_KEYS: &[&str] = &[
 #[derive(Clone, Debug, Deserialize)]
 pub struct Op {
     pub name: String,
+    /// The panel label ("Gaussian blur"), for undo step names. Optional on the wire.
+    #[serde(default)]
+    pub label: Option<String>,
     pub params: Vec<OpParam>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct OpParam {
     pub name: String,
+    /// The panel label ("Cell size"), for undo step names. Optional on the wire.
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
@@ -113,9 +119,12 @@ pub fn op_type(name: &str) -> String {
     format!("op.{name}")
 }
 
+/// Where an op's params live on a modifier (src/rhizome/adapter.ts `PARAM_PREFIX`).
+const PARAM_PREFIX: &str = "params.";
+
 /// An op param's value key on a modifier: `params.<name>`.
 pub fn param_key(name: &str) -> String {
-    format!("params.{name}")
+    format!("{PARAM_PREFIX}{name}")
 }
 
 fn param_spec(p: &OpParam) -> Option<ValueSpec> {
@@ -467,6 +476,171 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // A modifier on top of a layer's modifiers, with TypeScript's id (the caller uses it at
+        // once). Every param is written explicitly, from the catalogue's default or from
+        // `params` where the caller has a value of its own (Duplicate Modifier), so the row
+        // names what it holds the way `layer.add`'s do. A locked layer refuses.
+        c.add(
+            "modifier.add",
+            |_| "Add Modifier".into(),
+            |_, p| {
+                ["at", "id", "type"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+            },
+            |d, p| {
+                let a: ModifierAddArgs = payload(p)?;
+                let label = format!("Add {}", op_label(d.context(), &a.kind));
+                let (_, commit) = d.edit(&label, |tx| add_modifier(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
+        // Removes a modifier. Its mask binding goes with it; the layer that was the mask stays.
+        c.add(
+            "modifier.remove",
+            |_| "Remove Modifier".into(),
+            |_, p| p.get("at").is_some_and(Json::is_string),
+            |d, p| {
+                let a: AtArgs = payload(p)?;
+                let (_, commit) = d.edit("Remove Modifier", |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    tx.remove(m)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Moves a modifier to index `to` of its layer's `modifiers` with the store's
+        // `reorderModifier` semantics: splice out, splice in, clamped to the ends.
+        c.add(
+            "modifier.reorder",
+            |_| "Move Modifier".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string) && p.get("to").is_some_and(Json::is_i64)
+            },
+            |d, p| {
+                let a: ReorderArgs = payload(p)?;
+                let (_, commit) = d.edit("Move Modifier", |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    let mut order = modifiers_of(tx, layer);
+                    let from = order
+                        .iter()
+                        .position(|id| *id == m)
+                        .ok_or_else(|| structural(format!("{} isn't in the order", a.at)))?;
+                    order.remove(from);
+                    let to = a.to.clamp(0, order.len() as i64) as usize;
+                    order.insert(to, m);
+                    tx.set_order(layer, "modifiers", order)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // One modifier value: `enabled`, or an op param by its tree key (`params.<name>`; a bare
+        // name could not tell a param called `enabled` from the switch). A value past a
+        // param's max is kept (decision 53), a wrong type or one under its min is refused.
+        c.add(
+            "modifier.set",
+            |_| "Set Modifier".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("key").is_some_and(Json::is_string)
+                    && p.get("value").is_some()
+            },
+            |d, p| {
+                let a: SetArgs = payload(p)?;
+                let label = set_label(d, &a);
+                let (_, commit) = d.edit(&label, |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    if a.key != "enabled" && !a.key.starts_with(PARAM_PREFIX) {
+                        return Err(structural(format!("`{}` isn't a modifier value", a.key)));
+                    }
+                    set(tx, m, &a.key, &a.value)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Masks a modifier with a vector or text layer, replacing any mask it has. Sent again
+        // with the same source and new numbers it is the edit of feather, expand or invert.
+        // The mask keeps its `refId` while it lasts; a new one takes the modifier's own id.
+        c.add(
+            "mask.attach",
+            |_| "Attach Mask".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("source").is_some_and(Json::is_string)
+            },
+            |d, p| {
+                let a: AttachArgs = payload(p)?;
+                let (_, commit) = d.edit("Attach Mask", |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    let source = layer_at(tx, &a.source)?;
+                    let ref_id = mask_ref_id(tx, m);
+                    let values = mask_binding(
+                        ref_id,
+                        [a.feather_px, a.expand],
+                        a.invert,
+                        a.space.as_deref(),
+                        a.attach_transform.as_ref(),
+                    );
+                    tx.bind(m, On::slot("mask"), source, values)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Takes the mask off a modifier. The layer that was the mask stays.
+        c.add(
+            "mask.detach",
+            |_| "Remove Mask".into(),
+            |_, p| p.get("at").is_some_and(Json::is_string),
+            |d, p| {
+                let a: AtArgs = payload(p)?;
+                let (_, commit) = d.edit("Remove Mask", |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    let (source, _) = mask_of(tx, m)
+                        .ok_or_else(|| structural(format!("{} has no mask", a.at)))?;
+                    tx.unbind(m, On::slot("mask"), source)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // "Follows layer" (mask-follows-node.md): `node` snapshots the consumer's current
+        // transform into `attachTransform`, `document` clears it and `space`. Already in
+        // that space, nothing changes and nothing is a step.
+        c.add(
+            "mask.set_space",
+            |_| "Mask Follows Layer".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("space").is_some_and(Json::is_string)
+            },
+            |d, p| {
+                let a: SpaceArgs = payload(p)?;
+                let (_, commit) = d.edit("Mask Follows Layer", |tx| set_mask_space(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
+        // "Mask from Selection": a hidden vector layer on top of the stack, bound as the
+        // modifier's mask pinned to the consumer's current transform, and the replace rule,
+        // all one step. TypeScript picked the layer's id and built its paths.
+        c.add(
+            "mask.from_marquee",
+            |_| "Mask from Selection".into(),
+            |_, p| {
+                ["at", "vectorId", "fillRule", "label"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+                    && p.get("paths").is_some_and(Json::is_array)
+            },
+            |d, p| {
+                let a: MarqueeArgs = payload(p)?;
+                let (_, commit) = d.edit("Mask from Selection", |tx| mask_from_marquee(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
         // POM's other built-ins that write the tree would bypass the rules above, so they
         // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
         // commands, copy and export stay as POM has them.
@@ -544,6 +718,48 @@ struct DuplicateArgs {
     id: String,
     modifier_ids: Vec<String>,
     mask_ids: Vec<Option<String>>,
+}
+
+#[derive(Deserialize)]
+struct ModifierAddArgs {
+    at: String,
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    /// Param values by param name that differ from the catalogue's defaults.
+    #[serde(default)]
+    params: serde_json::Map<String, Json>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachArgs {
+    at: String,
+    source: String,
+    feather_px: f64,
+    expand: f64,
+    invert: bool,
+    space: Option<String>,
+    attach_transform: Option<Json>,
+}
+
+#[derive(Deserialize)]
+struct SpaceArgs {
+    at: String,
+    space: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarqueeArgs {
+    at: String,
+    vector_id: String,
+    paths: Json,
+    fill_rule: String,
+    label: String,
+    feather_px: f64,
+    expand: f64,
+    invert: bool,
 }
 
 #[derive(Deserialize)]
@@ -924,6 +1140,249 @@ fn duplicate_layer(tx: &mut Edit<'_>, a: &DuplicateArgs) -> rhizome_core::Result
     let mut stack = stack;
     stack.insert(index, copy);
     tx.set_order("/layers", "stack", stack)
+}
+
+// ---- modifiers and masks ----
+
+/// The panel label of an op, for undo step names: the catalogue's, else its name made
+/// readable (`gaussian_blur` -> `Gaussian blur`).
+fn op_label(cx: &Catalogue, name: &str) -> String {
+    let label =
+        cx.0.iter()
+            .find(|o| o.name == name)
+            .and_then(|o| o.label.clone());
+    label.unwrap_or_else(|| readable(name))
+}
+
+fn readable(name: &str) -> String {
+    let spaced = name.replace('_', " ");
+    let mut chars = spaced.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
+/// The undo step name of a `modifier.set`: "Enable Modifier", "Disable Modifier" or
+/// "Set <param label>".
+fn set_label(d: &rhizome_pom::Document<Oblique>, a: &SetArgs) -> String {
+    if a.key == "enabled" {
+        let on = a.value.as_bool().unwrap_or(true);
+        return if on {
+            "Enable Modifier"
+        } else {
+            "Disable Modifier"
+        }
+        .into();
+    }
+    let Some(param) = a.key.strip_prefix(PARAM_PREFIX) else {
+        return "Set Modifier".into();
+    };
+    let op = d
+        .tree()
+        .at(a.at.as_str())
+        .map(|n| n.type_name().trim_start_matches("op.").to_string());
+    let label = op.and_then(|op| {
+        d.context()
+            .0
+            .iter()
+            .find(|o| o.name == op)
+            .and_then(|o| o.params.iter().find(|p| p.name == param))
+            .and_then(|p| p.label.clone())
+    });
+    format!("Set {}", label.unwrap_or_else(|| readable(param)))
+}
+
+/// The modifier at `at` and the layer it belongs to. The modifier commands refuse anything
+/// else, so none of them reaches a layer (story 3's) or the document.
+fn modifier_at(tx: &Edit<'_>, at: &str) -> rhizome_core::Result<(NodeId, NodeId)> {
+    let id = live(tx, at)?;
+    let n = tx.at(id).expect("live");
+    let layer = n.parent().filter(|p| {
+        ["pixel", "vector", "text"].contains(&p.type_name())
+            && p.parent()
+                .is_some_and(|g| g.path().to_string() == "/layers")
+    });
+    match layer {
+        Some(l) if n.type_name().starts_with("op.") => Ok((id, l.id())),
+        _ => Err(structural(format!("{at} isn't a modifier"))),
+    }
+}
+
+fn modifiers_of(tx: &Edit<'_>, layer: NodeId) -> Vec<NodeId> {
+    tx.at(layer)
+        .map(|l| l.order("modifiers").iter().map(|n| n.id()).collect())
+        .unwrap_or_default()
+}
+
+/// `modifier.add`: the modifier last in its layer's order, every param written.
+fn add_modifier(tx: &mut Edit<'_>, a: &ModifierAddArgs) -> rhizome_core::Result<()> {
+    let layer = layer_at(tx, &a.at)?;
+    refuse_locked(tx, layer)?;
+    let m = tx.add(layer, &op_type(&a.kind), &a.id)?;
+    let defaults: Vec<(String, Value)> = tx
+        .at(m)
+        .and_then(|n| n.node_type().map(|t| t.values().to_vec()))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.key.starts_with(PARAM_PREFIX))
+        .map(|s| (s.key, s.default))
+        .collect();
+    tx.set_value(m, "enabled", Value::Bool(true))?;
+    for (key, default) in defaults {
+        tx.set_value(m, &key, default)?;
+    }
+    for (name, v) in &a.params {
+        set(tx, m, &param_key(name), v)?;
+    }
+    let mut order = modifiers_of(tx, layer);
+    order.push(m);
+    tx.set_order(layer, "modifiers", order)
+}
+
+/// A modifier's mask: its source layer and the `refId` it carries, if it has one.
+fn mask_of(tx: &Edit<'_>, modifier: NodeId) -> Option<(NodeId, Option<String>)> {
+    let n = tx.at(modifier)?;
+    let b = n
+        .bindings()
+        .into_iter()
+        .find(|b| *b.on == On::slot("mask"))?;
+    let ref_id = match b.value("refId") {
+        Some(Value::Text(s)) if !s.is_empty() => Some(s),
+        _ => None,
+    };
+    Some((b.source.id(), ref_id))
+}
+
+/// The `refId` a mask on `modifier` goes by: the one it has, else the modifier's own id, which
+/// no other mask can share. The store picks the same (`setModifierVectorMask`), so the two
+/// agree on an id neither was told.
+fn mask_ref_id(tx: &Edit<'_>, modifier: NodeId) -> String {
+    mask_of(tx, modifier)
+        .and_then(|(_, r)| r)
+        .unwrap_or_else(|| tx.at(modifier).expect("live").name().to_string())
+}
+
+/// The values a mask binding carries (`mask_values`). `space` and `attachTransform` are left
+/// out for a document-space mask, which reads as unset.
+fn mask_binding(
+    ref_id: String,
+    [feather_px, expand]: [f64; 2],
+    invert: bool,
+    space: Option<&str>,
+    attach: Option<&Json>,
+) -> Vec<(&'static str, Value)> {
+    let mut values = vec![
+        ("refId", Value::Text(ref_id)),
+        ("featherPx", Value::Float(feather_px)),
+        ("expand", Value::Float(expand)),
+        ("invert", Value::Bool(invert)),
+    ];
+    if let Some(space) = space {
+        values.push(("space", Value::Shaped(json!(space))));
+    }
+    if let Some(attach) = attach.filter(|a| !a.is_null()) {
+        values.push(("attachTransform", Value::Shaped(attach.clone())));
+    }
+    values
+}
+
+/// A layer's transform; an unmoved layer reads as the identity.
+fn placement_of(tx: &Edit<'_>, layer: NodeId) -> Placement {
+    let n = tx.at(layer).expect("live");
+    let pair = |key: &str, default: [f64; 2]| match n.value(key) {
+        Some(Value::Vec2(v)) => v,
+        _ => default,
+    };
+    let [x, y] = pair("transform2d.position", [0.0, 0.0]);
+    let [scale_x, scale_y] = pair("transform2d.scale", [1.0, 1.0]);
+    let rotation = match n.value("transform2d.rotation") {
+        Some(Value::Float(r)) => r,
+        _ => 0.0,
+    };
+    Placement {
+        x,
+        y,
+        scale_x,
+        scale_y,
+        rotation,
+    }
+}
+
+/// `mask.set_space`.
+fn set_mask_space(tx: &mut Edit<'_>, a: &SpaceArgs) -> rhizome_core::Result<()> {
+    let (m, layer) = modifier_at(tx, &a.at)?;
+    refuse_locked(tx, layer)?;
+    if !["document", "node"].contains(&a.space.as_str()) {
+        return Err(structural(format!("`{}` isn't a mask space", a.space)));
+    }
+    let n = tx.at(m).expect("live");
+    let b = n
+        .bindings()
+        .into_iter()
+        .find(|b| *b.on == On::slot("mask"))
+        .ok_or_else(|| structural(format!("{} has no mask", a.at)))?;
+    let following = b.value("space") == Some(Value::Shaped(json!("node")));
+    if following == (a.space == "node") {
+        return Ok(());
+    }
+    let number = |k: &str| match b.value(k) {
+        Some(Value::Float(f)) => f,
+        _ => 0.0,
+    };
+    let (source, feather_px, expand) = (b.source.id(), number("featherPx"), number("expand"));
+    let invert = b.value("invert") == Some(Value::Bool(true));
+    let ref_id = mask_ref_id(tx, m);
+    let attach = (a.space == "node").then(|| placement_of(tx, layer).to_json());
+    let values = mask_binding(
+        ref_id,
+        [feather_px, expand],
+        invert,
+        attach.as_ref().map(|_| "node"),
+        attach.as_ref(),
+    );
+    tx.bind(m, On::slot("mask"), source, values)
+}
+
+/// `mask.from_marquee`.
+fn mask_from_marquee(tx: &mut Edit<'_>, a: &MarqueeArgs) -> rhizome_core::Result<()> {
+    let (m, layer) = modifier_at(tx, &a.at)?;
+    refuse_locked(tx, layer)?;
+    // what the mask pointed at before, read first: the replace rule needs it
+    let previous = mask_of(tx, m).map(|(source, _)| source);
+    let ref_id = mask_ref_id(tx, m);
+    let consumer = placement_of(tx, layer);
+
+    let v = tx.add("/layers", "vector", &a.vector_id)?;
+    set(tx, v, "label", &json!(a.label))?;
+    set(tx, v, "visible", &json!(false))?;
+    set(tx, v, "paths", &a.paths)?;
+    set(tx, v, "fillRule", &json!(a.fill_rule))?;
+    let mut stack = stack_of(tx);
+    stack.retain(|id| *id != v);
+    stack.insert(0, v);
+    tx.set_order("/layers", "stack", stack)?;
+
+    // a selection made on the image belongs to the image (mask-follows-node.md)
+    let values = mask_binding(
+        ref_id,
+        [a.feather_px, a.expand],
+        a.invert,
+        Some("node"),
+        Some(&consumer.to_json()),
+    );
+    tx.bind(m, On::slot("mask"), v, values)?;
+
+    // The replace rule: the previous source goes when it is a selection of ours (not a
+    // layer the user made) and nothing else uses it.
+    if let Some(prev) = previous.filter(|p| *p != v && *p != layer) {
+        let n = tx.at(prev).expect("live");
+        let ours = matches!(n.value("label"), Some(Value::Text(l)) if l.starts_with("Selection ("));
+        if ours && n.bound_to().is_empty() {
+            tx.remove(prev)?;
+        }
+    }
+    Ok(())
 }
 
 fn stack_of(tx: &Edit<'_>) -> Vec<NodeId> {

@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
 import {
@@ -314,10 +314,9 @@ interface SceneState {
    * points at it after the swap — otherwise it's either user-authored or
    * shared, and neither is ours to remove.
    *
-   * Does NOT open the history transaction itself — the caller
-   * (`StackRow.tsx`) wraps this in `beginTransaction`/`endTransaction` so
-   * creation + attach + replace-cleanup land as one undo step, matching how
-   * the store stays history-agnostic today.
+   * One edit: creation + attach + replace-cleanup are a single undo step on
+   * rhizome (`mask.from_marquee`), so the caller opens no transaction. It
+   * composes the store's own actions, never the ones installed over them.
    */
   applyMarqueeAsVectorMask: (
     nodeId: string,
@@ -504,7 +503,11 @@ function copyNode(
   return { node, maskRefs: nextRefs };
 }
 
-export const useSceneStore = create<SceneState>((set, get) => ({
+// Typed outright: `applyMarqueeAsVectorMask` reaches the store's own initial actions through it,
+// and an inferred type would depend on itself.
+type SceneStore = UseBoundStore<StoreApi<SceneState>>;
+
+export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
   scene: makeEmptyScene(),
   bakingNodeIds: new Set<string>(),
 
@@ -961,10 +964,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // replace IS an edit, and keeping the id stable means undo restores
     // land on the same entry. Dirty per rule 4: masking changes the pixel
     // result exactly like a param edit.
+    // A first mask takes the modifier's own id: one mask per modifier, so it is unique, and
+    // Rust's `mask.attach` picks the same (document/mod.rs `mask_ref_id`), so the id needs
+    // no round trip.
     const existing = get()
       .scene.nodes.find((n) => n.id === nodeId)
       ?.modifiers.find((m) => m.id === modId)?.maskId;
-    const maskId = existing ?? crypto.randomUUID();
+    const maskId = existing ?? modId;
     set((s) => {
       // Guarded on the CONSUMER's lock state (lock-state-machine.md) — the
       // referenced vector node's own lock state is irrelevant here, mirrors
@@ -1060,7 +1066,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       marquee.kind === 'polygons'
         ? (marquee.label ?? 'Selection (segment)')
         : `Selection (${marquee.kind})`;
-    const vectorNodeId = get().addVectorNode({
+    // The store's own actions, not whatever is installed over them: on rhizome the installed
+    // `addVectorNode`, `setModifierVectorMask` and `removeNode` each send a command of their
+    // own, and this is one edit that `rhizome.ts` sends as one `mask.from_marquee`.
+    const own = useSceneStore.getInitialState();
+    const vectorNodeId = own.addVectorNode({
       paths: marqueeToVectorPaths(marquee),
       // evenodd, not nonzero: only `polygons` marquees can carry holes
       // (colour-range-select.md) and `trace.py` is winding-agnostic, so
@@ -1075,7 +1085,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // Node-pinned by default (mask-follows-node.md): a selection made on the
     // image belongs to the image, so snapshot the consumer's transform now.
     const consumerTransform = get().scene.nodes.find((n) => n.id === nodeId)?.transform2d;
-    const maskId = get().setModifierVectorMask(nodeId, modId, vectorNodeId, {
+    const maskId = own.setModifierVectorMask(nodeId, modId, vectorNodeId, {
       featherPx: params.featherPx,
       expand: params.expand,
       invert: params.invert,
@@ -1090,7 +1100,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         (ref) => ref.nodeId === previousVectorNodeId,
       );
       if (previousNode?.label.startsWith('Selection (') && !stillReferenced) {
-        get().removeNode(previousVectorNodeId);
+        own.removeNode(previousVectorNodeId);
       }
     }
 

@@ -15,6 +15,7 @@ import type {
   VectorMaskRef,
   VectorNode,
 } from '@/scene/types';
+import { type OpDescriptor, useOpsCacheStore } from '@/sidecar/opsCache';
 import { createRhizome, type DocumentEvents, type Rhizome } from './rhizome';
 import { FakeHost } from './testHost';
 
@@ -519,11 +520,25 @@ describe('starting', () => {
         name: 'blur',
         label: 'Blur',
         backend: 'python',
-        params: [{ name: 'radius', type: 'float', default: 5, min: null, max: 100, scale: 'none' }],
+        params: [
+          {
+            name: 'radius',
+            label: 'Blur radius',
+            type: 'float',
+            default: 5,
+            min: null,
+            max: 100,
+            scale: 'none',
+          },
+        ],
       },
     ]);
     expect(JSON.parse(JSON.stringify(host.inited))).toEqual([
-      { name: 'blur', params: [{ name: 'radius', type: 'float', default: 5, max: 100 }] },
+      {
+        name: 'blur',
+        label: 'Blur',
+        params: [{ name: 'radius', label: 'Blur radius', type: 'float', default: 5, max: 100 }],
+      },
     ]);
   });
 });
@@ -1212,12 +1227,530 @@ describe('layer edits in a row', () => {
   });
 });
 
+// ---------------------------------------------------------------- modifiers and masks (story 4)
+
+describe('modifiers and masks (modifier.*, mask.*)', () => {
+  const OPS = [
+    {
+      name: 'blur',
+      label: 'Blur',
+      backend: 'python',
+      params: [
+        { name: 'radius', type: 'float', default: 5, min: 0, max: 100, scale: 'none' },
+        { name: 'mode', type: 'enum', default: 'soft', choices: ['soft', 'hard'], scale: 'none' },
+      ],
+    },
+    { name: 'sharpen', label: 'Sharpen', backend: 'python', params: [] },
+  ] as unknown as OpDescriptor[];
+
+  beforeEach(() => useOpsCacheStore.setState({ ops: OPS }));
+  afterEach(() => useOpsCacheStore.setState({ ops: [] }));
+
+  /** A store and a host over `nodes`, with the op catalogue the host takes defaults from. */
+  async function withOps(nodes: SceneNode[], extra: Partial<Scene> = {}) {
+    await setup(nodes, false, extra);
+    await rhizome.start(OPS);
+    await settle();
+  }
+
+  /** The store holds what the mirror does, and the terminal got no reconcile line. */
+  const agrees = async () => {
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  };
+
+  const sent = () => host.runs.map((r) => r.id);
+  const modifiers = (id: string) => node(id)?.modifiers ?? [];
+  const maskRefs = () => state().scene.maskRefs ?? {};
+
+  /** `m` has three plain modifiers, and a masked one is `maskedScene`'s `mod1`. */
+  const threeModifiers = (): SceneNode[] => [
+    pixel('m', {
+      modifiers: ['mod1', 'mod2', 'mod3'].map((id) => ({
+        id,
+        type: 'blur',
+        enabled: true,
+        params: { radius: 12 },
+      })),
+    }),
+  ];
+
+  describe('add (modifier.add)', () => {
+    it('runs the original at once, sends the id it picked and no defaults, and agrees', async () => {
+      await withOps([pixel('a')]);
+      const id = state().addModifier('a', 'blur', { radius: 5, mode: 'soft' });
+      expect(modifiers('a').map((m) => m.id)).toEqual([id]); // local first: there at once
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'modifier.add', payload: { at: '/layers/a', id, type: 'blur' } },
+      ]);
+      // Rust took the defaults from the catalogue: the rows hold them, and the store matches
+      await agrees();
+      expect(node('a')?.dirty).toEqual({ draft: true, working: true });
+    });
+
+    it("sends a modifier's own values when they differ from the defaults (Duplicate Modifier)", async () => {
+      await withOps([pixel('a')]);
+      const id = state().addModifier('a', 'blur', { radius: 40, mode: 'soft' });
+      await settle();
+      expect(host.runs[0].payload).toEqual({
+        at: '/layers/a',
+        id,
+        type: 'blur',
+        params: { radius: 40 },
+      });
+      expect(modifiers('a')[0].params).toEqual({ radius: 40, mode: 'soft' });
+      await agrees();
+    });
+
+    it('appends last, one undo step each', async () => {
+      await withOps(threeModifiers());
+      const id = state().addModifier('m', 'sharpen', {});
+      await settle();
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod2', 'mod3', id]);
+      await agrees();
+      await undo();
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod2', 'mod3']);
+      await agrees();
+      await redo();
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod2', 'mod3', id]);
+      await agrees();
+    });
+
+    it('sends nothing for a locked or a missing layer', async () => {
+      await withOps([pixel('a', { state: 'locked' })]);
+      state().addModifier('a', 'blur', {});
+      state().addModifier('nope', 'blur', {});
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(modifiers('a')).toEqual([]);
+    });
+
+    it('a refusal from the host (an op it lacks) toasts, and the reconcile takes it back', async () => {
+      await withOps([pixel('a')]);
+      state().addModifier('a', 'no_such_op', {});
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(modifiers('a')).toEqual([]);
+    });
+  });
+
+  describe('remove (modifier.remove)', () => {
+    it('sends the command and changes the store only when the update comes back', async () => {
+      await withOps(threeModifiers());
+      state().removeModifier('m', 'mod2');
+      expect(modifiers('m')).toHaveLength(3); // nothing local yet
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'modifier.remove', payload: { at: '/layers/m/mod2' } },
+      ]);
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod3']);
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+    });
+
+    it('drops its mask and keeps the layer that was the mask, as the store does', async () => {
+      const { nodes, extra } = maskedScene();
+      await withOps(nodes, extra);
+      state().removeModifier('m', 'mod1');
+      await settle();
+      expect(node('v')).toBeDefined();
+      expect(maskRefs()).toEqual({});
+      const want = plainResult(nodes, extra, () => originals.removeModifier('m', 'mod1'));
+      expect(state().scene.nodes.map((n) => n.modifiers)).toEqual(
+        want.nodes.map((n) => n.modifiers),
+      );
+      await agrees();
+      await undo();
+      expect(modifiers('m')[0].maskId).toBe('r1');
+      expect(maskRefs()).toEqual({ r1: ref() });
+      await agrees();
+    });
+
+    it('sends nothing for a locked layer or a modifier the store lacks', async () => {
+      await withOps([
+        pixel('a', {
+          state: 'locked',
+          modifiers: [{ id: 'x', type: 'blur', enabled: true, params: {} }],
+        }),
+      ]);
+      state().removeModifier('a', 'x');
+      state().removeModifier('a', 'nope');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+  });
+
+  describe('reorder (modifier.reorder)', () => {
+    it.each([
+      ['mod1', 2],
+      ['mod3', 0],
+      ['mod2', 0],
+      ['mod2', 2],
+      ['mod1', 1],
+      ['mod3', 1],
+    ])(
+      "moving %s to %i comes to what the store's reorderModifier does, and agrees",
+      async (id, to) => {
+        const want = plainResult(threeModifiers(), {}, () =>
+          originals.reorderModifier('m', id, to),
+        ).nodes[0].modifiers.map((m) => m.id);
+        await withOps(threeModifiers());
+        state().reorderModifier('m', id, to);
+        expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod2', 'mod3']);
+        await settle();
+        expect(modifiers('m').map((m) => m.id)).toEqual(want);
+        expect(host.runs.map((r) => r.payload)).toEqual([{ at: `/layers/m/${id}`, to }]);
+        expect(node('m')?.dirty).toEqual({ draft: true, working: true }); // the order changes the pixels
+        await agrees();
+      },
+    );
+
+    it('is one undo step, and clamps an index past the end', async () => {
+      await withOps(threeModifiers());
+      state().reorderModifier('m', 'mod1', 99);
+      await settle();
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod2', 'mod3', 'mod1']);
+      await undo();
+      expect(modifiers('m').map((m) => m.id)).toEqual(['mod1', 'mod2', 'mod3']);
+      await agrees();
+    });
+  });
+
+  describe('params and enabled (modifier.set)', () => {
+    it('sends the tree key, and the store follows the update through its own action', async () => {
+      await withOps(threeModifiers());
+      state().setModifierParam('m', 'mod1', 'radius', 30);
+      expect(modifiers('m')[0].params.radius).toBe(12); // nothing local yet
+      await settle();
+      expect(host.runs[0]).toMatchObject({
+        id: 'modifier.set',
+        payload: { at: '/layers/m/mod1', key: 'params.radius', value: 30 },
+      });
+      expect(modifiers('m')[0].params.radius).toBe(30);
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+    });
+
+    it('keeps a value past the slider end (soft max) and toggles enabled', async () => {
+      await withOps(threeModifiers());
+      state().setModifierParam('m', 'mod1', 'radius', 250);
+      state().setModifierEnabled('m', 'mod2', false);
+      await settle();
+      expect(modifiers('m')[0].params.radius).toBe(250);
+      expect(modifiers('m')[1].enabled).toBe(false);
+      expect(host.runs[1].payload).toEqual({ at: '/layers/m/mod2', key: 'enabled', value: false });
+      await agrees();
+      await undo();
+      expect(modifiers('m')[1].enabled).toBe(true);
+      await undo();
+      expect(modifiers('m')[0].params.radius).toBe(12);
+      await agrees();
+    });
+
+    it('a scrub inside a gesture is latest-wins and one undo step', async () => {
+      await withOps(threeModifiers());
+      transaction.beginTransaction();
+      for (const r of [20, 30, 40, 50]) state().setModifierParam('m', 'mod1', 'radius', r);
+      transaction.endTransaction();
+      await settle();
+      expect(modifiers('m')[0].params.radius).toBe(50);
+      expect(host.runs.length).toBeLessThan(4); // the ones waiting were replaced
+      expect(host.runs.every((r) => r.coalesce === 'modifier:m:mod1:radius')).toBe(true);
+      await agrees();
+      await undo();
+      expect(modifiers('m')[0].params.radius).toBe(12); // the whole scrub is gone
+      await agrees();
+    });
+
+    it('outside a gesture each edit is a step of its own', async () => {
+      await withOps(threeModifiers());
+      state().setModifierParam('m', 'mod1', 'radius', 20);
+      state().setModifierParam('m', 'mod1', 'radius', 30);
+      await settle();
+      expect(host.runs).toHaveLength(2);
+      await undo();
+      expect(modifiers('m')[0].params.radius).toBe(20);
+    });
+
+    it('sends nothing for a locked layer or a modifier the store lacks', async () => {
+      await withOps([
+        pixel('a', {
+          state: 'locked',
+          modifiers: [{ id: 'x', type: 'blur', enabled: true, params: {} }],
+        }),
+      ]);
+      state().setModifierParam('a', 'x', 'radius', 3);
+      state().setModifierEnabled('a', 'x', false);
+      state().setModifierParam('a', 'nope', 'radius', 3);
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+  });
+
+  describe('masks (mask.attach, mask.detach, mask.set_space)', () => {
+    /** `maskedScene` plus a second vector layer `w` and a text layer `t` to mask with. */
+    const scene = () => {
+      const { nodes, extra } = maskedScene();
+      return { nodes: [...nodes, vectorLayer('w', { label: 'Other' }), textLayer('t')], extra };
+    };
+
+    it('attaches a fresh mask under the modifier id, returned at once, and agrees', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      const id = state().setModifierVectorMask('m', 'mod2', 'v', {
+        featherPx: 2,
+        expand: 1,
+        invert: false,
+      });
+      expect(id).toBe('mod2'); // the id a first mask takes
+      expect(modifiers('m')[1].maskId).toBeUndefined(); // nothing local yet
+      await settle();
+      expect(host.runs[0].payload).toEqual({
+        at: '/layers/m/mod2',
+        source: '/layers/v',
+        featherPx: 2,
+        expand: 1,
+        invert: false,
+      });
+      expect(modifiers('m')[1].maskId).toBe('mod2');
+      const want = plainResult(nodes, extra, () =>
+        originals.setModifierVectorMask('m', 'mod2', 'v', {
+          featherPx: 2,
+          expand: 1,
+          invert: false,
+        }),
+      );
+      expect(maskRefs().mod2).toEqual(want.maskRefs?.mod2);
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+    });
+
+    it('replacing the source or editing the numbers keeps the mask id, and a text layer masks too', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierVectorMask('m', 'mod1', 'w', { featherPx: 9, expand: 0, invert: false });
+      await settle();
+      expect(maskRefs().r1).toEqual({
+        id: 'r1',
+        nodeId: 'w',
+        featherPx: 9,
+        expand: 0,
+        invert: false,
+      }); // document space again: a replace is the whole ref
+      await agrees();
+      state().setModifierVectorMask('m', 'mod1', 't', { featherPx: 1, expand: 0, invert: true });
+      await settle();
+      expect(maskRefs().r1.nodeId).toBe('t');
+      await agrees();
+      await undo();
+      expect(maskRefs().r1.nodeId).toBe('w');
+      await agrees();
+    });
+
+    it('a feather scrub inside a gesture is one undo step', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      transaction.beginTransaction();
+      for (const f of [4, 5, 6, 7]) {
+        state().setModifierVectorMask('m', 'mod1', 'v', {
+          featherPx: f,
+          expand: 1,
+          invert: true,
+          space: 'node',
+          attachTransform: ref().attachTransform,
+        });
+      }
+      transaction.endTransaction();
+      await settle();
+      expect(maskRefs().r1.featherPx).toBe(7);
+      await agrees();
+      await undo();
+      expect(maskRefs().r1).toEqual(ref());
+      await agrees();
+    });
+
+    it('sends nothing for a source that cannot mask, a locked layer or a missing modifier', async () => {
+      const { nodes, extra } = scene();
+      await withOps(
+        nodes.map((n) => (n.id === 'z' ? { ...n, state: 'locked' as const } : n)),
+        extra,
+      );
+      const numbers = { featherPx: 1, expand: 0, invert: false };
+      expect(state().setModifierVectorMask('m', 'mod2', 'z', numbers)).toBe('mod2'); // a pixel layer
+      expect(state().setModifierVectorMask('m', 'mod2', 'nope', numbers)).toBe('mod2');
+      expect(state().setModifierVectorMask('m', 'nope', 'v', numbers)).toBe('nope');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it('detaches the mask and keeps the layer, as the store does', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().removeModifierMask('m', 'mod1');
+      expect(modifiers('m')[0].maskId).toBe('r1'); // nothing local yet
+      await settle();
+      expect(host.runs[0]).toMatchObject({ id: 'mask.detach', payload: { at: '/layers/m/mod1' } });
+      expect(modifiers('m')[0].maskId).toBeUndefined();
+      expect(maskRefs()).toEqual({});
+      expect(node('v')).toBeDefined();
+      await agrees();
+      await undo();
+      expect(maskRefs()).toEqual({ r1: ref() });
+      await agrees();
+    });
+
+    it('detaching a modifier that has no mask sends nothing', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().removeModifierMask('m', 'mod2');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it("Follows Layer switches space as the store's setMaskSpace does, and agrees", async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setMaskSpace('m', 'mod1', 'document');
+      await settle();
+      const asDocument = plainResult(nodes, extra, () =>
+        originals.setMaskSpace('m', 'mod1', 'document'),
+      );
+      expect(maskRefs().r1).toEqual(asDocument.maskRefs?.r1);
+      expect(maskRefs().r1.space).toBeUndefined();
+      await agrees();
+      // the layer moves, then follows again: the snapshot is the transform now
+      state().setNodeTransform('m', T(77));
+      await settle();
+      state().setMaskSpace('m', 'mod1', 'node');
+      await settle();
+      expect(maskRefs().r1.space).toBe('node');
+      expect(maskRefs().r1.attachTransform).toEqual(T(77));
+      await agrees();
+      await undo();
+      expect(maskRefs().r1.space).toBeUndefined();
+      await agrees();
+    });
+
+    it('is a no-op, sending nothing, when the mask is already in that space or there is none', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setMaskSpace('m', 'mod1', 'node'); // r1 is node-pinned already
+      state().setMaskSpace('m', 'mod2', 'node'); // no mask
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it('a locked consumer sends nothing for any of them', async () => {
+      const { nodes, extra } = scene();
+      await withOps(
+        nodes.map((n) => (n.id === 'm' ? { ...n, state: 'locked' as const } : n)),
+        extra,
+      );
+      state().setModifierVectorMask('m', 'mod1', 'w', { featherPx: 1, expand: 0, invert: false });
+      state().removeModifierMask('m', 'mod1');
+      state().setMaskSpace('m', 'mod1', 'document');
+      state().removeModifier('m', 'mod1');
+      state().reorderModifier('m', 'mod1', 1);
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+  });
+
+  describe('Mask from Selection (mask.from_marquee)', () => {
+    const rect = { kind: 'rect', rect: { x: 10, y: 20, w: 30, h: 40 } } as const;
+    const params = { featherPx: 2, expand: 1, invert: false };
+    const withModifier = () =>
+      pixel('a', {
+        transform2d: { x: 30, y: 40, scaleX: 1, scaleY: 1, rotation: 0 },
+        modifiers: [{ id: 'mod1', type: 'blur', enabled: true, params: { radius: 5 } }],
+      });
+
+    it('is one command and one undo step, and agrees', async () => {
+      await withOps([withModifier(), pixel('b')]);
+      const made = state().applyMarqueeAsVectorMask('a', 'mod1', rect, params);
+      expect(made).toBeDefined();
+      const sel = made?.vectorNodeId as string;
+      // local first: the hidden layer is on top and bound at once
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([sel, 'a', 'b']);
+      expect(node(sel)?.visible).toBe(false);
+      expect(node(sel)?.label).toBe('Selection (rect)');
+      await settle();
+      // the whole edit is one command, not an add, an attach and a remove
+      expect(sent()).toEqual(['mask.from_marquee']);
+      expect(host.runs[0].payload).toMatchObject({
+        at: '/layers/a/mod1',
+        vectorId: sel,
+        fillRule: 'nonzero',
+        label: 'Selection (rect)',
+        ...params,
+      });
+      expect(maskRefs().mod1).toEqual({
+        id: 'mod1',
+        nodeId: sel,
+        ...params,
+        space: 'node',
+        attachTransform: { x: 30, y: 40, scaleX: 1, scaleY: 1, rotation: 0 },
+      });
+      await agrees();
+      await undo();
+      expect(state().scene.nodes.map((n) => n.id)).toEqual(['a', 'b']); // one step took it all back
+      expect(maskRefs()).toEqual({});
+      await agrees();
+      await redo();
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([sel, 'a', 'b']);
+      await agrees();
+    });
+
+    it('replaces an orphaned selection layer in the same step', async () => {
+      await withOps([withModifier()]);
+      const first = state().applyMarqueeAsVectorMask('a', 'mod1', rect, params)?.vectorNodeId;
+      await settle();
+      const second = state().applyMarqueeAsVectorMask(
+        'a',
+        'mod1',
+        { ...rect, kind: 'ellipse' },
+        params,
+      )?.vectorNodeId as string;
+      await settle();
+      expect(sent()).toEqual(['mask.from_marquee', 'mask.from_marquee']);
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([second, 'a']); // the old one went
+      expect(node(first as string)).toBeUndefined();
+      expect(maskRefs().mod1.nodeId).toBe(second);
+      await agrees();
+      await undo(); // one step: the old selection layer is back and bound
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([first, 'a']);
+      expect(maskRefs().mod1.nodeId).toBe(first);
+      await agrees();
+    });
+
+    it('keeps a layer the user made or one another modifier shares', async () => {
+      await withOps([withModifier(), vectorLayer('shape', { label: 'My shape' })]);
+      state().setModifierVectorMask('a', 'mod1', 'shape', params);
+      await settle();
+      const sel = state().applyMarqueeAsVectorMask('a', 'mod1', rect, params)?.vectorNodeId;
+      await settle();
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([sel, 'a', 'shape']);
+      await agrees();
+    });
+
+    it('a locked consumer returns undefined and sends nothing', async () => {
+      await withOps([{ ...withModifier(), state: 'locked' }]);
+      expect(state().applyMarqueeAsVectorMask('a', 'mod1', rect, params)).toBeUndefined();
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(state().scene.nodes).toHaveLength(1);
+    });
+  });
+});
+
 describe('refusing what has not moved', () => {
   it('toasts and changes nothing for an action rhizome does not carry', async () => {
     await setup([pixel('a')]);
     const before = state().scene;
     void state().lockNode('a', async () => ({}) as ImageBitmap);
-    state().addModifier('a', 'blur', {});
+    state().setNote('hello');
     await settle();
     expect(state().scene).toBe(before);
     expect(host.runs).toHaveLength(0);

@@ -24,6 +24,7 @@ use super::{
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
     OpParam {
         name: name.into(),
+        label: None,
         kind: kind.into(),
         default,
         min,
@@ -40,6 +41,7 @@ fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f6
 fn catalogue() -> Arc<Catalogue> {
     Arc::new(Catalogue(vec![Op {
         name: "blur".into(),
+        label: None,
         params: vec![
             param("radius", "float", json!(5.0), Some(0.0), Some(100.0)),
             param("steps", "int", json!(3), Some(1.0), Some(10.0)),
@@ -607,6 +609,7 @@ fn an_op_param_named_enabled_cannot_clash_with_the_modifiers_switch() {
     let d = Document::<Oblique>::new_in(
         Arc::new(Catalogue(vec![Op {
             name: "odd".into(),
+            label: None,
             params: vec![param("enabled", "bool", json!(false), None, None)],
         }])),
         MemoryStore::default(),
@@ -1868,6 +1871,846 @@ fn duplicate_refuses_a_taken_id_and_ids_that_do_not_match_the_modifiers() {
     assert_eq!(d.tree().history_len(), steps);
 }
 
+// ---- modifiers and masks: modifier.* and mask.* ----
+
+fn run(d: &mut Document<Oblique>, id: &str, args: Json) -> rhizome_pom::Result<Outcome> {
+    d.run(id, &args)
+}
+
+/// The names of a layer's modifiers, in its `modifiers` order.
+fn modifier_names(d: &Document<Oblique>, layer: &str) -> Vec<String> {
+    d.tree()
+        .at(layer)
+        .unwrap()
+        .order("modifiers")
+        .iter()
+        .map(|n| n.name().to_string())
+        .collect()
+}
+
+/// A pixel layer `a` with a modifier per id, none masked.
+fn with_modifiers(d: &mut Document<Oblique>, ids: &[&str]) {
+    let mut n = node("a", "pixel");
+    n["modifiers"] = json!(ids
+        .iter()
+        .map(|id| json!({"id": id, "type": "blur", "enabled": true, "params": {}}))
+        .collect::<Vec<_>>());
+    add(d, n).unwrap();
+}
+
+/// A catalogue whose ops and params have panel labels, as `list_ops` reports them.
+fn labelled() -> Document<Oblique> {
+    let mut radius = param("radius", "float", json!(5.0), Some(0.0), Some(100.0));
+    radius.label = Some("Blur radius".into());
+    Document::new_in(
+        Arc::new(Catalogue(vec![Op {
+            name: "gaussian_blur".into(),
+            label: Some("Gaussian blur".into()),
+            params: vec![radius],
+        }])),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn modifier_add_appends_last_with_every_param_written_in_one_undo_step() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("b", "pixel")).unwrap();
+    is_one_undo_step(&mut d, "Add Blur", |d| {
+        run(
+            d,
+            "modifier.add",
+            json!({"at": "/layers/a", "id": "m2", "type": "blur"}),
+        )
+        .unwrap();
+        assert_eq!(modifier_names(d, "/layers/a"), ["m1", "m2"]);
+        // every param is stored, not read through its default: the row names what it holds
+        let n = d.tree().at("/layers/a/m2").unwrap();
+        for (k, v) in [
+            ("enabled", Value::Bool(true)),
+            ("params.radius", Value::Float(5.0)),
+            ("params.steps", Value::Int(3)),
+            ("params.gain", Value::Float(1.0)),
+            ("params.mode", Value::Choice("soft".into())),
+            ("params.tint", Value::Text("#ff0000".into())),
+            ("params.on", Value::Bool(true)),
+        ] {
+            assert_eq!(n.value(k), Some(v), "{k}");
+            assert!(n.is_set(k), "{k} is stored");
+        }
+    });
+    // the first modifier of a layer makes its order
+    run(
+        &mut d,
+        "modifier.add",
+        json!({"at": "/layers/b", "id": "x", "type": "blur"}),
+    )
+    .unwrap();
+    assert_eq!(modifier_names(&d, "/layers/b"), ["x"]);
+}
+
+#[test]
+fn modifier_add_takes_the_params_a_duplicate_modifier_carries() {
+    let mut d = doc();
+    with_modifiers(&mut d, &[]);
+    run(
+        &mut d,
+        "modifier.add",
+        json!({"at": "/layers/a", "id": "m", "type": "blur",
+               "params": {"radius": 250.0, "steps": 99, "mode": "hard"}}),
+    )
+    .unwrap();
+    let m = "/layers/a/m";
+    // past the soft max is kept; what it didn't name is the default
+    assert_eq!(value(&d, m, "params.radius"), Some(Value::Float(250.0)));
+    assert_eq!(value(&d, m, "params.steps"), Some(Value::Int(99)));
+    assert_eq!(
+        value(&d, m, "params.mode"),
+        Some(Value::Choice("hard".into()))
+    );
+    assert_eq!(value(&d, m, "params.gain"), Some(Value::Float(1.0)));
+}
+
+#[test]
+fn modifier_add_refuses_what_it_cannot_make_and_changes_nothing() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for (args, why) in [
+        (
+            json!({"at": "/layers/a", "id": "m1", "type": "blur"}),
+            "an id that is taken",
+        ),
+        (
+            json!({"at": "/layers/a", "id": "n", "type": "no_such_op"}),
+            "an op the catalogue lacks",
+        ),
+        (
+            json!({"at": "/layers/nope", "id": "n", "type": "blur"}),
+            "a layer that isn't there",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "id": "n", "type": "blur"}),
+            "a modifier as the layer",
+        ),
+        (
+            json!({"at": "/layers/a", "id": "n", "type": "blur", "params": {"nope": 1}}),
+            "a param the op lacks",
+        ),
+        (
+            json!({"at": "/layers/a", "id": "n", "type": "blur", "params": {"radius": -1.0}}),
+            "a param under its min",
+        ),
+        (
+            json!({"at": "/layers/a", "id": "n", "type": "blur", "params": {"radius": "wide"}}),
+            "a param of the wrong type",
+        ),
+    ] {
+        assert!(run(&mut d, "modifier.add", args).is_err(), "{why}");
+        assert_eq!(d.tree().serialise(), before, "{why}");
+        assert_eq!(d.tree().history_len(), steps, "{why}");
+    }
+}
+
+#[test]
+fn modifier_steps_are_named_for_the_op_and_param_labels() {
+    let mut d = labelled();
+    add(&mut d, node("a", "pixel")).unwrap();
+    run(
+        &mut d,
+        "modifier.add",
+        json!({"at": "/layers/a", "id": "m", "type": "gaussian_blur"}),
+    )
+    .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Add Gaussian blur"));
+    run(
+        &mut d,
+        "modifier.set",
+        json!({"at": "/layers/a/m", "key": "params.radius", "value": 9.0}),
+    )
+    .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Set Blur radius"));
+    // without a label the name is made readable
+    let mut d = doc();
+    with_modifiers(&mut d, &["m"]);
+    run(
+        &mut d,
+        "modifier.set",
+        json!({"at": "/layers/a/m", "key": "params.radius", "value": 9.0}),
+    )
+    .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Set Radius"));
+}
+
+#[test]
+fn modifier_remove_drops_its_mask_and_keeps_the_layer_that_was_the_mask() {
+    let mut d = doc();
+    with_masks(
+        &mut d,
+        placed("a"),
+        &[("r1", Json::Null), ("r2", Json::Null)],
+    );
+    is_one_undo_step(&mut d, "Remove Modifier", |d| {
+        run(d, "modifier.remove", json!({"at": "/layers/a/m1"})).unwrap();
+        assert_eq!(modifier_names(d, "/layers/a"), ["m2"]);
+        assert!(d.tree().at("/layers/a/m1").is_none());
+        // the shape stays, and the other modifier still uses it
+        assert_eq!(stack(d), ["v", "a"]);
+        assert_eq!(masks_of(d, "/layers/a/m2"), [("v".into(), "r2".into())]);
+        assert!(d.tree().at("/layers/v").unwrap().bound_to().len() == 1);
+    });
+    // the last modifier takes the order with it
+    run(&mut d, "modifier.remove", json!({"at": "/layers/a/m2"})).unwrap();
+    assert!(modifier_names(&d, "/layers/a").is_empty());
+    assert!(d.tree().at("/layers/v").unwrap().bound_to().is_empty());
+}
+
+#[test]
+fn the_modifier_commands_refuse_what_is_not_a_modifier() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let before = d.tree().serialise();
+    for (id, args) in [
+        ("modifier.remove", json!({"at": "/layers/a"})),
+        ("modifier.remove", json!({"at": "/document/document"})),
+        ("modifier.reorder", json!({"at": "/layers/a", "to": 0})),
+        (
+            "modifier.set",
+            json!({"at": "/layers/a", "key": "enabled", "value": false}),
+        ),
+        ("mask.detach", json!({"at": "/layers/a"})),
+        (
+            "mask.set_space",
+            json!({"at": "/layers/a", "space": "node"}),
+        ),
+    ] {
+        let e = run(&mut d, id, args).unwrap_err();
+        assert!(e.to_string().contains("isn't a modifier"), "{id}: {e}");
+    }
+    // and layer.remove still refuses a modifier (story 3)
+    assert!(remove(&mut d, "/layers/a/m1").is_err());
+    assert_eq!(d.tree().serialise(), before);
+}
+
+#[test]
+fn modifier_reorder_matches_the_stores_for_top_bottom_and_middle_moves() {
+    let ids = ["m1", "m2", "m3", "m4"];
+    for from in 0..4usize {
+        for to in 0..4usize {
+            let mut d = doc();
+            with_modifiers(&mut d, &ids);
+            let mut want: Vec<&str> = ids.to_vec();
+            let moved = want.remove(from);
+            want.insert(to, moved);
+            let at = format!("/layers/a/{}", ids[from]);
+            let r = run(&mut d, "modifier.reorder", json!({"at": at, "to": to}));
+            assert_eq!(modifier_names(&d, "/layers/a"), want, "{from} -> {to}");
+            if from == to {
+                assert_eq!(r.unwrap(), Outcome::Nothing, "no move is no step");
+            }
+        }
+    }
+    let mut d = doc();
+    with_modifiers(&mut d, &ids);
+    is_one_undo_step(&mut d, "Move Modifier", |d| {
+        run(
+            d,
+            "modifier.reorder",
+            json!({"at": "/layers/a/m4", "to": 0}),
+        )
+        .unwrap();
+        assert_eq!(modifier_names(d, "/layers/a"), ["m4", "m1", "m2", "m3"]);
+    });
+    // out of range clamps to the nearest end
+    run(
+        &mut d,
+        "modifier.reorder",
+        json!({"at": "/layers/a/m1", "to": 99}),
+    )
+    .unwrap();
+    assert_eq!(modifier_names(&d, "/layers/a"), ["m4", "m2", "m3", "m1"]);
+    run(
+        &mut d,
+        "modifier.reorder",
+        json!({"at": "/layers/a/m1", "to": -5}),
+    )
+    .unwrap();
+    assert_eq!(modifier_names(&d, "/layers/a"), ["m1", "m4", "m2", "m3"]);
+}
+
+#[test]
+fn modifier_set_keeps_a_value_past_the_soft_max_and_refuses_the_wrong_type_or_a_hard_min() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m"]);
+    let m = "/layers/a/m";
+    let set_m = |d: &mut Document<Oblique>, key: &str, v: Json| {
+        run(d, "modifier.set", json!({"at": m, "key": key, "value": v}))
+    };
+    set_m(&mut d, "params.radius", json!(250.0)).unwrap();
+    set_m(&mut d, "params.steps", json!(99)).unwrap();
+    assert_eq!(value(&d, m, "params.radius"), Some(Value::Float(250.0)));
+    assert_eq!(value(&d, m, "params.steps"), Some(Value::Int(99)));
+    // an integer-looking number is a float for a float param
+    set_m(&mut d, "params.gain", json!(2)).unwrap();
+    assert_eq!(value(&d, m, "params.gain"), Some(Value::Float(2.0)));
+
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for (key, v, why) in [
+        ("params.radius", json!("wide"), "text for a float"),
+        ("params.steps", json!(2.5), "a fraction for an int"),
+        ("params.on", json!(1), "a number for a bool"),
+        ("params.mode", json!("medium"), "an unknown choice"),
+        ("params.radius", json!(-0.5), "under the hard min"),
+        ("enabled", json!("yes"), "text for the switch"),
+        ("params.nope", json!(1), "a param the op lacks"),
+        ("radius", json!(1.0), "a bare name"),
+        ("label", json!("x"), "a key that isn't the modifier's"),
+        ("state", json!("locked"), "a key that isn't the modifier's"),
+    ] {
+        assert!(set_m(&mut d, key, v).is_err(), "{why}");
+        assert_eq!(d.tree().serialise(), before, "{why}");
+        assert_eq!(d.tree().history_len(), steps, "{why}");
+    }
+}
+
+#[test]
+fn modifier_set_covers_enabled_and_names_the_step() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m"]);
+    is_one_undo_step(&mut d, "Disable Modifier", |d| {
+        run(
+            d,
+            "modifier.set",
+            json!({"at": "/layers/a/m", "key": "enabled", "value": false}),
+        )
+        .unwrap();
+        assert_eq!(value(d, "/layers/a/m", "enabled"), Some(Value::Bool(false)));
+    });
+    run(
+        &mut d,
+        "modifier.set",
+        json!({"at": "/layers/a/m", "key": "enabled", "value": true}),
+    )
+    .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Enable Modifier"));
+}
+
+#[test]
+fn a_param_scrub_inside_a_gesture_is_one_undo_step() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m"]);
+    let steps = d.tree().history_len();
+    let before = d.tree().serialise();
+    let g = d.begin("Edit").unwrap();
+    for r in 1..=8 {
+        run(
+            &mut d,
+            "modifier.set",
+            json!({"at": "/layers/a/m", "key": "params.radius", "value": r as f64 * 10.0}),
+        )
+        .unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    assert_eq!(
+        value(&d, "/layers/a/m", "params.radius"),
+        Some(Value::Float(80.0))
+    );
+    d.undo().unwrap();
+    assert_eq!(
+        d.tree().serialise(),
+        before,
+        "one undo takes back the whole scrub"
+    );
+}
+
+#[test]
+fn every_modifier_and_mask_command_refuses_a_locked_consumer_and_changes_nothing() {
+    let mut d = doc();
+    with_masks(
+        &mut d,
+        placed("a"),
+        &[("r1", Json::Null), ("r2", Json::Null)],
+    );
+    add(&mut d, node("w", "vector")).unwrap();
+    lock(&mut d, "/layers/a");
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for (id, args) in [
+        (
+            "modifier.add",
+            json!({"at": "/layers/a", "id": "n", "type": "blur"}),
+        ),
+        ("modifier.remove", json!({"at": "/layers/a/m1"})),
+        ("modifier.reorder", json!({"at": "/layers/a/m1", "to": 1})),
+        (
+            "modifier.set",
+            json!({"at": "/layers/a/m1", "key": "params.radius", "value": 9.0}),
+        ),
+        (
+            "modifier.set",
+            json!({"at": "/layers/a/m1", "key": "enabled", "value": false}),
+        ),
+        (
+            "mask.attach",
+            json!({"at": "/layers/a/m1", "source": "/layers/w",
+                   "featherPx": 1.0, "expand": 0.0, "invert": false}),
+        ),
+        ("mask.detach", json!({"at": "/layers/a/m1"})),
+        (
+            "mask.set_space",
+            json!({"at": "/layers/a/m1", "space": "node"}),
+        ),
+        (
+            "mask.from_marquee",
+            json!({"at": "/layers/a/m1", "vectorId": "sel", "paths": [],
+                   "fillRule": "evenodd", "label": "Selection (rect)",
+                   "featherPx": 0.0, "expand": 0.0, "invert": false}),
+        ),
+    ] {
+        let e = run(&mut d, id, args).unwrap_err();
+        assert!(e.to_string().contains("is locked"), "{id}: {e}");
+        assert_eq!(d.tree().serialise(), before, "{id}");
+        assert_eq!(d.tree().history_len(), steps, "{id}");
+    }
+    // the mask layer being locked is not the consumer's lock: it still attaches
+    unlock(&mut d, "/layers/a");
+    lock(&mut d, "/layers/w");
+    run(
+        &mut d,
+        "mask.attach",
+        json!({"at": "/layers/a/m1", "source": "/layers/w",
+               "featherPx": 1.0, "expand": 0.0, "invert": false}),
+    )
+    .unwrap();
+}
+
+fn unlock(d: &mut Document<Oblique>, at: &str) {
+    d.edit("Unlock", |tx| {
+        tx.set_value(at, "state", Value::Choice("active".into()))
+    })
+    .unwrap();
+}
+
+fn attach(
+    d: &mut Document<Oblique>,
+    at: &str,
+    source: &str,
+    feather: f64,
+) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "mask.attach",
+        json!({"at": at, "source": source, "featherPx": feather, "expand": 2.0, "invert": true}),
+    )
+}
+
+#[test]
+fn mask_attach_binds_the_slot_with_its_values_and_the_modifiers_own_id_as_the_ref() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("v", "vector")).unwrap();
+    add(&mut d, node("t", "text")).unwrap();
+    is_one_undo_step(&mut d, "Attach Mask", |d| {
+        attach(d, "/layers/a/m1", "/layers/v", 3.0).unwrap();
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("v".into(), "m1".into())]);
+        assert_eq!(mask_value(d, "/layers/a/m1", "featherPx"), json!(3.0));
+        assert_eq!(mask_value(d, "/layers/a/m1", "expand"), json!(2.0));
+        assert_eq!(mask_value(d, "/layers/a/m1", "invert"), json!(true));
+        // document space: the optional values read as unset
+        assert_eq!(mask_value(d, "/layers/a/m1", "space"), Json::Null);
+        assert_eq!(mask_value(d, "/layers/a/m1", "attachTransform"), Json::Null);
+    });
+    // a text layer masks too (Epic 20), and replaces the source: the slot holds one
+    attach(&mut d, "/layers/a/m1", "/layers/v", 3.0).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/t", 1.0).unwrap();
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("t".into(), "m1".into())]);
+    assert!(d.tree().at("/layers/v").unwrap().bound_to().is_empty());
+}
+
+#[test]
+fn mask_attach_with_the_same_source_is_the_edit_of_its_numbers_and_keeps_the_ref() {
+    let mut d = doc();
+    with_masks(
+        &mut d,
+        placed("a"),
+        &[(
+            "r1",
+            json!({"x": 5.0, "y": 6.0, "scaleX": 2.0, "scaleY": 1.5, "rotation": 0.4}),
+        )],
+    );
+    is_one_undo_step(&mut d, "Attach Mask", |d| {
+        run(
+            d,
+            "mask.attach",
+            json!({"at": "/layers/a/m1", "source": "/layers/v", "featherPx": 8.0,
+                   "expand": -1.0, "invert": true, "space": "node",
+                   "attachTransform": {"x": 5, "y": 6, "scaleX": 2, "scaleY": 1.5, "rotation": 0.4}}),
+        )
+        .unwrap();
+        // the ref it had, not a new one
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("v".into(), "r1".into())]);
+        assert_eq!(mask_value(d, "/layers/a/m1", "featherPx"), json!(8.0));
+        assert_eq!(mask_value(d, "/layers/a/m1", "space"), json!("node"));
+        assert_eq!(attach_of(d, "/layers/a/m1").scale_x, 2.0);
+    });
+    // a scrub of the feather in a gesture is one step
+    let steps = d.tree().history_len();
+    let g = d.begin("Edit").unwrap();
+    for f in [1.0, 2.0, 3.0] {
+        attach(&mut d, "/layers/a/m1", "/layers/v", f).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+}
+
+#[test]
+fn mask_attach_refuses_a_source_that_cannot_mask_and_changes_nothing() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("p", "pixel")).unwrap();
+    add(&mut d, node("v", "vector")).unwrap();
+    let before = d.tree().serialise();
+    for (source, why) in [
+        ("/layers/p", "a pixel layer"),
+        ("/layers/nope", "a layer that isn't there"),
+        ("/layers/a/m1", "a modifier"),
+    ] {
+        assert!(
+            attach(&mut d, "/layers/a/m1", source, 1.0).is_err(),
+            "{why}"
+        );
+    }
+    assert!(attach(&mut d, "/layers/a", "/layers/v", 1.0).is_err());
+    assert!(run(
+        &mut d,
+        "mask.attach",
+        json!({"at": "/layers/a/m1", "source": "/layers/v", "featherPx": 1.0, "expand": 0.0,
+               "invert": false, "space": "sideways"}),
+    )
+    .is_err());
+    assert_eq!(d.tree().serialise(), before);
+}
+
+#[test]
+fn mask_detach_takes_the_binding_and_keeps_the_source_layer() {
+    let mut d = doc();
+    with_masks(&mut d, placed("a"), &[("r1", Json::Null)]);
+    is_one_undo_step(&mut d, "Remove Mask", |d| {
+        run(d, "mask.detach", json!({"at": "/layers/a/m1"})).unwrap();
+        assert!(masks_of(d, "/layers/a/m1").is_empty());
+        assert_eq!(stack(d), ["v", "a"]);
+    });
+    // no mask, nothing to take
+    let steps = d.tree().history_len();
+    assert!(run(&mut d, "mask.detach", json!({"at": "/layers/a/m1"})).is_err());
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn mask_set_space_snapshots_the_consumers_transform_or_clears_it() {
+    let mut d = doc();
+    with_masks(&mut d, placed("a"), &[("r1", Json::Null)]);
+    let space = |d: &mut Document<Oblique>, s: &str| {
+        run(
+            d,
+            "mask.set_space",
+            json!({"at": "/layers/a/m1", "space": s}),
+        )
+    };
+    is_one_undo_step(&mut d, "Mask Follows Layer", |d| {
+        space(d, "node").unwrap();
+        assert_eq!(mask_value(d, "/layers/a/m1", "space"), json!("node"));
+        near_placement(
+            attach_of(d, "/layers/a/m1"),
+            Placement {
+                x: 100.0,
+                y: 40.0,
+                scale_x: -1.0,
+                scale_y: 1.0,
+                rotation: 0.3,
+            },
+        );
+        // the ref and the numbers stay as they were
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("v".into(), "r1".into())]);
+    });
+    // already following: no change, no step
+    space(&mut d, "node").unwrap();
+    let steps = d.tree().history_len();
+    assert_eq!(space(&mut d, "node").unwrap(), Outcome::Nothing);
+    assert_eq!(d.tree().history_len(), steps);
+    // the layer moves; switching on again after off takes the new transform
+    is_one_undo_step(&mut d, "Mask Follows Layer", |d| {
+        space(d, "document").unwrap();
+        assert_eq!(mask_value(d, "/layers/a/m1", "space"), Json::Null);
+        assert_eq!(mask_value(d, "/layers/a/m1", "attachTransform"), Json::Null);
+    });
+    set(
+        &mut d,
+        "/layers/a",
+        "transform2d.position",
+        json!([7.0, 8.0]),
+    )
+    .unwrap();
+    space(&mut d, "node").unwrap();
+    assert_eq!(attach_of(&d, "/layers/a/m1").x, 7.0);
+    // document-space already: nothing to do
+    space(&mut d, "document").unwrap();
+    assert_eq!(space(&mut d, "document").unwrap(), Outcome::Nothing);
+    // an unmoved consumer snapshots the identity
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("v", "vector")).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/v", 0.0).unwrap();
+    space(&mut d, "node").unwrap();
+    near_placement(attach_of(&d, "/layers/a/m1"), identity());
+}
+
+#[test]
+fn mask_set_space_refuses_no_mask_and_an_unknown_space() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let before = d.tree().serialise();
+    for s in ["node", "document", "sideways"] {
+        assert!(run(
+            &mut d,
+            "mask.set_space",
+            json!({"at": "/layers/a/m1", "space": s})
+        )
+        .is_err());
+    }
+    assert_eq!(d.tree().serialise(), before);
+}
+
+fn marquee(
+    d: &mut Document<Oblique>,
+    at: &str,
+    id: &str,
+    label: &str,
+) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "mask.from_marquee",
+        json!({"at": at, "vectorId": id, "label": label, "fillRule": "evenodd",
+               "paths": [{"anchors": [{"point": {"x": 1.0, "y": 2.0}}], "closed": true}],
+               "featherPx": 4.0, "expand": -2.0, "invert": true}),
+    )
+}
+
+#[test]
+fn mask_from_marquee_makes_the_hidden_layer_and_the_binding_in_one_undo_step() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("b", "pixel")).unwrap();
+    set(
+        &mut d,
+        "/layers/a",
+        "transform2d.position",
+        json!([30.0, 40.0]),
+    )
+    .unwrap();
+    is_one_undo_step(&mut d, "Mask from Selection", |d| {
+        marquee(d, "/layers/a/m1", "sel", "Selection (rect)").unwrap();
+        // on top of the stack, hidden, an image output, as the store's addVectorNode makes it
+        assert_eq!(stack(d), ["sel", "b", "a"]);
+        assert_eq!(
+            value(d, "/layers/sel", "label"),
+            Some(Value::Text("Selection (rect)".into()))
+        );
+        assert_eq!(value(d, "/layers/sel", "visible"), Some(Value::Bool(false)));
+        assert_eq!(
+            value(d, "/layers/sel", "output"),
+            Some(Value::Choice("image".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/sel", "fillRule"),
+            Some(Value::Choice("evenodd".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/sel", "state"),
+            Some(Value::Choice("active".into()))
+        );
+        // bound node-pinned, with the consumer's transform now
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("sel".into(), "m1".into())]);
+        assert_eq!(mask_value(d, "/layers/a/m1", "space"), json!("node"));
+        near_placement(
+            attach_of(d, "/layers/a/m1"),
+            Placement {
+                x: 30.0,
+                y: 40.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+                rotation: 0.0,
+            },
+        );
+        assert_eq!(mask_value(d, "/layers/a/m1", "featherPx"), json!(4.0));
+        assert_eq!(mask_value(d, "/layers/a/m1", "expand"), json!(-2.0));
+        assert_eq!(mask_value(d, "/layers/a/m1", "invert"), json!(true));
+    });
+}
+
+#[test]
+fn the_replace_rule_removes_an_orphaned_selection_layer_in_the_same_step() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    marquee(&mut d, "/layers/a/m1", "s1", "Selection (rect)").unwrap();
+    is_one_undo_step(&mut d, "Mask from Selection", |d| {
+        marquee(d, "/layers/a/m1", "s2", "Selection (ellipse)").unwrap();
+        // the old selection layer went; the mask keeps its ref
+        assert_eq!(stack(d), ["s2", "a"]);
+        assert!(d.tree().at("/layers/s1").is_none());
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("s2".into(), "m1".into())]);
+    });
+    // the colour and segment tools label theirs their own way
+    marquee(&mut d, "/layers/a/m1", "s3", "Selection (colour)").unwrap();
+    marquee(&mut d, "/layers/a/m1", "s4", "Selection (segment)").unwrap();
+    assert_eq!(stack(&d), ["s4", "a"]);
+}
+
+#[test]
+fn the_replace_rule_keeps_a_shared_or_user_made_layer() {
+    // shared: a second modifier still uses the old selection
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1", "m2"]);
+    marquee(&mut d, "/layers/a/m1", "s1", "Selection (rect)").unwrap();
+    attach(&mut d, "/layers/a/m2", "/layers/s1", 0.0).unwrap();
+    marquee(&mut d, "/layers/a/m1", "s2", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s2", "s1", "a"]);
+    assert_eq!(masks_of(&d, "/layers/a/m2"), [("s1".into(), "m2".into())]);
+
+    // user-made: a layer whose label isn't ours
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let mut shape = node("shape", "vector");
+    shape["label"] = json!("My shape");
+    add(&mut d, shape).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/shape", 0.0).unwrap();
+    marquee(&mut d, "/layers/a/m1", "s1", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s1", "shape", "a"]);
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("s1".into(), "m1".into())]);
+
+    // a first mask has nothing to replace
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("other", "vector")).unwrap();
+    marquee(&mut d, "/layers/a/m1", "s1", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s1", "other", "a"]);
+}
+
+#[test]
+fn mask_from_marquee_refuses_a_taken_id_and_a_bad_target_and_changes_nothing() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    assert!(marquee(&mut d, "/layers/a/m1", "a", "Selection (rect)").is_err());
+    assert!(marquee(&mut d, "/layers/a", "s1", "Selection (rect)").is_err());
+    assert!(marquee(&mut d, "/layers/a/nope", "s1", "Selection (rect)").is_err());
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn removing_the_mask_layer_after_a_marquee_prunes_the_binding() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    marquee(&mut d, "/layers/a/m1", "s1", "Selection (rect)").unwrap();
+    remove(&mut d, "/layers/s1").unwrap();
+    assert!(masks_of(&d, "/layers/a/m1").is_empty());
+    d.undo().unwrap();
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("s1".into(), "m1".into())]);
+}
+
+/// Every op in the sidecar's real catalogue: `modifier.add` stores each param as the
+/// catalogue's default, and an int default arrives as an int. Opt-in: needs `uv`.
+#[test]
+#[ignore = "reads the sidecar's real catalogue through uv"]
+fn modifier_add_stores_the_real_catalogues_defaults() {
+    let cx = real_catalogue();
+    let mut d =
+        Document::<Oblique>::new_in(cx.clone(), MemoryStore::default(), IdSource::sequential())
+            .unwrap();
+    add(&mut d, node("a", "pixel")).unwrap();
+    for (i, op) in cx.0.iter().enumerate() {
+        let id = format!("m{i}");
+        run(
+            &mut d,
+            "modifier.add",
+            json!({"at": "/layers/a", "id": id, "type": op.name}),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e}", op.name));
+        let n = d.tree().at(format!("/layers/a/{id}").as_str()).unwrap();
+        for p in &op.params {
+            let key = super::param_key(&p.name);
+            let got = n.value(&key).unwrap().to_json();
+            let want = match p.kind.as_str() {
+                "float" | "int" => json!(p.default.as_f64().unwrap()),
+                _ => p.default.clone(),
+            };
+            assert_eq!(
+                got.as_f64().map(|f| json!(f)).unwrap_or(got.clone()),
+                want,
+                "{}.{}",
+                op.name,
+                p.name
+            );
+            assert!(n.is_set(&key), "{}.{}", op.name, p.name);
+        }
+    }
+}
+
+#[test]
+fn the_updates_name_the_rows_the_webview_applies() {
+    // The webview's echo works from the rows an update carries: a modifier row for a value or
+    // a mask, the layer row for a changed order, and the removed row for a removal.
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1", "m2"]);
+    add(&mut d, node("v", "vector")).unwrap();
+    let rows = |d: &mut Document<Oblique>, id: &str, args: Json| {
+        let Outcome::Committed(c) = run(d, id, args).unwrap() else {
+            panic!("{id}: not committed")
+        };
+        let patch = d.tree().patch(&c.changes);
+        let mut paths: Vec<String> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+        paths.sort();
+        (paths, patch.removed.len())
+    };
+    let (paths, removed) = rows(
+        &mut d,
+        "modifier.add",
+        json!({"at": "/layers/a", "id": "m3", "type": "blur"}),
+    );
+    assert_eq!(paths, ["/layers/a", "/layers/a/m3"]);
+    assert_eq!(removed, 0);
+    let (paths, _) = rows(
+        &mut d,
+        "modifier.set",
+        json!({"at": "/layers/a/m1", "key": "params.radius", "value": 9.0}),
+    );
+    assert_eq!(paths, ["/layers/a/m1"]);
+    let (paths, _) = rows(
+        &mut d,
+        "mask.attach",
+        json!({"at": "/layers/a/m1", "source": "/layers/v", "featherPx": 1.0,
+               "expand": 0.0, "invert": false}),
+    );
+    assert_eq!(paths, ["/layers/a/m1"]);
+    let (paths, _) = rows(
+        &mut d,
+        "modifier.reorder",
+        json!({"at": "/layers/a/m3", "to": 0}),
+    );
+    assert_eq!(paths, ["/layers/a"]);
+    let (paths, removed) = rows(&mut d, "modifier.remove", json!({"at": "/layers/a/m2"}));
+    assert_eq!(paths, ["/layers/a"]);
+    assert_eq!(removed, 1);
+}
+
 // ---- POM built-ins that write the tree ----
 
 #[test]
@@ -1916,6 +2759,7 @@ fn pom_builtins_that_write_the_tree_refuse_and_change_nothing() {
 fn a_param_with_only_a_min_keeps_it_and_is_unbounded_above() {
     let ops = Op {
         name: "one_sided".into(),
+        label: None,
         params: vec![
             param("floor", "float", json!(2.0), Some(1.0), None),
             param("ceiling", "float", json!(2.0), None, Some(10.0)),

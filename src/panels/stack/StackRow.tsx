@@ -77,9 +77,12 @@ export function StackRow({
 
   function resetParams() {
     if (!descriptor || locked) return;
+    // one undo step for all the params (each has its own coalesce key inside a gesture)
+    beginTransaction();
     for (const spec of descriptor.params) {
       setModifierParam(node.id, modifier.id, spec.name, spec.default as number | string | boolean);
     }
+    endTransaction();
   }
 
   function duplicate() {
@@ -94,16 +97,14 @@ export function StackRow({
    * is node-pinned by default (mask-follows-node.md — it travels with the
    * layer; "Follows layer" switches it off) and editable forever with the pen
    * tool. One undo step: node creation + attach + replace-cleanup
-   * all land inside this transaction.
+   * are one command (`mask.from_marquee`).
    */
   function maskFromSelection() {
     if (locked) return;
     const state = useMarqueeStateStore.getState();
     const active = state.marquee;
     if (!isMaskableMarquee(active) || !active) return;
-    beginTransaction();
     applyMarqueeAsVectorMask(node.id, modifier.id, active, state.params);
-    endTransaction();
     // Consumed — same "no orphaned overlay state" rule as every other
     // marquee exit.
     state.clear();

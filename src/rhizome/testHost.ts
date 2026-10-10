@@ -1,7 +1,7 @@
 /**
  * A fake document host for the tests: the commands moved so far (`layer.add`, `layer.remove`,
  * `layer.reorder`, `layer.duplicate`, `values.set`, `text.set`, `document.set_size`,
- * `layer.set_source`, undo and redo, gestures), applied to rows built with the
+ * `layer.set_source`, `modifier.*`, `mask.*`, undo and redo, gestures), applied to rows built with the
  * adapter's `rowsFromScene`, and emitted as updates before the command answers, as Tauri
  * does. A stand-in for src-tauri/src/document, whose own tests hold the real rules.
  *
@@ -11,7 +11,7 @@
  */
 import { DUPLICATE_OFFSET_PX, textLabel } from '@/scene/store';
 import type { Scene, SceneNode } from '@/scene/types';
-import { layerPath, layerRows, rowsFromScene, val } from './adapter';
+import { layerPath, layerRows, modifierPath, PARAM_PREFIX, rowsFromScene, val } from './adapter';
 import type {
   Opened,
   Ran,
@@ -48,6 +48,8 @@ export class FakeHost implements RhizomeBackend {
   /** The commands run, with their payloads. */
   runs: { id: string; payload: unknown; coalesce?: string }[] = [];
   inited: unknown[] | null = null;
+  /** The op catalogue `init` was given: where `modifier.add` takes its defaults, as Rust does. */
+  catalogue: { name: string; params?: { name: string; default?: unknown }[] }[] = [];
   messages: string[] = [];
   /** The files, by path: what `saveAs` writes and `open` reads. Shared between hosts in a test. */
   disk = new Map<string, string>();
@@ -102,6 +104,7 @@ export class FakeHost implements RhizomeBackend {
   async init(ops: unknown[]): Promise<boolean> {
     this.trace.push('init');
     this.inited = ops;
+    this.catalogue = ops as { name: string; params?: { name: string; default?: unknown }[] }[];
     const held = this.heldOpen;
     this.heldOpen = null;
     if (!held) return false;
@@ -331,6 +334,80 @@ export class FakeHost implements RhizomeBackend {
             p.maskIds as (string | null)[],
           ),
         );
+      case 'modifier.add':
+        return this.commit('Add Modifier', () =>
+          this.addModifier(p.at as string, p.id as string, p.type as string, p.params),
+        );
+      case 'modifier.remove':
+        return this.commit('Remove Modifier', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          this.rows.delete(row.id);
+          this.setOrder(
+            layer,
+            this.modifierOrder(layer).filter((id) => id !== row.id),
+          );
+        });
+      case 'modifier.reorder': {
+        const { row, layer } = this.modifier(p.at as string);
+        this.unlocked(layer);
+        const order = this.modifierOrder(layer);
+        const to = Math.min(Math.max(p.to as number, 0), order.length - 1);
+        if (order.indexOf(row.id) === to) return 'nothing';
+        return this.commit('Move Modifier', () => {
+          order.splice(order.indexOf(row.id), 1);
+          order.splice(to, 0, row.id);
+          this.setOrder(layer, order);
+        });
+      }
+      case 'modifier.set':
+        return this.commit('Set Modifier', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          const key = p.key as string;
+          if (key !== 'enabled' && !key.startsWith(PARAM_PREFIX)) {
+            throw new Error(`${key} isn't a modifier value`);
+          }
+          if (key === 'enabled' && typeof p.value !== 'boolean') throw new Error('not a bool');
+          this.setValue(row, key, p.value);
+        });
+      case 'mask.attach':
+        return this.commit('Attach Mask', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          const source = this.at(p.source as string);
+          if (source.parent !== 'row:layers' || !['vector', 'text'].includes(source.type)) {
+            throw new Error(`${p.source} can't be a mask`);
+          }
+          this.bindMask(row, source, [p.featherPx, p.expand, p.invert] as never, {
+            space: p.space as string | undefined,
+            attach: p.attachTransform,
+          });
+        });
+      case 'mask.detach':
+        return this.commit('Remove Mask', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          if (!row.bindings?.length) throw new Error(`${p.at} has no mask`);
+          delete row.bindings;
+        });
+      case 'mask.set_space': {
+        const { row, layer } = this.modifier(p.at as string);
+        this.unlocked(layer);
+        const b = row.bindings?.[0];
+        if (!b) throw new Error(`${p.at} has no mask`);
+        if ((b.values?.space === 'node') === (p.space === 'node')) return 'nothing';
+        return this.commit('Mask Follows Layer', () => {
+          const source = this.rows.get(b.source) as Row;
+          const v = b.values ?? {};
+          this.bindMask(row, source, [v.featherPx, v.expand, v.invert] as never, {
+            space: p.space === 'node' ? 'node' : undefined,
+            attach: p.space === 'node' ? this.transformOf(layer) : undefined,
+          });
+        });
+      }
+      case 'mask.from_marquee':
+        return this.commit('Mask from Selection', () => this.maskFromMarquee(p));
       case 'document.set_size':
         return this.commit('Document Size', () => {
           this.setValue(this.at('/document/document'), 'documentSize', p.size);
@@ -452,6 +529,127 @@ export class FakeHost implements RhizomeBackend {
     for (const m of copies) this.rows.set(m.id, m);
     stack.splice(stack.indexOf(src.id), 0, copyId);
     this.at('/layers').orders = { stack };
+  }
+
+  /** The modifier row at `path` and the layer it belongs to. */
+  private modifier(path: string): { row: Row; layer: Row } {
+    const row = this.at(path);
+    const layer = row.parent ? this.rows.get(row.parent) : undefined;
+    if (layer?.parent !== 'row:layers' || !row.type.startsWith('op.')) {
+      throw new Error(`${path} isn't a modifier`);
+    }
+    return { row, layer };
+  }
+
+  private unlocked(layer: Row): void {
+    if (val(layer, 'state') === 'locked') throw new Error(`${layer.path} is locked`);
+  }
+
+  private modifierOrder(layer: Row): string[] {
+    return [...(layer.orders?.modifiers ?? [])];
+  }
+
+  private setOrder(layer: Row, order: string[]): void {
+    if (order.length > 0) layer.orders = { ...layer.orders, modifiers: order };
+    else if (layer.orders) {
+      const { modifiers: _gone, ...rest } = layer.orders;
+      layer.orders = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+  }
+
+  /** `modifier.add`: last in the order, every param written: the catalogue's default or `own`. */
+  private addModifier(path: string, id: string, type: string, own: unknown): void {
+    const layer = this.at(path);
+    if (layer.parent !== 'row:layers') throw new Error(`${path} isn't a layer`);
+    this.unlocked(layer);
+    const op = this.catalogue.find((o) => o.name === type);
+    if (!op) throw new Error(`no op ${type}`);
+    const row: Row = {
+      id: `row:modifier:${layer.name}:${id}`,
+      path: modifierPath(layer.name, id),
+      name: id,
+      type: `op.${type}`,
+      role: 'node',
+      parent: layer.id,
+    };
+    if (this.rows.has(row.id)) throw new Error(`${id} already exists`);
+    this.setValue(row, 'enabled', true);
+    for (const p of op.params ?? []) this.setValue(row, `${PARAM_PREFIX}${p.name}`, p.default);
+    for (const [name, v] of Object.entries((own ?? {}) as Record<string, unknown>)) {
+      if (!(op.params ?? []).some((p) => p.name === name)) throw new Error(`no param ${name}`);
+      this.setValue(row, `${PARAM_PREFIX}${name}`, v);
+    }
+    this.rows.set(row.id, row);
+    this.setOrder(layer, [...this.modifierOrder(layer), row.id]);
+  }
+
+  /** A layer's transform as a mask snapshots it: unmoved reads as the identity. */
+  private transformOf(layer: Row): unknown {
+    const [x, y] = (val(layer, 'transform2d.position') as [number, number] | undefined) ?? [0, 0];
+    const [scaleX, scaleY] = (val(layer, 'transform2d.scale') as [number, number] | undefined) ?? [
+      1, 1,
+    ];
+    const rotation = (val(layer, 'transform2d.rotation') as number | undefined) ?? 0;
+    return { x, y, scaleX, scaleY, rotation };
+  }
+
+  /** The mask slot bound from `source`: it keeps its `refId`, else takes the modifier's id. */
+  private bindMask(
+    modifier: Row,
+    source: Row,
+    [featherPx, expand, invert]: [number, number, boolean],
+    { space, attach }: { space?: string; attach?: unknown },
+  ): void {
+    const refId = (modifier.bindings?.[0]?.values?.refId as string | undefined) || modifier.name;
+    modifier.bindings = [
+      {
+        on: { slot: 'mask' },
+        source: source.id,
+        values: {
+          refId,
+          featherPx,
+          expand,
+          invert,
+          ...(space ? { space } : {}),
+          ...(attach ? { attachTransform: attach } : {}),
+        },
+      },
+    ];
+  }
+
+  /** `mask.from_marquee`: the hidden layer on top, the node-pinned binding, the replace rule. */
+  private maskFromMarquee(p: Record<string, unknown>): void {
+    const { row, layer } = this.modifier(p.at as string);
+    this.unlocked(layer);
+    const previous = row.bindings?.[0]?.source;
+    const id = p.vectorId as string;
+    if (this.rows.has(`row:layer:${id}`)) throw new Error(`${id} already exists`);
+    const node = {
+      id,
+      type: 'vector',
+      label: p.label,
+      state: 'active',
+      output: 'image',
+      visible: false,
+      blendMode: 'normal',
+      opacity: 1,
+      cameraId: null,
+      modifiers: [],
+      paths: p.paths,
+      fillRule: p.fillRule,
+    } as unknown as SceneNode;
+    const [vector] = layerRows(node, { maskRefs: {} } as Scene);
+    this.rows.set(vector.id, vector);
+    const layers = this.at('/layers');
+    layers.orders = { stack: [vector.id, ...(layers.orders?.stack ?? [])] };
+    this.bindMask(row, vector, [p.featherPx, p.expand, p.invert] as never, {
+      space: 'node',
+      attach: this.transformOf(layer),
+    });
+    const old = previous ? this.rows.get(previous) : undefined;
+    if (!old || old.id === vector.id || old.id === layer.id) return;
+    const used = [...this.rows.values()].some((r) => r.bindings?.some((b) => b.source === old.id));
+    if (!used && String(val(old, 'label')).startsWith('Selection (')) this.removeLayer(old.path);
   }
 
   /** One commit: the edit, the undo snapshot (one per gesture), and the update. */
