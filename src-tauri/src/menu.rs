@@ -33,19 +33,27 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     // Affinity's Document Setup chord (menu standard decision 11); Shift+Cmd+P stays Page Setup.
     ("file-document-settings", "CmdOrCtrl+Alt+P"),
     ("edit-duplicate", "CmdOrCtrl+D"),
+    // View > Left and Right Panel: the family's bracket pattern (menu standard decision 14).
+    // app-kit 0.1.2 has no constants or built-in slots for them yet (`shortcut::BACK` and
+    // `FORWARD` hold these two strings under their old names), so they are written out.
+    ("view-left-panel", "CmdOrCtrl+["),
+    ("view-right-panel", "CmdOrCtrl+]"),
     // View > Zoom (view-menu-zoom.md): Cmd+= rather than Cmd+Shift+= so Zoom In needs no Shift.
     ("view-zoom-in", shortcut::ZOOM_IN),
     ("view-zoom-out", shortcut::ZOOM_OUT),
-    // The family reserves Cmd+0 for zoom; here it fits the canvas, Cmd+1 is 100%.
+    // Fit in Window is Cmd+0 and Actual Size Opt+Cmd+0 (decision 4). Cmd+1 to Cmd+9 are modes
+    // across the family and stay unbound here until Oblique has some.
     ("view-fit", "CmdOrCtrl+0"),
-    ("view-actual", "CmdOrCtrl+1"),
+    ("view-actual", "CmdOrCtrl+Alt+0"),
     ("view-snap-layers", "CmdOrCtrl+;"),
-    // Layer order (drag-reorder.md). `Cmd+[` and `Cmd+]` mean Back and Forward in the family's
-    // menu standard (decision 3); Oblique keeps them for now, as the slice asks.
-    ("layer-forward", "CmdOrCtrl+]"),
-    ("layer-backward", "CmdOrCtrl+["),
-    ("layer-front", "CmdOrCtrl+Shift+]"),
-    ("layer-back", "CmdOrCtrl+Shift+["),
+    // Layer order (drag-reorder.md): Opt+Up and Opt+Down everywhere, Shift with them for the
+    // ends of the stack (menu standard decision 3). Forward is earlier in the stack, where
+    // index 0 is the top, so these are app-kit's `MOVE_EARLIER` and `MOVE_LATER`. Cmd+[ and
+    // Cmd+] are the side panels above, not layer order.
+    ("layer-forward", shortcut::MOVE_EARLIER),
+    ("layer-backward", shortcut::MOVE_LATER),
+    ("layer-front", "Alt+Shift+Up"),
+    ("layer-back", "Alt+Shift+Down"),
     // InDesign's chord (Epic 20 story 7).
     ("type-convert-outlines", "CmdOrCtrl+Shift+O"),
 ];
@@ -59,8 +67,8 @@ fn item(id: &str, label: &str) -> Command {
     }
 }
 
-/// View > Snap to Layers (snapping.md): a check item, on to start with. The webview's store
-/// mirrors it, and the menu is told its state back (`useMenuSync`).
+/// A check item, ticked to start with: View > Snap to Layers (snapping.md) and the two panels.
+/// The webview's store owns the state, and the menu is told it back (`useCommands`).
 fn toggle(id: &str, label: &str) -> Command {
     let c = Command::toggle(id, label);
     match SHORTCUTS.iter().find(|(i, _)| *i == id) {
@@ -85,13 +93,21 @@ pub fn commands() -> Vec<Command> {
         item("edit-duplicate", "Duplicate")
             .menu(MenuName::Edit)
             .section(1),
-        view("view-zoom-in", "Zoom In", 0),
-        view("view-zoom-out", "Zoom Out", 0),
-        view("view-fit", "Fit in Window", 1),
-        view("view-actual", "Actual Size", 1),
+        // The panels lead View, as the menu standard orders it. app-kit can only tick a check
+        // item, not retitle it, so the title is fixed and the tick says whether it is shown.
+        toggle("view-left-panel", "Show Left Panel")
+            .menu(MenuName::View)
+            .section(0),
+        toggle("view-right-panel", "Show Right Panel")
+            .menu(MenuName::View)
+            .section(0),
+        view("view-zoom-in", "Zoom In", 1),
+        view("view-zoom-out", "Zoom Out", 1),
+        view("view-fit", "Fit in Window", 2),
+        view("view-actual", "Actual Size", 2),
         toggle("view-snap-layers", "Snap to Layers")
             .menu(MenuName::View)
-            .section(2),
+            .section(3),
         layer("layer-forward", "Bring Forward", 0),
         layer("layer-backward", "Send Backward", 0),
         layer("layer-front", "Bring to Front", 1),
@@ -156,7 +172,8 @@ mod tests {
 
     /// What app-kit and macOS bind in the menu bar before Oblique adds anything: Undo, Redo,
     /// New, Open…, Save, Save As…, Settings…, Quit, Hide, Hide Others, Minimise, Close (File's),
-    /// Full Screen, Cut, Copy, Paste and Select All.
+    /// Full Screen, Cut, Copy, Paste and Select All. (`Cmd+[` and `Cmd+]` are not here: app-kit
+    /// 0.1.2's `BACK` and `FORWARD` are only constants, and nothing in the menu binds them.)
     const BUILT_IN: [&str; 17] = [
         "CmdOrCtrl+Z",
         "CmdOrCtrl+Shift+Z",
@@ -214,6 +231,31 @@ mod tests {
     }
 
     #[test]
+    fn the_chords_follow_the_menu_standards_2026_10_08_decisions() {
+        let chord = |id: &str| {
+            SHORTCUTS
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, a)| canonical(a))
+        };
+        assert_eq!(chord("view-actual").as_deref(), Some("CmdOrCtrl+Alt+0"));
+        assert_eq!(chord("view-left-panel").as_deref(), Some("CmdOrCtrl+["));
+        assert_eq!(chord("view-right-panel").as_deref(), Some("CmdOrCtrl+]"));
+        assert_eq!(chord("layer-forward").as_deref(), Some("Alt+Up"));
+        assert_eq!(chord("layer-backward").as_deref(), Some("Alt+Down"));
+        assert_eq!(chord("layer-front").as_deref(), Some("Alt+Shift+Up"));
+        assert_eq!(chord("layer-back").as_deref(), Some("Alt+Shift+Down"));
+        // Cmd+1 to Cmd+9 are modes, family-wide, and nothing here takes them.
+        for n in 1..=9 {
+            let digit = format!("CmdOrCtrl+{n}");
+            assert!(
+                SHORTCUTS.iter().all(|(_, a)| canonical(a) != digit),
+                "{digit} is bound"
+            );
+        }
+    }
+
+    #[test]
     fn every_id_the_webview_binds_is_still_on_the_table() {
         let table = commands();
         let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
@@ -228,6 +270,8 @@ mod tests {
             "view-fit",
             "view-actual",
             "view-snap-layers",
+            "view-left-panel",
+            "view-right-panel",
             "layer-forward",
             "layer-backward",
             "layer-front",

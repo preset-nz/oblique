@@ -37,6 +37,7 @@ import {
   rectFromDrag,
 } from './marquees/marqueeGeometry';
 import { RectMarquee } from './marquees/RectMarquee';
+import { nudgeDirection } from './nudge';
 import {
   blitScene,
   computeBufferSize,
@@ -71,14 +72,6 @@ import { panBy, screenToDoc, useViewTransformStore, type ViewTransform } from '.
 const SMART_SELECT_DRAG_SCREEN_PX = 4;
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
-
-/** Document-px direction per arrow key for the selected-node nudge. */
-const NUDGE_DELTA: Record<string, [number, number]> = {
-  ArrowLeft: [-1, 0],
-  ArrowRight: [1, 0],
-  ArrowUp: [0, -1],
-  ArrowDown: [0, 1],
-};
 
 /** Screen-space "snap closed" radius for the lasso's return-to-start check — converted to a document-space threshold via the live view scale so it feels constant at any zoom (marqueeGeometry.ts's `isNearStart` itself is pure document-space). */
 const LASSO_CLOSE_SCREEN_PX = 8;
@@ -475,7 +468,7 @@ export function Viewport() {
       // Skipped while a text field has focus — InputNumber owns ArrowUp/Down
       // for value stepping there. Each keydown is its own undo step (the
       // store-subscribe capture coalesces nothing outside a transaction).
-      const step = NUDGE_DELTA[e.key];
+      const step = nudgeDirection(e);
       if (!step || selection.kind !== 'node' || tool !== 'move') return;
       if (isEditableTarget) return;
       const node = useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId);

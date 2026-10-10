@@ -3,9 +3,10 @@ import { useToolStateStore } from '@/canvas/toolState';
 /**
  * Global keyboard shortcuts for the app shell.
  *
- * Cmd+0 (Fit in Window) and Cmd+1 (Actual Size) used to be handled here;
- * they are now View menu accelerators (view-menu-zoom.md), along with Zoom
- * In/Out (Cmd+=, Cmd+-), for the same NSMenu-consumes-the-key reason as below.
+ * Cmd+0 (Fit in Window) and Opt+Cmd+0 (Actual Size, formerly Cmd+1) used to be handled
+ * here; they are now View menu accelerators (view-menu-zoom.md), along with Zoom
+ * In/Out (Cmd+=, Cmd+-), for the same NSMenu-consumes-the-key reason as below. Cmd+1 to
+ * Cmd+9 are mode switches across the family and stay unbound until Oblique has modes.
  *
  * New/Open/Import/Save/Save As/Export PNG/Undo/Redo used to be handled here
  * too (Open was a combined Open-or-Import dialog before the roadmap

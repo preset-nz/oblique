@@ -1,5 +1,6 @@
 import { type Binding, useCommands } from '@preset.nz/app-kit/core';
 import { useMemo } from 'react';
+import { usePanelStore } from '@/app/panelState';
 import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
@@ -25,7 +26,8 @@ import { isPixelNode } from '@/scene/types';
  * `command` event carrying the id; `useCommands` finds the binding here and runs it when it is
  * enabled, and pushes the enabled and ticked state back to the menu. So this module is only
  * `id -> what it does`, plus the two items whose state follows the app: Replace Image… (enabled
- * while an unlocked image layer is selected) and Snap to Layers (a tick the snap store owns).
+ * while an unlocked image layer is selected) and the View ticks: Snap to Layers (the snap store's)
+ * and the two side panels (`app/panelState.ts`).
  *
  * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
  * history in Rust; the host tells the webview with `history-stepped` and `rhizome/rhizome.ts`
@@ -93,6 +95,10 @@ export interface MenuState {
   replaceableImage: boolean;
   /** Snap to Layers is on: its tick. */
   snapToLayers: boolean;
+  /** The left panel (tool rail) is showing: its tick. */
+  leftPanel: boolean;
+  /** The right panel (tabbed side panel) is showing: its tick. */
+  rightPanel: boolean;
 }
 
 /**
@@ -120,6 +126,16 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
     // its Export… button runs `exportProof`. Plain Export PNG stays plain.
     'file-export-proof': run(openExportProofDialog),
     'edit-duplicate': run(duplicateSelected),
+    // View → Show Left / Right Panel (menu standard decision 14): view state, not an undo step.
+    // As with Snap to Layers, the store is the truth and the tick follows it.
+    'view-left-panel': {
+      pressed: state.leftPanel,
+      run: () => usePanelStore.getState().toggleLeft(),
+    },
+    'view-right-panel': {
+      pressed: state.rightPanel,
+      run: () => usePanelStore.getState().toggleRight(),
+    },
     // View menu (view-menu-zoom.md): the same store actions the status-bar buttons call.
     'view-zoom-in': run(() => useViewTransformStore.getState().zoomIn()),
     'view-zoom-out': run(() => useViewTransformStore.getState().zoomOut()),
@@ -160,8 +176,8 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
 }
 
 /**
- * Binds the menu to the app: call once, from `App`. Follows the selection (Replace Image…) and
- * the snap store (the tick), and keeps text-field undo routed.
+ * Binds the menu to the app: call once, from `App`. Follows the selection (Replace Image…), the
+ * snap store and the panel store (the ticks), and keeps text-field undo routed.
  */
 export function useMenuCommands(): void {
   const selectedId = useSelectionStore((s) =>
@@ -172,9 +188,11 @@ export function useMenuCommands(): void {
     return node !== undefined && isPixelNode(node) && node.state !== 'locked';
   });
   const snapToLayers = useSnapStore((s) => s.enabled);
+  const leftPanel = usePanelStore((s) => s.left);
+  const rightPanel = usePanelStore((s) => s.right);
   const bindings = useMemo(
-    () => menuBindings({ replaceableImage, snapToLayers }),
-    [replaceableImage, snapToLayers],
+    () => menuBindings({ replaceableImage, snapToLayers, leftPanel, rightPanel }),
+    [replaceableImage, snapToLayers, leftPanel, rightPanel],
   );
   useCommands(bindings);
 }

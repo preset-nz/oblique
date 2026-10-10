@@ -20,7 +20,7 @@ const APP_KITS = ['app.settings', 'edit.undo', 'edit.redo'];
 /** File's own commands, which app-kit runs in Rust against the document host. */
 const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 
-const state = { replaceableImage: false, snapToLayers: true };
+const state = { replaceableImage: false, snapToLayers: true, leftPanel: true, rightPanel: true };
 
 describe('the menu bindings against the command table', () => {
   it('reads the table out of menu.rs', () => {
@@ -74,5 +74,31 @@ describe('the state the menu shows', () => {
     expect(useSnapStore.getState().enabled).toBe(false);
     menuBindings(state)['view-snap-layers'].run?.();
     expect(useSnapStore.getState().enabled).toBe(true);
+  });
+});
+
+describe('the side panels', () => {
+  it('tick Show Left and Right Panel from the panel store, and a click flips only its own', async () => {
+    const { usePanelStore } = await import('@/app/panelState');
+    usePanelStore.setState({ left: true, right: true });
+    expect(menuBindings({ ...state, leftPanel: false })['view-left-panel'].pressed).toBe(false);
+    expect(menuBindings({ ...state, rightPanel: true })['view-right-panel'].pressed).toBe(true);
+    menuBindings(state)['view-left-panel'].run?.();
+    expect(usePanelStore.getState()).toMatchObject({ left: false, right: true });
+    menuBindings(state)['view-right-panel'].run?.();
+    expect(usePanelStore.getState()).toMatchObject({ left: false, right: false });
+    menuBindings(state)['view-left-panel'].run?.();
+    menuBindings(state)['view-right-panel'].run?.();
+    expect(usePanelStore.getState()).toMatchObject({ left: true, right: true });
+  });
+
+  it('is view state: it never writes the scene, so there is no undo step', async () => {
+    const { usePanelStore } = await import('@/app/panelState');
+    const { useSceneStore } = await import('@/scene/store');
+    const before = useSceneStore.getState().scene;
+    menuBindings(state)['view-left-panel'].run?.();
+    menuBindings(state)['view-left-panel'].run?.();
+    expect(useSceneStore.getState().scene).toBe(before);
+    expect(usePanelStore.getState().left).toBe(true);
   });
 });

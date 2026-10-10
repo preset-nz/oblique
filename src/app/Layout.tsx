@@ -1,5 +1,6 @@
 import { SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { useEffect, useState } from 'react';
+import { usePanelStore } from '@/app/panelState';
 import { StatusBar } from '@/app/StatusBar';
 import { PRODUCT_NAME } from '@/branding';
 import { ToolbarRail } from '@/canvas/ToolbarRail';
@@ -20,6 +21,10 @@ export function Layout() {
   // Controlled so a request to focus the Text field (T-click, double-click,
   // Enter: dogfood-revisions.md) can bring the Stack tab forward first.
   const [tab, setTab] = useState('stack');
+  // View > Show Left / Right Panel (app/panelState.ts). A hidden panel stays mounted and is
+  // only `display: none`, so its local state (open sections, a half-typed field) survives.
+  const showLeft = usePanelStore((s) => s.left);
+  const showRight = usePanelStore((s) => s.right);
   useEffect(
     () =>
       useTextEditStore.subscribe((state, prev) => {
@@ -40,7 +45,11 @@ export function Layout() {
           {/* Main grid */}
           <div className="flex flex-1 overflow-hidden">
             {/* Left rail: 48px */}
-            <div className="w-12 border-r border-neutral-800 flex flex-col items-center py-4">
+            <div
+              className={`w-12 border-r border-neutral-800 flex-col items-center py-4 ${
+                showLeft ? 'flex' : 'hidden'
+              }`}
+            >
               <ToolbarRail />
             </div>
 
@@ -50,7 +59,11 @@ export function Layout() {
             </div>
 
             {/* Right panel: 320px */}
-            <div className="w-80 border-l border-neutral-800 flex flex-col">
+            <div
+              className={`w-80 border-l border-neutral-800 flex-col ${
+                showRight ? 'flex' : 'hidden'
+              }`}
+            >
               <Tabs
                 value={tab}
                 onValueChange={setTab}
