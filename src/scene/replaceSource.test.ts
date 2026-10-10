@@ -83,7 +83,7 @@ beforeEach(() => {
   sources.clearAll();
   cache.clearAll();
   backgroundSource.clear();
-  useProjectMetaStore.setState({ path: null, dirtySinceSave: false });
+  useProjectMetaStore.setState({ path: null });
   sources.useSourceMissingStore.setState({ missing: {}, reasons: {} });
   setScene([pixelNode('a')]);
   sources.set('a', bitmap(512, 512) as unknown as ImageBitmap);

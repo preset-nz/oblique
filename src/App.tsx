@@ -1,12 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useDocumentNotes } from '@preset.nz/app-kit/core';
+import { notify } from '@preset.nz/ux-kit';
+import { useEffect } from 'react';
 import { loadAiSettings } from './ai/settings';
-import { installProjectWindowIntegration } from './app/closeGuard';
 import { Layout } from './app/Layout';
 import { useMenuCommands } from './app/menu';
 import { installShortcuts } from './app/shortcuts';
 import { useFontCatalogueStore } from './fonts/catalogue';
 import { loadFontPreferences } from './fonts/preferences';
-import { attachDocumentOpening } from './project/io';
+import { projectDocumentEvents } from './project/io';
 import { installRhizome } from './rhizome/rhizome';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
@@ -22,6 +23,9 @@ import './cook/singleton';
  */
 function NativeMenu() {
   useMenuCommands();
+  // A last document that wouldn't reopen at launch, or a held file that failed to open: app-kit
+  // hands over a sentence, shown as a passing message, never a dialog.
+  useDocumentNotes((message) => notify({ message }));
   return null;
 }
 
@@ -32,9 +36,10 @@ function App() {
   }, []);
 
   useEffect(() => installShortcuts(), []);
-  // The document lives in rhizome inside the Tauri app (Epic 21 story 1); idempotent, a no-op in the web build.
-  // Once it is up, a file macOS launched the app with opens through the same path as Cmd+O.
-  useEffect(() => installRhizome({ onLive: (r) => void attachDocumentOpening(r) }), []);
+  // The document lives in rhizome inside the Tauri app (Epic 21 story 1); idempotent. Opening and
+  // saving are app-kit's, in Rust; `projectDocumentEvents` is the project's side of both,
+  // including a file held until the host is up (relaunch restore, a cold Finder open).
+  useEffect(() => installRhizome({ events: projectDocumentEvents() }), []);
   // AI backend settings (Epic 17 story 1) — loaded once at startup so the
   // Settings dialog shows the persisted endpoint the first time it opens,
   // per acceptance ("enter an endpoint, restart the app: same value").
@@ -43,15 +48,6 @@ function App() {
   useEffect(() => void useFontCatalogueStore.getState().load(), []);
   // Picker favourites and recents (font-picker-curation.md) — app-data JSON, loaded beside the catalogue.
   useEffect(() => void loadFontPreferences(), []);
-
-  // Once per app, not per StrictMode re-run: window listeners have no
-  // teardown API worth building for a singleton window.
-  const windowIntegrationDone = useRef(false);
-  useEffect(() => {
-    if (windowIntegrationDone.current) return;
-    windowIntegrationDone.current = true;
-    installProjectWindowIntegration();
-  }, []);
 
   return (
     <>

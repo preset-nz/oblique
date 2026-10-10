@@ -24,10 +24,21 @@
  * - **Refusal.** Every other scene-writing action refuses with a toast (`refusal.ts`).
  * - **Startup.** The document host is made once the sidecar's op catalogue arrives
  *   (`document_init`); until then the channel is shut and edits wait in its queue.
- * - **Files.** `replaceDocument` (new, open), `save` and `saveAs` go through the same channel,
- *   so a drag still on its way lands first. A replaced document is read whole and put in the
- *   store through `restoreScene`; no reconcile diff is left behind. The status POM reports
- *   (path, unsaved) is what the project meta store follows.
+ * - **Files are app-kit's** (Epic 22 slice c): New, Open, Open Recent, Revert, Save, Save As,
+ *   relaunch restore and Finder opens all happen in Rust, which tells this side afterwards.
+ *   - *Opened.* A replacement (a new status generation) is announced by `pom://status` first and
+ *     by `document-opened` after. The status only tells this side a replacement is in flight:
+ *     neither it, nor the mirror's echo, nor the reconcile may put the new scene in the store,
+ *     because the project must clear its caches and read the baked bitmaps first. The
+ *     `document-opened` handler reads the whole document and gives the project its turn
+ *     (`DocumentEvents.opened`) before `restoreScene` takes the scene.
+ *   - *Held at launch.* A file asked for before the sidecar's catalogue is applied inside
+ *     `document_init`, so its `document-opened` is emitted during `backend.init`. The listeners
+ *     are registered before that call, the event is kept until the host is live, then handled.
+ *   - *Saved.* `document-saved` carries the previous and new path for the project's baked
+ *     bitmaps and its relative-source re-check (`DocumentEvents.saved`).
+ *   - The status POM reports (path) is what the project meta store follows; the unsaved mark and
+ *     the window title are app-kit's.
  *
  * Only inside the Tauri app: the web build and the store's own tests run Oblique as it is.
  */
@@ -62,11 +73,12 @@ import { installRefusals } from './refusal';
 import {
   type Channel,
   createChannel,
-  type Issue,
   inTauri,
+  type Opened,
   type Ran,
   type RhizomeBackend,
   type Row,
+  type Saved,
   type Status,
   tauriBackend,
   type Update,
@@ -75,10 +87,33 @@ import {
 
 type Store = typeof useSceneStore;
 
+/**
+ * Brings `target`, the document Rust just replaced the old one with, into the store: reads the
+ * whole document, runs `beforeRestore` (the place to clear caches and read baked bitmaps), then
+ * restores the scene. Resolves once the store holds it.
+ */
+export type Adopt = (beforeRestore?: (target: Scene) => Promise<void>) => Promise<void>;
+
+/**
+ * What the project does around the document rhizome holds, supplied by `project/io.ts` so that
+ * this module knows nothing of baked bitmaps or sources.
+ */
+export interface DocumentEvents {
+  /**
+   * The document was replaced from Rust. Call `adopt` once, with what must run before the
+   * scene reaches the store; whatever follows (marking dirty, the issues toast) goes after it.
+   */
+  opened(opened: Opened, adopt: Adopt): Promise<void>;
+  /** The document was saved to a file; its status (path) has been announced already. */
+  saved(saved: Saved): Promise<void>;
+}
+
 export interface RhizomeDeps {
   backend: RhizomeBackend;
   store: Store;
   notify: (options: SnackbarOptions) => void;
+  /** The project's side of opening and saving. Without it a replaced document is just restored. */
+  events?: DocumentEvents;
   /** Puts `target` in the store, re-decoding what it must. Defaults to `restoreScene`. */
   restore?: (current: Scene, target: Scene) => Promise<void>;
   nextFrame?: () => Promise<void>;
@@ -103,27 +138,9 @@ export interface Rhizome {
   /** Re-reads the whole document and puts it in the store (open, new, undo, redo, cancel). */
   rebuild(): Promise<void>;
   isLive(): boolean;
-  /** A path macOS asked to open before the front end was listening, once. */
-  takeLaunchPath(): string | null;
   /** The status as POM last reported it, and a way to hear about changes. */
   status(): Status | null;
   onStatus(f: (s: Status) => void): () => void;
-  /**
-   * Replaces the document with a new one or a file. Resolves with what the load couldn't
-   * take as written; rejects with rhizome's own error, leaving the open document alone.
-   * `beforeRestore` runs once the new document is read and the status (path) is known, and
-   * before the store takes it: the place to clear caches and read baked bitmaps.
-   */
-  replaceDocument(
-    what: { kind: 'new' } | { kind: 'open'; path: string },
-    beforeRestore?: (target: Scene) => Promise<void>,
-  ): Promise<Issue[]>;
-  /** Plain Save: to the document's own file. Rejects when it has none. */
-  save(): Promise<Status>;
-  /** Saves to `path` (rhizome adds `.oblique` when it has no extension); the status names the file. */
-  saveAs(path: string): Promise<Status>;
-  /** macOS asked to open a document while the app is running. */
-  onOpenDocument(f: (path: string) => void): Promise<() => void>;
 }
 
 const RECONCILE_DELAY_MS = 150;
@@ -160,10 +177,20 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
 
   let live = false;
   let started: Promise<void> | null = null;
-  let launchPath: string | null = null;
   let lastStatus: Status | null = null;
-  /** Documents being replaced right now: their status and view are read by the replacing call. */
-  let replacing = 0;
+  /**
+   * Replacements Rust has announced (a status with a new generation) and `document-opened` has
+   * not yet been handled for. While any is in flight the store must not be rebuilt from the
+   * mirror, nor reconciled with it: the mirror still holds the old document, and the project has
+   * not cleared its caches or read the baked bitmaps for the new one.
+   */
+  let opening = 0;
+  /** The generation the last status named, to tell a replacement from an ordinary status. */
+  let seenGeneration = 0;
+  /** A `document-opened` that arrived before the host was live (a file held until the catalogue). */
+  let earlyOpened: Opened | null = null;
+  /** Opened-document handling, one at a time and in order. */
+  let adopting: Promise<void> = Promise.resolve();
   const statusListeners = new Set<(s: Status) => void>();
   /** The highest commit seq a command answered with: the mirror must reach it before a compare. */
   let acked = 0;
@@ -417,18 +444,19 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   function takeStatus(s: Status): void {
-    announce(s);
-    // a replacing call reads the new view itself, once the path is in
-    if (live && replacing === 0 && s.generation !== mirror.generation) {
-      void rebuild().catch(fail);
-    }
+    announce(s); // the path first: relative sources resolve against it while the store is restored
+    if (s.generation === seenGeneration) return;
+    seenGeneration = s.generation;
+    // The whole tree was replaced. The store is rebuilt when `document-opened` follows, not now.
+    // Before the host is live the first view and the held open (`start`) account for it.
+    if (live) opening += 1;
   }
 
-  /** Re-reads the view into the mirror. A new generation (open, new) also restores the store. */
+  /** Re-reads the view into the mirror. A new generation is a replacement, handled on its own cue. */
   async function reload(): Promise<void> {
-    if (replacing > 0) return;
+    if (opening > 0) return;
     const view = await backend.view();
-    if (view.generation !== mirror.generation) return rebuild(view);
+    if (view.generation !== mirror.generation) return;
     if (view.seq >= mirror.seq) mirror.load(view);
     scheduleReconcile();
   }
@@ -458,7 +486,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   async function reconcile(): Promise<ReconcileResult> {
-    if (!live || restoringNow || gesture || channel.pending > 0) {
+    if (!live || restoringNow || gesture || channel.pending > 0 || opening > 0) {
       return 'skipped';
     }
     if (mirror.seq < acked) {
@@ -499,48 +527,62 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
    * have kept Undo disabled, so there is none to close.
    */
   function takeStepped(): void {
+    if (opening > 0) return; // the replacement's own rebuild reads the document as it is
     void rebuild().catch(fail);
   }
 
   // ---------------------------------------------------------------- files
 
-  async function replaceDocument(
-    what: { kind: 'new' } | { kind: 'open'; path: string },
-    beforeRestore?: (target: Scene) => Promise<void>,
-  ): Promise<Issue[]> {
-    endGesture(); // an unmatched begin: close it ahead of the replacement, which would drop it
-    replacing += 1;
-    try {
-      // queued behind every edit made before it; a refusal (an old JSON file) throws here,
-      // with the open document untouched
-      let issues: Issue[] = [];
-      if (what.kind === 'open') issues = await channel.openDocument(what.path);
-      else await channel.newDocument();
-      // the path first: relative sources resolve against it while the store is restored
-      announce(await channel.status());
-      const view = await channel.view();
-      mirror.load(view);
-      acked = view.seq;
-      pendingTransforms.clear();
-      localLayers.clear();
-      const target = mirror.scene();
-      if (target) {
-        await beforeRestore?.(target);
-        await restoreFromMirror();
-      }
-      return issues;
-    } finally {
-      replacing -= 1;
-      scheduleReconcile();
+  /**
+   * Puts the document Rust replaced the old one with in the store. The status (path) is
+   * announced first; the view is read straight from the backend, not queued behind the
+   * webview's edits, because those were made against the document that is gone.
+   */
+  const adopt: Adopt = async (beforeRestore) => {
+    gesture = null; // the old document's: nothing of it survives the replacement
+    const status = await backend.status();
+    announce(status);
+    seenGeneration = status.generation;
+    const view = await backend.view();
+    mirror.load(view);
+    acked = view.seq;
+    pendingTransforms.clear();
+    localLayers.clear();
+    const target = mirror.scene();
+    if (!target) return;
+    await beforeRestore?.(target);
+    await restoreFromMirror();
+  };
+
+  function takeOpened(opened: Opened): Promise<void> {
+    if (!live) {
+      earlyOpened = opened;
+      return Promise.resolve();
     }
+    return handleOpened(opened);
   }
 
-  async function saveWith(write: () => Promise<unknown>): Promise<Status> {
-    endGesture();
-    await write();
-    const s = await channel.status();
-    announce(s);
-    return s;
+  function handleOpened(opened: Opened): Promise<void> {
+    const run = async () => {
+      try {
+        if (deps.events) await deps.events.opened(opened, adopt);
+        else await adopt();
+      } catch (e) {
+        fail(e);
+        // The project's side failed, perhaps before it adopted anything: the store still has to
+        // follow the document Rust holds. Adopting twice is harmless.
+        await adopt().catch(fail);
+      } finally {
+        opening = Math.max(0, opening - 1);
+        scheduleReconcile();
+      }
+    };
+    adopting = adopting.then(run, run);
+    return adopting;
+  }
+
+  function takeSaved(saved: Saved): Promise<void> {
+    return Promise.resolve(deps.events?.saved(saved)).catch(fail);
   }
 
   // ---------------------------------------------------------------- start
@@ -549,24 +591,40 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     started ??= (async () => {
       const off: (() => void)[] = [];
       try {
-        await backend.init(catalogue(ops));
+        // Before `init`: a file held until the catalogue is opened inside it, and its
+        // `document-opened` is emitted there.
         off.push(
           await backend.onUpdate(takeUpdate),
           await backend.onStatus(takeStatus),
           await backend.onHistoryStepped(takeStepped),
+          await backend.onDocumentOpened(takeOpened),
+          await backend.onDocumentSaved(takeSaved),
         );
-        launchPath = await backend.connect();
+        const appliedHeld = await backend.init(catalogue(ops));
+        await backend.connect();
         const view = await backend.view();
         mirror.load(view);
         acked = view.seq;
+        seenGeneration = view.generation;
+        announce(await backend.status());
         // a new document's scene id is rhizome's; the store's is a random one nothing reads
         const target = mirror.scene();
         if (target && scene().id !== target.id) {
           store.setState((s) => ({ scene: { ...s.scene, id: target.id } }));
         }
+        // The file held until now was opened during `init`: the mirror already has it, the store
+        // does not. Counted as a replacement in flight, so the reconcile leaves the store alone
+        // until its `document-opened` has been handled. That event may have come before this
+        // point (kept in `earlyOpened`) or may still be on its way (`appliedHeld`): Tauri
+        // doesn't order an event against a command's reply, so both are covered. Either way
+        // it is counted once.
+        const held = earlyOpened;
+        earlyOpened = null;
+        if (held || appliedHeld) opening += 1;
         live = true;
         channel.release();
         info(`ready, ${mirror.rows.size} rows`);
+        if (held) await handleOpened(held);
       } catch (e) {
         for (const f of off) f();
         started = null; // the next catalogue (a sidecar restart) tries again
@@ -615,20 +673,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     rebuild: () => rebuild(),
     latestTransform: (id) => pendingTransforms.get(id),
     isLive: () => live,
-    takeLaunchPath: () => {
-      const p = launchPath;
-      launchPath = null;
-      return p;
-    },
     status: () => lastStatus,
     onStatus: (f) => {
       statusListeners.add(f);
       return () => void statusListeners.delete(f);
     },
-    replaceDocument,
-    save: () => saveWith(() => channel.run('file.save')),
-    saveAs: (path) => saveWith(() => channel.saveAs(path)),
-    onOpenDocument: (f) => backend.onOpenDocument(f),
   };
 }
 
@@ -659,23 +708,23 @@ export function adoptRhizome(next: Rhizome | null): void {
 /**
  * Installs rhizome over the scene store, once, and starts the host when the sidecar's op
  * catalogue is in (and again, harmlessly, whenever it is re-sent). A no-op outside the Tauri
- * app. `onLive` runs once, when the host is up: the place to open what macOS launched the
- * app with.
+ * app. `events` is the project's side of opening and saving (`project/io.ts`): a file held until
+ * the host is up (relaunch restore, a cold Finder open) reaches it through the same path as
+ * any other open.
  */
-export function installRhizome(options: { onLive?: (r: Rhizome) => void } = {}): void {
+export function installRhizome(options: { events?: DocumentEvents } = {}): void {
   if (instance || !inTauri()) return;
-  const r = createRhizome({ backend: tauriBackend, store: useSceneStore, notify });
+  const r = createRhizome({
+    backend: tauriBackend,
+    store: useSceneStore,
+    notify,
+    events: options.events,
+  });
   instance = r;
   r.install();
   bindProjectMeta(r);
-  let announced = false;
   const begin = (ops: unknown[]) => {
-    if (ops.length === 0) return;
-    void r.start(ops).then(() => {
-      if (announced || !r.isLive()) return;
-      announced = true;
-      options.onLive?.(r);
-    });
+    if (ops.length > 0) void r.start(ops);
   };
   begin(useOpsCacheStore.getState().ops);
   useOpsCacheStore.subscribe((s) => begin(s.ops));

@@ -14,14 +14,17 @@ const declared = [...rust.matchAll(/\b(?:file|view|layer|text|item|toggle)\(\s*"
   (m) => m[1],
 );
 
-/** Items app-kit builds itself: Settings…, Undo and Redo. */
+/** Items app-kit builds itself: Settings…, Undo and Redo (File's are below). */
 const APP_KITS = ['app.settings', 'edit.undo', 'edit.redo'];
+
+/** File's own commands, which app-kit runs in Rust against the document host. */
+const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 
 const state = { replaceableImage: false, snapToLayers: true };
 
 describe('the menu bindings against the command table', () => {
   it('reads the table out of menu.rs', () => {
-    expect(declared).toContain('file-new');
+    expect(declared).toContain('file-import');
     expect(declared).toContain('type-convert-outlines');
     expect(new Set(declared).size).toBe(declared.length);
   });
@@ -34,6 +37,14 @@ describe('the menu bindings against the command table', () => {
   it('binds nothing Rust does not declare, but app-kit its own items', () => {
     for (const id of Object.keys(menuBindings(state))) {
       expect([...declared, ...APP_KITS], `${id} is bound but not in the table`).toContain(id);
+    }
+  });
+
+  it("leaves File's New, Open, Save and Save As to app-kit: neither side has them", () => {
+    const bound = Object.keys(menuBindings(state));
+    for (const id of APP_KIT_FILE) {
+      expect(declared, `${id} is back on Oblique's table`).not.toContain(id);
+      expect(bound, `${id} is back in the bindings`).not.toContain(id);
     }
   });
 

@@ -15,9 +15,10 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(sidecar::SidecarState::default())
+        // The close guard: an unsaved document asks before the window goes (app-kit's).
+        .on_window_event(preset_app_kit::on_window_event)
         .invoke_handler(tauri::generate_handler![
             greet,
             fonts::list_fonts,
@@ -33,12 +34,14 @@ pub fn run() {
             rhizome_pom_tauri::commands::pom_begin,
             rhizome_pom_tauri::commands::pom_end,
             rhizome_pom_tauri::commands::pom_cancel,
+            // Not `pom_new`, `pom_open` or `pom_save_as`: app-kit replaces and saves the
+            // document, and the webview hears of it through `document-opened` and
+            // `document-saved`. A replacement made any other way would reach it unannounced.
             rhizome_pom_tauri::commands::pom_connect,
-            rhizome_pom_tauri::commands::pom_new,
-            rhizome_pom_tauri::commands::pom_open,
-            rhizome_pom_tauri::commands::pom_save_as,
             preset_app_kit::app_kit_commands,
             preset_app_kit::app_kit_menu_state,
+            preset_app_kit::app_kit_document,
+            preset_app_kit::app_kit_document_note,
             preset_app_kit::app_kit_history,
             preset_app_kit::app_kit_undo,
             preset_app_kit::app_kit_redo,
@@ -52,32 +55,24 @@ pub fn run() {
             document.refresh_on_change(app.handle().clone());
             app.manage(document);
             sidecar::start(app.handle().clone());
-            // The menu bar is app-kit's, with Oblique's commands on its table (`menu.rs`). It is
-            // installed as a history only, not a document (`install_history`): Undo and Redo and
-            // their titles are the host's, and File stays Oblique's own until slice c. Installing
-            // after the host is managed matters: app-kit reads its history straight away.
-            preset_app_kit::AppKit::<tauri::Wry>::new(&app.package_info().name)
+            // The menu bar, File, the close guard, relaunch restore and Finder opens are
+            // app-kit's, with Oblique's commands on its table (`menu.rs`). `install` brings
+            // the dialog plugin, so there is none above. Installing after the host is managed
+            // matters: app-kit reads its document straight away. The host has no `Pom` yet;
+            // an open asked for before the catalogue arrives is held (`document/host.rs`).
+            let name = app.package_info().name.clone();
+            preset_app_kit::AppKit::<tauri::Wry>::new(&name)
                 .menu_config(menu::MENU_CONFIG)
+                .file_type(&format!("{name} project"), document::EXTENSION)
                 .commands(menu::commands())
-                .install_history::<document::DocumentHost>(app.handle())?;
+                .install::<document::DocumentHost>(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // A document macOS asks us to open (`open -a`, the Dock). It reaches the webview
-            // through `pom_connect` at launch or `pom://open-document` while running.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = &event {
-                use tauri::Manager;
-                // The host exists once the sidecar's op catalogue is in (`document_init`).
-                // A path asked for before that has nowhere to wait yet.
-                // deferred: Epic 21 story 2 (or app-kit) holds it until then.
-                if app.try_state::<rhizome_pom_tauri::PomHost>().is_some() {
-                    rhizome_pom_tauri::opened(app, urls);
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
+            // The last document at launch, a document from the Finder or `open`, and the
+            // close guard on quit: app-kit's.
+            preset_app_kit::on_run_event(app, &event);
         });
 }

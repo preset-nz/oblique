@@ -1,10 +1,9 @@
+import { useDocument } from '@preset.nz/app-kit/core';
 import { Icons } from '@preset.nz/ux-kit';
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatCookMs, SLOW_COOK_MS, useLastCookStore } from '@/cook/lastCook';
-import { filenameOf } from '@/project/import';
-import { useProjectMetaStore } from '@/project/io';
 
 const ZOOM_BUTTON_CLASS =
   'inline-flex h-4 items-center justify-center rounded px-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100';
@@ -61,9 +60,9 @@ function CookReadout() {
 export function StatusBar() {
   const scale = useViewTransformStore((state) => state.view.scale);
   const cursorDoc = useViewTransformStore((state) => state.cursorDoc);
-  const projectPath = useProjectMetaStore((state) => state.path);
-  const dirtySinceSave = useProjectMetaStore((state) => state.dirtySinceSave);
-  const projectName = projectPath ? filenameOf(projectPath) : 'untitled';
+  // The document's name and unsaved mark are app-kit's (`Untitled-1`, the file's name); null
+  // for the instant before the first read.
+  const document_ = useDocument();
 
   const { zoomIn, zoomOut, fitToWindow } = useViewTransformStore.getState();
   const zoomPercent = Math.round(scale * 100);
@@ -123,8 +122,8 @@ export function StatusBar() {
       {/* Save status: project filename, dot while unsaved changes exist */}
       <div className="flex items-center gap-1 whitespace-nowrap" aria-live="polite">
         <span className="text-neutral-500">
-          {projectName}
-          {dirtySinceSave ? ' •' : ''}
+          {document_?.name ?? ''}
+          {document_?.unsaved ? ' •' : ''}
         </span>
       </div>
 

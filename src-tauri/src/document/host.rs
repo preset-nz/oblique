@@ -25,14 +25,19 @@
 //!   every call that changes the document: the webview's mirror needs them to stay current.
 //! - [`HISTORY_STEPPED`] after an undo or redo that changed something, after the commit
 //!   events: `{undid, label}` ([`Stepped`]), `label` being the step's own name ("Move").
-//! - [`DOCUMENT_OPENED`] after open and new, after the status events: `{issues}`
-//!   ([`DocumentOpened`]), what the load could not take as written.
+//! - [`DOCUMENT_OPENED`] after open and new, after the status events: `{issues, path}`
+//!   ([`DocumentOpened`]), what the load could not take as written and the file it came from
+//!   (none for a new document). The webview rebuilds its store on this event and on no other:
+//!   the status events that precede it only tell it a replacement is in flight.
+//! - [`DOCUMENT_SAVED`] after a save, after the status events: `{previous, path}`
+//!   ([`Saved`]), so the webview can write the baked bitmaps beside the file and re-check
+//!   relative sources when the folder changed.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use preset_app_kit::{Document, History};
+use preset_app_kit::{Document, History, NOTE_EVENT};
 use rhizome_pom::{Error, Host, Issue, Pom, Ran};
 use rhizome_pom_tauri::{emit, PomHost};
 use serde::Serialize;
@@ -45,6 +50,8 @@ use super::Oblique;
 pub const HISTORY_STEPPED: &str = "history-stepped";
 /// The document was replaced by a file or a new one; the payload is a [`DocumentOpened`].
 pub const DOCUMENT_OPENED: &str = "document-opened";
+/// The document was saved to a file; the payload is a [`Saved`].
+pub const DOCUMENT_SAVED: &str = "document-saved";
 
 /// What save and new answer before the op catalogue has arrived.
 pub const NOT_READY: &str = "The document isn't ready yet.";
@@ -62,6 +69,17 @@ pub struct Stepped {
 pub struct DocumentOpened {
     /// What the load couldn't take as written; the document opened anyway. Empty for new.
     pub issues: Vec<Issue>,
+    /// The file it came from; `None` for a new document.
+    pub path: Option<String>,
+}
+
+/// The document was written to `path`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Saved {
+    /// The file it had before this save; `None` for the first save of an Untitled document.
+    pub previous: Option<String>,
+    /// The file it has now (a Save As moves it).
+    pub path: String,
 }
 
 type Hook = Box<dyn Fn() + Send + Sync>;
@@ -126,13 +144,26 @@ impl DocumentHost {
     }
 
     /// Opens the path an `open` held before init, if there is one: `Ok(true)` when it did.
-    /// Emits as any open does. Call after [`init`](Self::init) and after managing its
-    /// [`PomHost`]. A path that fails to open leaves the document as it was (untitled).
+    /// Emits as any open does, then refreshes app-kit's title and menu (the open happened
+    /// outside app-kit's own refresh, which saw only a held path). Call after
+    /// [`init`](Self::init) and after managing its [`PomHost`], with no document lock held.
+    ///
+    /// A path that fails to open leaves the document as it was (untitled), and the failure
+    /// reaches the webview as an app-kit note ([`NOTE_EVENT`]), not a dialog and not a log line.
     pub fn apply_held<R: Runtime>(&self, app: &AppHandle<R>) -> Result<bool, String> {
         let held = self.held.lock().expect("document host poisoned").take();
-        match held {
-            Some(path) => self.open(app, &path).map(|()| true),
-            None => Ok(false),
+        let Some(path) = held else {
+            return Ok(false);
+        };
+        match self.open(app, &path) {
+            Ok(()) => {
+                preset_app_kit::refresh_history(app);
+                Ok(true)
+            }
+            Err(e) => {
+                let _ = app.emit_to("main", NOTE_EVENT, open_failed(&path, &e));
+                Err(e)
+            }
         }
     }
 
@@ -209,6 +240,17 @@ impl DocumentHost {
     }
 }
 
+/// app-kit's wording for a document that won't open (`restore.rs`): the file name in curly
+/// quotes, then why. Its own `note` is crate-private, so the text is written here and sent as
+/// the same event.
+fn open_failed(path: &Path, why: &str) -> String {
+    let name = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    format!("\u{201c}{name}\u{201d} couldn't be opened: {why}")
+}
+
 impl History for DocumentHost {
     // What `Status` reports is what app-kit shows: it is `None` while a gesture is open, so
     // Undo greys out during a drag. app-kit adds the verb.
@@ -259,7 +301,17 @@ impl Document for DocumentHost {
 
     fn save<R: Runtime>(&self, app: &AppHandle<R>, path: &Path) -> Result<(), String> {
         let pom = self.pom.get().ok_or(NOT_READY)?;
+        let previous = self.path();
         emit(app, pom.save_as(path).map_err(|e| e.to_string())?);
+        // the file as rhizome names it, which is not always the one asked for
+        let now = self.path().unwrap_or_else(|| path.to_path_buf());
+        let _ = app.emit(
+            DOCUMENT_SAVED,
+            Saved {
+                previous: previous.map(|p| p.to_string_lossy().into_owned()),
+                path: now.to_string_lossy().into_owned(),
+            },
+        );
         Ok(())
     }
 
@@ -276,7 +328,12 @@ impl Document for DocumentHost {
             }
         };
         let (issues, events) = pom.open(path).map_err(|e| e.to_string())?;
-        self.replaced(app, events, DocumentOpened { issues });
+        let path = self.path().unwrap_or_else(|| path.to_path_buf());
+        let opened = DocumentOpened {
+            issues,
+            path: Some(path.to_string_lossy().into_owned()),
+        };
+        self.replaced(app, events, opened);
         Ok(())
     }
 

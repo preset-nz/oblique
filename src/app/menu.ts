@@ -9,13 +9,7 @@ import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
 import { type LayerMove, layerMoveTarget } from '@/panels/stack/dragReorder';
 import { exportPng } from '@/project/export';
 import { tauriImportDeps } from '@/project/import';
-import {
-  importImagesDialog,
-  newProject,
-  openProjectDialog,
-  replaceImageDialog,
-  saveProject,
-} from '@/project/io';
+import { importImagesDialog, replaceImageDialog } from '@/project/io';
 import { duplicateNode } from '@/scene/duplicateNode';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
@@ -41,9 +35,10 @@ import { isPixelNode } from '@/scene/types';
  * webview, so the menu owns every chord in `menu.rs`'s `SHORTCUTS` and `shortcuts.ts` claims none
  * of them. That is the mainstream behaviour but can't be exercised headlessly: click-test it.
  *
- * Open (Cmd+O) vs Import (Shift+Cmd+I): two distinct handlers, not one dialog routed by
- * extension. `openProjectDialog` replaces the whole project, `importImagesDialog` only ever adds
- * node(s).
+ * **File's New, Open…, Open Recent, Close, Save, Save As… and Revert are not here either:** app-kit
+ * runs them in Rust against the document host, and the webview hears of the result
+ * (`project/io.ts`, `projectDocumentEvents`). Open replaces the whole project; Import
+ * (Shift+Cmd+I, below) only ever adds node(s).
  */
 
 /**
@@ -109,11 +104,7 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
   return {
     // App → Settings… (`app.settings`, app-kit's own item, Epic 17 story 1)
     'app.settings': run(openSettingsDialog),
-    'file-new': run(newProject),
-    'file-open': run(openProjectDialog),
     'file-import': run(importImagesDialog),
-    'file-save': run(() => saveProject({ as: false })),
-    'file-save-as': run(() => saveProject({ as: true })),
     'file-export-png': run(exportPng),
     // File → Export Proof… (registration-marks-and-colour-bars.md): opens the options dialog;
     // its Export… button runs `exportProof`. Plain Export PNG stays plain.

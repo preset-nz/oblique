@@ -1,10 +1,9 @@
 import { notify } from '@preset.nz/ux-kit';
-import { confirm, open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { mkdir, readDir, remove, writeFile } from '@tauri-apps/plugin-fs';
-import { PRODUCT_NAME } from '@/branding';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import { isRefused } from '@/rhizome/refusal';
-import { type Rhizome, rhizome } from '@/rhizome/rhizome';
+import type { DocumentEvents } from '@/rhizome/rhizome';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import * as prefixStore from '@/scene/prefixStore';
@@ -23,16 +22,13 @@ export { useProjectMetaStore };
 const IMAGE_FILTERS = [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }];
 
 /**
- * Projects are rhizome documents (Epic 21 story 1): Open, New and Save go through the
- * document host (`rhizome/`), which owns the file format, the `.oblique` extension and the
- * unsaved state. What stays here is what rhizome knows nothing about: the baked bitmaps beside
- * the file, the decoded sources and the caches.
+ * Projects are rhizome documents (Epic 21 story 1) and the file commands are app-kit's (Epic 22
+ * slice c): New, Open, Open Recent, Revert, Save and Save As run in Rust, which owns the file
+ * format, the `.oblique` extension, the unsaved state and the close guard. What stays here is
+ * what rhizome and app-kit know nothing about: the baked bitmaps beside the file, the decoded
+ * sources and the caches. Rust says when it replaced or saved the document, and
+ * `projectDocumentEvents` is what happens around that.
  */
-function host(): Rhizome {
-  const r = rhizome();
-  if (!r) throw new Error("The document host isn't running");
-  return r;
-}
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -200,97 +196,6 @@ export async function recheckRelativeSources(
 }
 
 /**
- * Save to the current path, or run save-as when there is none (or `as` forces it). The
- * document goes through rhizome; the baked bitmaps for locked layers are written beside the
- * file it names (baked-persistence.md).
- */
-export async function saveProject(
-  options: { as?: boolean } = {},
-  deps: ProjectIoDeps = tauriProjectIoDeps,
-): Promise<void> {
-  const previousPath = useProjectMetaStore.getState().path;
-  let picked: string | null = null;
-  if (options.as || !previousPath) {
-    picked = await saveDialog({
-      filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
-    });
-    if (!picked) return;
-  }
-  try {
-    const r = host();
-    const status = picked === null ? await r.save() : await r.saveAs(picked);
-    // rhizome adds the extension when the name has none: the file is where it says it is
-    const path = status.path ?? picked ?? previousPath;
-    if (!path) throw new Error('The document has no file');
-    await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
-    // The base folder for relative source paths just changed (first save, or Save As
-    // elsewhere): re-run the re-decode so the missing flags tell the truth now, not at the
-    // next load.
-    if (path !== previousPath) await recheckRelativeSources(previousPath, path, deps);
-  } catch (err) {
-    notify({
-      message: "Couldn't save project",
-      kind: 'error',
-      description: messageOf(err),
-    });
-  }
-}
-
-/**
- * Open a `.oblique` file: rhizome reads it (anything that isn't its format is refused with
- * its own error, and nothing changes), then the store is rebuilt from the document, every
- * pixel source is re-decoded (missing file -> `sourceMissing` flag, never node deletion —
- * pixel-node-import.md re-hydration contract), and every node is marked draft-dirty so the
- * scheduler rebuilds every cache.
- */
-export async function loadProject(
-  path: string,
-  deps: ProjectIoDeps = tauriProjectIoDeps,
-): Promise<void> {
-  let issues: { path: string; message: string }[];
-  try {
-    issues = await host().replaceDocument({ kind: 'open', path }, async (target) => {
-      // The old project's cache entries go before this one's baked-bitmap rehydration
-      // populates fresh ones — leaving them leaks full-res ImageBitmaps across every Open.
-      // Done only now, with the file read and accepted: a refused file changes nothing.
-      cache.clearAll();
-      prefixStore.clearAll();
-      sources.clearAll();
-      backgroundSource.clear(); // like sources: a load always re-decodes
-      await rehydrateBaked(path, target, deps);
-    });
-  } catch (err) {
-    notify({
-      message: `Couldn't open ${filenameOf(path)}`,
-      kind: 'error',
-      description: messageOf(err),
-    });
-    return;
-  }
-
-  // Reopening the file that is open keeps its node ids, which restoreScene reads as
-  // unchanged; the caches were just cleared, so say so.
-  for (const node of useSceneStore.getState().scene.nodes) {
-    useSceneStore.getState().markDirty(node.id, 'draft');
-  }
-
-  if (issues.length > 0) {
-    notify({
-      kind: 'warning',
-      message: `${filenameOf(path)} opened with ${issues.length} ${issues.length === 1 ? 'issue' : 'issues'}`,
-      description: issues
-        .slice(0, 3)
-        .map((i) => i.message)
-        .join('\n'),
-    });
-  }
-
-  // Missing fonts (missing-fonts.md): one warning per open, shown now if the
-  // catalogue is ready, otherwise as soon as it is.
-  useMissingFontsStore.getState().documentOpened();
-}
-
-/**
  * Baked-bitmap rehydration (baked-persistence.md) runs BEFORE the scene lands in the store:
  * the scheduler subscribes to scene changes and its rehydrate check (cook/scheduler.ts)
  * fires synchronously on that subscription. Populating the `baked` cache slot first means a
@@ -314,66 +219,77 @@ async function rehydrateBaked(path: string, target: Scene, deps: ProjectIoDeps):
 }
 
 /**
- * File → New (native-menu.md gap, 2026-07-04): respects the unsaved-changes
- * guard (same confirm-dialog pattern as `closeGuard.ts`'s close prompt),
- * then replaces the document with a new one (rhizome's `seed`: empty, size 0×0).
+ * What the project does when Rust opens or saves the document (rhizome's `DocumentEvents`).
  *
- * `confirmDiscard` is injected for tests (same pattern as `ProjectIoDeps`);
- * production wires the real Tauri `confirm` dialog.
+ * **Opened** (File > Open, Open Recent, Revert, a Finder open, relaunch restore, New), in this
+ * order and no other:
+ * 1. clear the caches, so the old project's bitmaps don't leak into this one;
+ * 2. read the baked bitmaps (`rehydrateBaked`), **before** the scene reaches the store;
+ * 3. `restoreScene` (inside `adopt`), which re-decodes every pixel source;
+ * 4. mark every node draft-dirty, because the caches were just cleared and a reopened file keeps
+ *    its node ids, which `restoreScene` reads as unchanged;
+ * 5. the issues toast, for what the load couldn't take as written;
+ * 6. the missing-fonts warning (missing-fonts.md), shown now or as soon as the catalogue is in.
+ *
+ * Steps 1 to 3 are the work `adopt` runs; the document host has already held back its own
+ * rebuild and the reconcile until this handler is done (`rhizome.ts`).
+ *
+ * **Saved:** the baked bitmaps of locked layers are written beside the file it names
+ * (baked-persistence.md), and when the file moved (a first Save, or a Save As elsewhere) the
+ * relative sources are re-checked, since they resolve against the project's folder. Without that
+ * re-check a Save As would silently stop flagging images that no longer resolve.
  */
-export async function newProject(
-  confirmDiscard: (message: string) => Promise<boolean> = (message) =>
-    confirm(message, { title: PRODUCT_NAME, kind: 'warning' }),
-): Promise<void> {
-  if (useProjectMetaStore.getState().dirtySinceSave) {
-    const discard = await confirmDiscard(
-      'You have unsaved changes. Discard them and start a new project?',
-    );
-    if (!discard) return;
-  }
+export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps): DocumentEvents {
+  return {
+    async opened({ issues, path }, adopt) {
+      await adopt(async (target) => {
+        cache.clearAll();
+        prefixStore.clearAll();
+        sources.clearAll();
+        backgroundSource.clear(); // like sources: a load always re-decodes
+        if (path) await rehydrateBaked(path, target, deps);
+      });
 
-  try {
-    await host().replaceDocument({ kind: 'new' }, async () => {
-      cache.clearAll();
-      prefixStore.clearAll();
-      sources.clearAll();
-      backgroundSource.clear();
-    });
-  } catch (err) {
-    notify({ message: "Couldn't start a new project", kind: 'error', description: messageOf(err) });
-    return;
-  }
-  useMissingFontsStore.getState().documentCleared();
-}
+      for (const node of useSceneStore.getState().scene.nodes) {
+        useSceneStore.getState().markDirty(node.id, 'draft');
+      }
 
-/**
- * What to open when macOS launches the app with a file, and when it asks for another while
- * it runs (`takeLaunchPath`, `pom://open-document`): the same path as Cmd+O.
- */
-export async function attachDocumentOpening(r: Rhizome): Promise<void> {
-  const launched = r.takeLaunchPath();
-  if (launched) void loadProject(launched);
-  await r.onOpenDocument((path) => void loadProject(path));
-}
+      if (issues.length > 0) {
+        notify({
+          kind: 'warning',
+          message: `${path ? filenameOf(path) : 'The document'} opened with ${issues.length} ${issues.length === 1 ? 'issue' : 'issues'}`,
+          description: issues
+            .slice(0, 3)
+            .map((i) => i.message)
+            .join('\n'),
+        });
+      }
 
-/**
- * Cmd+O entry point (roadmap "Cmd+O is overloaded — split Open vs Import",
- * 2026-07-05): projects only. Genuinely a different flow from import —
- * replaces the whole project via `loadProject`, never adds a node.
- */
-export async function openProjectDialog(): Promise<void> {
-  const selected = await openDialog({
-    filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
-  });
-  if (!selected) return;
-  const path = Array.isArray(selected) ? selected[0] : selected;
-  await loadProject(path);
+      // A new document has nothing to warn about; an opened one may name fonts this Mac lacks.
+      if (path) useMissingFontsStore.getState().documentOpened();
+      else useMissingFontsStore.getState().documentCleared();
+    },
+
+    async saved({ previous, path }) {
+      try {
+        await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
+        if (path !== previous) await recheckRelativeSources(previous, path, deps);
+      } catch (err) {
+        // the document itself is saved; it is the baked images or the re-check that failed
+        notify({
+          message: "Saved, but couldn't finish the images beside it",
+          kind: 'error',
+          description: messageOf(err),
+        });
+      }
+    },
+  };
 }
 
 /**
  * Shift+Cmd+I entry point (was Cmd+I until Epic 22; roadmap "Cmd+O is overloaded — split Open vs Import",
  * 2026-07-05): images only, always adds node(s) via `importFiles` — never
- * touches the current project (no `loadProject` call, ever). Document-size
+ * touches the current project (opening is app-kit's, in Rust). Document-size
  * adoption rules live in `import.ts::importFile` (empty/unset doc only).
  */
 export async function importImagesDialog(): Promise<void> {

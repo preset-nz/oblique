@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use preset_app_kit::{edit_titles, Document as _, DocumentState, History as _, HistoryState};
+use preset_app_kit::{
+    edit_titles, Document as _, DocumentState, History as _, HistoryState, NOTE_EVENT,
+};
 use rhizome_core::{IdSource, On, Value};
 use rhizome_pom::{Document, FileStore, Host, MemoryStore, Outcome, Pom};
 use rhizome_pom_tauri::PomHost;
@@ -13,7 +15,7 @@ use serde_json::{json, Value as Json};
 use tauri::test::{mock_app, MockRuntime};
 use tauri::Listener as _;
 
-use super::host::{DOCUMENT_OPENED, HISTORY_STEPPED, NOT_READY};
+use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
     fit_replaced_transform, refit_attach_transform, Catalogue, DocumentHost, Oblique, Op, OpParam,
     Placement,
@@ -1518,6 +1520,8 @@ fn app_hearing() -> (tauri::App<MockRuntime>, Heard) {
         "pom://status",
         HISTORY_STEPPED,
         DOCUMENT_OPENED,
+        DOCUMENT_SAVED,
+        NOTE_EVENT,
     ] {
         let heard = heard.clone();
         app.listen_any(name, move |e| {
@@ -1664,7 +1668,10 @@ fn an_open_before_init_is_held_and_applied_after_it() {
         Some(DOCUMENT_OPENED),
         "document-opened comes after the transport's events"
     );
-    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+    assert_eq!(
+        payload(&heard, DOCUMENT_OPENED),
+        json!({"issues": [], "path": "/held.oblique"})
+    );
 
     // it was held once
     assert_eq!(host.apply_held(app.handle()), Ok(false));
@@ -1681,6 +1688,13 @@ fn a_held_open_that_fails_leaves_an_untitled_document() {
     assert!(host.is_ready());
     assert_eq!(host.path(), None);
     assert!(!names(&heard).contains(&DOCUMENT_OPENED.to_string()));
+    // the failure is an app-kit note for the webview, in app-kit's own wording
+    let note = payload(&heard, NOTE_EVENT);
+    let note = note.as_str().expect("a note is a string");
+    assert!(
+        note.starts_with("\u{201c}missing.oblique\u{201d} couldn't be opened: "),
+        "{note}"
+    );
     // and it is not held again
     assert_eq!(host.apply_held(app.handle()), Ok(false));
 }
@@ -1707,7 +1721,10 @@ fn an_open_after_init_opens_at_once() {
     assert_eq!(host.path(), Some(PathBuf::from("/doc.oblique")));
     assert!(!host.is_unsaved(), "a fresh open is saved");
     assert!(host.undo_labels().is_empty(), "with an empty history");
-    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+    assert_eq!(
+        payload(&heard, DOCUMENT_OPENED),
+        json!({"issues": [], "path": "/doc.oblique"})
+    );
 }
 
 #[test]
@@ -1803,7 +1820,50 @@ fn new_replaces_the_document_and_takes_app_kits_number() {
     assert!(host.undo_labels().is_empty());
     let state = DocumentState::of(&host);
     assert_eq!(state.name, "Untitled-2");
-    assert_eq!(payload(&heard, DOCUMENT_OPENED), json!({"issues": []}));
+    // a new document has no file to say
+    assert_eq!(
+        payload(&heard, DOCUMENT_OPENED),
+        json!({"issues": [], "path": null})
+    );
+}
+
+#[test]
+fn a_save_says_where_it_came_from_and_where_it_went() {
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+
+    // the first save of an Untitled document has no previous file
+    host.save(app.handle(), Path::new("/a/doc.oblique"))
+        .unwrap();
+    assert_eq!(
+        payload(&heard, DOCUMENT_SAVED),
+        json!({"previous": null, "path": "/a/doc.oblique"})
+    );
+    // rhizome's status events come first, so the webview's path is current when this arrives
+    let heard_names = names(&heard);
+    assert_eq!(
+        heard_names.last().map(String::as_str),
+        Some(DOCUMENT_SAVED),
+        "{heard_names:?}"
+    );
+    assert!(heard_names.contains(&"pom://status".to_string()));
+
+    // a plain Save is the same path twice; a Save As moves it
+    heard.lock().unwrap().clear();
+    host.save(app.handle(), Path::new("/a/doc.oblique"))
+        .unwrap();
+    assert_eq!(
+        payload(&heard, DOCUMENT_SAVED),
+        json!({"previous": "/a/doc.oblique", "path": "/a/doc.oblique"})
+    );
+    heard.lock().unwrap().clear();
+    host.save(app.handle(), Path::new("/b/copy.oblique"))
+        .unwrap();
+    assert_eq!(
+        payload(&heard, DOCUMENT_SAVED),
+        json!({"previous": "/a/doc.oblique", "path": "/b/copy.oblique"})
+    );
 }
 
 #[test]

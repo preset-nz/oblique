@@ -784,26 +784,28 @@ pub fn document_log(message: String) {
 ///
 /// An `open` the host held until now (a restored document, a Finder open) is applied last, so
 /// it emits to a webview whose transport state exists. If it fails the document stays
-/// untitled: the failure is logged and `document_init` still succeeds, or the webview would
-/// never get a document at all.
+/// untitled: the failure goes to the webview as an app-kit note (`apply_held`) and
+/// `document_init` still succeeds, or the webview would never get a document at all.
+///
+/// Answers whether it opened a held file. The webview needs to know, because the
+/// `document-opened` event for it and this command's reply travel by different routes and may
+/// arrive in either order: it keeps the store as it is until that event has been handled.
 #[tauri::command]
 pub fn document_init<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     ops: Vec<Op>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     use tauri::Manager;
     let host = app.state::<DocumentHost>();
     if host.is_ready() {
-        return Ok(());
+        return Ok(false);
     }
     let pom =
         Pom::<Oblique>::files_in(Arc::new(Catalogue(ops))).map_err(|e: Error| e.to_string())?;
     let Some(transport) = host.init(pom) else {
-        return Ok(());
+        return Ok(false);
     };
     app.manage(transport);
-    if let Err(e) = host.apply_held(&app) {
-        eprintln!("[document] the held open failed: {e}");
-    }
-    Ok(())
+    // an error is already a note for the webview; the document stays untitled
+    Ok(host.apply_held(&app).unwrap_or(false))
 }

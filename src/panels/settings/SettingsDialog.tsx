@@ -20,8 +20,8 @@ import { cn } from '@/lib/utils';
  * dialog" roadmap gap, the first being cook-timing toggles). One section
  * today, "AI backends": the Draw Things endpoint and a Test connection
  * check. Opened from the native app menu (`Oblique → Settings…`, Cmd+,)
- * via `openSettingsDialog`, wired in `src/app/menu.ts` the same way
- * File → Open is wired to `openProjectDialog`.
+ * via `openSettingsDialog`, wired in `src/app/menu.ts` like every other command
+ * of Oblique's that app-kit's table does not run itself.
  *
  * Saves on blur/Enter — no Save button, per the story's acceptance.
  */

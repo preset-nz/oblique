@@ -6,7 +6,7 @@ import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
 import * as transaction from '@/scene/transaction';
 import type { PixelNode, Scene, SceneNode, TextNode, VectorNode } from '@/scene/types';
-import { createRhizome, type Rhizome } from './rhizome';
+import { createRhizome, type DocumentEvents, type Rhizome } from './rhizome';
 import { FakeHost } from './testHost';
 
 const emptyScene = (nodes: SceneNode[] = []): Scene => ({
@@ -65,6 +65,7 @@ async function setup(
   extra: Partial<Scene> = {},
   restore: (current: Scene, target: Scene) => Promise<void> = async (_current, target) =>
     useSceneStore.getState().loadScene(target),
+  events?: DocumentEvents,
 ) {
   const scene = { ...emptyScene(nodes), ...extra };
   useSceneStore.setState({ scene });
@@ -74,6 +75,7 @@ async function setup(
     store: useSceneStore,
     notify,
     restore,
+    events,
     nextFrame: async () => undefined,
     schedule: () => undefined, // the tests call reconcile themselves
   });
@@ -652,6 +654,184 @@ describe('reconcile', () => {
   it('does not run before the host is live', async () => {
     await setup([pixel('a')], false);
     await expect(rhizome.reconcile()).resolves.toBe('skipped');
+  });
+});
+
+describe('a document replaced from Rust (app-kit: open, Revert, restore, Finder, New)', () => {
+  /** A file holding one layer, for the host to open. */
+  const putFile = (path: string, id = 'kept') => {
+    host.disk.set(path, FakeHost.fileOf(emptyScene([pixel(id)])));
+  };
+
+  /** What the project and the store did, in order. */
+  let order: string[];
+  /** Records the order of the project's steps and what the store held at each. */
+  const recording = (hold?: Promise<void>): DocumentEvents => ({
+    opened: async (opened, adopt) => {
+      order.push(`opened:${opened.path}`);
+      await hold;
+      await adopt(async (target) => {
+        order.push(
+          `before:${target.nodes.map((n) => n.id)}|store:${state().scene.nodes.map((n) => n.id)}`,
+        );
+      });
+      order.push(`after|store:${state().scene.nodes.map((n) => n.id)}`);
+    },
+    saved: async (saved) => {
+      order.push(`saved:${saved.previous}->${saved.path}`);
+    },
+  });
+  const recordingRestore = async (_current: Scene, target: Scene) => {
+    order.push('restore');
+    useSceneStore.getState().loadScene(target);
+  };
+
+  beforeEach(() => {
+    order = [];
+  });
+
+  it('runs the project before the scene reaches the store, then restores, in that order', async () => {
+    await setup([pixel('old')], true, {}, recordingRestore, recording());
+    putFile('/p/x.oblique');
+    await host.openFile('/p/x.oblique');
+    await settle();
+    expect(order).toEqual([
+      'opened:/p/x.oblique',
+      'before:kept|store:old', // the old scene is still in the store when the project clears caches
+      'restore',
+      'after|store:kept',
+    ]);
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('neither the status that announces it, nor the reconcile, puts the new scene in the store first', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await setup([pixel('old')], true, {}, recordingRestore, recording(held));
+    putFile('/p/x.oblique');
+    const opening = host.openFile('/p/x.oblique'); // status has gone out; document-opened waits on `held`
+    await settle();
+    // the status with the new generation has been heard: the path is known to the project
+    expect(rhizome.status()?.path).toBe('/p/x.oblique');
+    // ... and nothing rebuilt the store, nor will a reconcile
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['old']);
+    expect(order).not.toContain('restore');
+    await expect(rhizome.reconcile()).resolves.toBe('skipped');
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['old']);
+
+    release();
+    await opening;
+    await settle();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['kept']);
+    expect(order.indexOf('restore')).toBeGreaterThan(-1);
+    // and the reconcile is free again, with nothing to say
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('a file held until the catalogue is opened inside init: the event is not lost, and nothing is reconciled', async () => {
+    await setup([], false, {}, recordingRestore, recording());
+    putFile('/p/held.oblique');
+    host.heldOpen = '/p/held.oblique'; // Rust applies it during `init`
+    await rhizome.start([]);
+    await settle();
+    expect(order).toEqual([
+      'opened:/p/held.oblique',
+      'before:kept|store:',
+      'restore',
+      'after|store:kept',
+    ]);
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['kept']);
+    expect(rhizome.status()?.path).toBe('/p/held.oblique');
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('a held file whose events land after init has answered is gated the same way, with a reconcile in between', async () => {
+    await setup([], false, {}, recordingRestore, recording());
+    putFile('/p/held.oblique');
+    host.heldOpen = '/p/held.oblique';
+    host.lateHeldEvents = 15; // Tauri orders an event against a command's reply no more than this
+    await rhizome.start([]);
+    // init has answered and the host is live, but nothing has been heard of the open: the store
+    // is still empty, and a reconcile in this window must leave it alone
+    expect(rhizome.isLive()).toBe(true);
+    expect(state().scene.nodes).toHaveLength(0);
+    await expect(rhizome.reconcile()).resolves.toBe('skipped');
+    expect(order).toEqual([]);
+
+    await vi.waitFor(() => expect(order).toContain('restore'));
+    await settle();
+    expect(order).toEqual([
+      'opened:/p/held.oblique',
+      'before:kept|store:',
+      'restore',
+      'after|store:kept',
+    ]);
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['kept']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('a reloaded page (init answers false, no file held) is not gated', async () => {
+    await setup([pixel('a')], false);
+    await rhizome.start([]);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('opens the same file twice in a row: the second still rebuilds', async () => {
+    await setup([], true, {}, recordingRestore, recording());
+    putFile('/p/x.oblique');
+    await host.openFile('/p/x.oblique');
+    await host.openFile('/p/x.oblique');
+    await settle();
+    expect(order.filter((o) => o === 'restore')).toHaveLength(2);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('New replaces the document the same way, with no file', async () => {
+    await setup([pixel('old')], true, {}, recordingRestore, recording());
+    await host.newFile();
+    await settle();
+    expect(order[0]).toBe('opened:null');
+    expect(state().scene.nodes).toHaveLength(0);
+    expect(rhizome.status()?.path).toBeNull();
+  });
+
+  it('without the project (no events) a replaced document is simply restored', async () => {
+    await setup([pixel('old')]);
+    putFile('/p/x.oblique');
+    await host.openFile('/p/x.oblique');
+    await settle();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['kept']);
+  });
+
+  it('a save tells the project where the document was and is, after the status', async () => {
+    await setup([pixel('a')], true, {}, recordingRestore, recording());
+    await host.saveFile('/p/a.oblique');
+    await host.saveFile('/q/b.oblique');
+    expect(order).toEqual(['saved:null->/p/a.oblique', 'saved:/p/a.oblique->/q/b.oblique']);
+    expect(rhizome.status()?.path).toBe('/q/b.oblique');
+    // a save is not a replacement: the store is left alone and the reconcile runs
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+  });
+
+  it('a project handler that throws is a toast, and the store still follows the document', async () => {
+    await setup([pixel('old')], true, {}, recordingRestore, {
+      opened: async () => {
+        throw new Error('boom');
+      },
+      saved: async () => undefined,
+    });
+    putFile('/p/x.oblique');
+    await host.openFile('/p/x.oblique');
+    await settle();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    // the handler never adopted the scene: rhizome did, and the gate is down
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['kept']);
+    await expect(rhizome.reconcile()).resolves.toBe('same');
   });
 });
 

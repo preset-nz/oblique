@@ -9,29 +9,25 @@
 //! **A menu accelerator is consumed by `NSMenu` before the key reaches the webview,** so a
 //! command's chord is written here and nowhere else (`SHORTCUTS`), and held unique by a test.
 //!
-//! **File.** New, Open…, Save and Save As… are still Oblique's own commands on their old ids,
-//! because app-kit's versions need a `Document` installed (`AppKit::install`), which also brings
-//! the close guard, relaunch restore and Finder opens: that is slice c. Until then
-//! `menu.toml` turns app-kit's File slots off and the webview flows behind these ids are
-//! unchanged.
+//! **File.** New, Open…, Open Recent, Close, Save, Save As… and Revert to Saved… are app-kit's,
+//! against the document host (`AppKit::install`), which also brings the close guard, relaunch
+//! restore and Finder opens. Oblique adds Import… and Export after them: sections 4 and 5, past
+//! app-kit's own (New and Open 0, Close 2, Save, Save As… and Revert 3), as the menu standard
+//! orders File.
 //!
 //! **Open vs Import.** Open replaces the whole project (`.oblique` only); Import adds image
 //! nodes to the current one and never touches the project file.
 
 use preset_app_kit::{shortcut, Command, MenuName};
 
-/// app-kit's switches for its built-in items: every document slot off until slice c.
+/// app-kit's switches for its built-in items: every slot on.
 pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 
 /// Every accelerator Oblique binds, by command id: written here and nowhere else, in one
 /// canonical order (`CmdOrCtrl`, `Ctrl`, `Alt`, `Shift`, then the key), and held unique by a
 /// test against what app-kit and macOS bind themselves.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("file-new", "CmdOrCtrl+N"),
-    ("file-open", "CmdOrCtrl+O"),
     ("file-import", shortcut::IMPORT),
-    ("file-save", "CmdOrCtrl+S"),
-    ("file-save-as", "CmdOrCtrl+Shift+S"),
     ("file-export-png", "CmdOrCtrl+Shift+E"),
     ("file-export-proof", "CmdOrCtrl+Alt+Shift+E"),
     ("edit-duplicate", "CmdOrCtrl+D"),
@@ -78,13 +74,9 @@ pub fn commands() -> Vec<Command> {
     let layer = |id, label, section| item(id, label).domain("Layer").section(section);
     let text = |id, label| item(id, label).domain("Type").section(0);
     vec![
-        file("file-new", "New", 0),
-        file("file-open", "Open…", 0),
-        file("file-import", "Import…", 0),
-        file("file-save", "Save", 1),
-        file("file-save-as", "Save As…", 1),
-        file("file-export-png", "Export PNG…", 2),
-        file("file-export-proof", "Export Proof…", 2),
+        file("file-import", "Import…", 4),
+        file("file-export-png", "Export PNG…", 5),
+        file("file-export-proof", "Export Proof…", 5),
         // After Undo and Redo, before Cut, Copy and Paste.
         item("edit-duplicate", "Duplicate")
             .menu(MenuName::Edit)
@@ -114,11 +106,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_menu_config_parses_and_leaves_no_document_slot_on() {
+    fn the_menu_config_parses_and_has_every_file_slot_on() {
         let config = preset_app_kit::MenuConfig::parse(MENU_CONFIG).expect("menu.toml is valid");
-        // `install_history` refuses a config with any of these on; slice c installs the
-        // document and turns them back on.
-        assert!(config.file.document_slots_on().is_empty());
+        // app-kit's File is the only File Oblique has: New, Open…, Open Recent, Save, Save As…
+        // and Revert, and Close with them.
+        assert_eq!(config.file.document_slots_on().len(), 6);
+        assert!(config.file.close);
         assert!(config.app.settings);
     }
 
@@ -158,11 +151,15 @@ mod tests {
     }
 
     /// What app-kit and macOS bind in the menu bar before Oblique adds anything: Undo, Redo,
-    /// Settings…, Quit, Hide, Hide Others, Minimise, Close Window (File > Close is off, so
-    /// Window carries it), Full Screen, Cut, Copy, Paste and Select All.
-    const BUILT_IN: [&str; 13] = [
+    /// New, Open…, Save, Save As…, Settings…, Quit, Hide, Hide Others, Minimise, Close (File's),
+    /// Full Screen, Cut, Copy, Paste and Select All.
+    const BUILT_IN: [&str; 17] = [
         "CmdOrCtrl+Z",
         "CmdOrCtrl+Shift+Z",
+        "CmdOrCtrl+N",
+        "CmdOrCtrl+O",
+        "CmdOrCtrl+S",
+        "CmdOrCtrl+Shift+S",
         "CmdOrCtrl+,",
         "CmdOrCtrl+Q",
         "CmdOrCtrl+H",
@@ -203,15 +200,11 @@ mod tests {
     }
 
     #[test]
-    fn every_old_id_is_still_on_the_table() {
+    fn every_id_the_webview_binds_is_still_on_the_table() {
         let table = commands();
         let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
         for id in [
-            "file-new",
-            "file-open",
             "file-import",
-            "file-save",
-            "file-save-as",
             "file-export-png",
             "file-export-proof",
             "edit-duplicate",

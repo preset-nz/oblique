@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCT_NAME } from '@/branding';
+import { useMissingFontsStore } from '@/fonts/missingFonts';
 import { firstDifference, normal } from '@/rhizome/adapter';
 import { adoptRhizome, createRhizome, type Rhizome } from '@/rhizome/rhizome';
 import { FakeHost } from '@/rhizome/testHost';
@@ -17,8 +17,6 @@ vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
-  save: vi.fn(),
-  confirm: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -35,12 +33,8 @@ import * as prefixStore from '@/scene/prefixStore';
 import * as importModule from './import';
 import type { ProjectIoDeps } from './io';
 import {
-  attachDocumentOpening,
   importImagesDialog,
-  loadProject,
-  newProject,
-  openProjectDialog,
-  saveProject,
+  projectDocumentEvents,
   setBackgroundImageFromPath,
   useProjectMetaStore,
   writeBakedSidecar,
@@ -137,6 +131,7 @@ async function startHost(): Promise<void> {
         { readFile: (p) => restoreDeps.readFile(p), decode: (b) => restoreDeps.decode(b) },
         (scene) => useSceneStore.getState().loadScene(scene),
       ),
+    events: projectDocumentEvents(restoreProxy),
     nextFrame: async () => undefined,
     schedule: () => undefined, // the tests call reconcile themselves
   });
@@ -152,15 +147,38 @@ const settle = async () => {
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
-/** `loadProject` with deps the store's restore shares, so one fake filesystem serves both. */
+/** The project's side of opening and saving, over whatever deps the test has swapped in. */
+const restoreProxy: ProjectIoDeps = {
+  readFile: (p) => restoreDeps.readFile(p),
+  decode: (b) => restoreDeps.decode(b),
+  mkdir: (p, o) => restoreDeps.mkdir(p, o),
+  writeFile: (p, b) => restoreDeps.writeFile(p, b),
+  readDir: (p) => restoreDeps.readDir(p),
+  remove: (p, o) => restoreDeps.remove(p, o),
+  encodePng: (b) => restoreDeps.encodePng(b),
+};
+
+/** Deps the store's restore and the project's events share, so one fake filesystem serves both. */
 const use = (deps: ProjectIoDeps): ProjectIoDeps => {
   restoreDeps = deps;
   return deps;
 };
 
+/** File > Open (or Open Recent, Revert, a Finder open) as app-kit does it, and the webview's side of it. */
+const loadProject = async (path: string, deps: ProjectIoDeps): Promise<void> => {
+  use(deps);
+  await host.openFile(path);
+};
+
+/** File > Save or Save As… as app-kit does it, and the webview's side of it. */
+const saveProject = async (path: string, deps: ProjectIoDeps): Promise<void> => {
+  use(deps);
+  await host.saveFile(path);
+};
+
 beforeEach(async () => {
   useSceneStore.setState({ scene: emptyScene() });
-  useProjectMetaStore.setState({ path: null, dirtySinceSave: false });
+  useProjectMetaStore.setState({ path: null });
   sources.clearAll();
   backgroundSource.clear();
   cache.clearAll();
@@ -176,7 +194,7 @@ afterEach(() => {
 
 const sceneNow = () => useSceneStore.getState().scene;
 
-describe('loadProject', () => {
+describe('a document opened from Rust (document-opened)', () => {
   it('rebuilds the store from the opened document, rehydrates sources, marks nodes draft-dirty', async () => {
     putFile('/proj/x.oblique', sampleScene());
     const deps = use(makeDeps());
@@ -188,7 +206,6 @@ describe('loadProject', () => {
     expect(sources.get('n1')).toBeDefined();
     expect(sources.isSourceMissing('n1')).toBe(false);
     expect(useProjectMetaStore.getState().path).toBe('/proj/x.oblique');
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
     // no reconcile diff afterwards
     expect(await rhizome.reconcile()).toBe('same');
   });
@@ -234,7 +251,7 @@ describe('loadProject', () => {
     expect(sources.isSourceMissing('n1')).toBe(true);
   });
 
-  it("an old JSON project is refused with rhizome's own error: filename in the snackbar, nothing changes", async () => {
+  it("an old JSON project is refused (app-kit shows rhizome's error): nothing changes, nothing is heard", async () => {
     host.disk.set(
       '/proj/old.oblique',
       JSON.stringify({ format: 'oblique-project', version: 2, scene: sampleScene() }),
@@ -244,16 +261,11 @@ describe('loadProject', () => {
     const heldBefore = sources.get('n1');
     const deps = use(makeDeps());
 
-    await loadProject('/proj/old.oblique', deps);
-
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'error',
-        message: expect.stringContaining('old.oblique'),
-        description: '/proj/old.oblique: not a rhizome document',
-      }),
+    await expect(loadProject('/proj/old.oblique', deps)).rejects.toBe(
+      '/proj/old.oblique: not a rhizome document',
     );
+
+    expect(notify).not.toHaveBeenCalled();
     expect(sceneNow().nodes.map((n) => n.id)).toEqual(['n1']);
     expect(sources.get('n1')).toBe(heldBefore);
     expect(useProjectMetaStore.getState().path).toBeNull();
@@ -261,11 +273,111 @@ describe('loadProject', () => {
   });
 
   it('a missing file is refused the same way', async () => {
-    await loadProject('/proj/none.oblique', use(makeDeps()));
-    expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'error', message: expect.stringContaining('none.oblique') }),
-    );
+    await expect(loadProject('/proj/none.oblique', use(makeDeps()))).rejects.toBeDefined();
+    expect(notify).not.toHaveBeenCalled();
     expect(sceneNow().id).toBe('empty');
+  });
+
+  it('the issues a load reports are one warning naming the file; none is no toast', async () => {
+    putFile('/proj/x.oblique', sampleScene());
+    await loadProject('/proj/x.oblique', use(makeDeps()));
+    expect(notify).not.toHaveBeenCalled();
+
+    host.issues = [
+      { path: '/layers/n1', message: 'one thing' },
+      { path: '/layers/n1', message: 'another' },
+    ];
+    await loadProject('/proj/x.oblique', use(makeDeps()));
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'warning',
+      message: 'x.oblique opened with 2 issues',
+      description: 'one thing\nanother',
+    });
+  });
+
+  it('warns about missing fonts for an opened file, and clears the warning for New', async () => {
+    const fonts = useMissingFontsStore.getState();
+    const opened = vi.spyOn(fonts, 'documentOpened');
+    const cleared = vi.spyOn(fonts, 'documentCleared');
+    putFile('/proj/x.oblique', sampleScene());
+    await loadProject('/proj/x.oblique', use(makeDeps()));
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(cleared).not.toHaveBeenCalled();
+
+    await host.newFile();
+    expect(cleared).toHaveBeenCalledTimes(1);
+    expect(opened).toHaveBeenCalledTimes(1);
+    opened.mockRestore();
+    cleared.mockRestore();
+  });
+
+  it('clears the caches first, and reads the baked bitmaps BEFORE the scene reaches the store', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    putFile('/proj/x.oblique', scene);
+    cache.set('stale', 'baked', fakeBitmap());
+    const bakedWhenSceneArrived: (boolean | 'n/a')[] = [];
+    const unsubscribe = useSceneStore.subscribe((state, previous) => {
+      if (state.scene === previous.scene) return;
+      bakedWhenSceneArrived.push(
+        state.scene.nodes.some((n) => n.id === 'n1')
+          ? cache.get('n1', 'baked') !== undefined
+          : 'n/a',
+      );
+    });
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+
+    await loadProject('/proj/x.oblique', use(makeDeps({ readFile })));
+    unsubscribe();
+
+    expect(cache.get('stale', 'baked')).toBeUndefined();
+    // every time the store gained n1, its baked bitmap was already there
+    expect(bakedWhenSceneArrived).toContain(true);
+    expect(bakedWhenSceneArrived).not.toContain(false);
+    expect(await rhizome.reconcile()).toBe('same');
+  });
+
+  it('a file held until the catalogue arrives (relaunch restore, a cold Finder open) opens the same way', async () => {
+    // a fresh host, as at launch: the file is applied during init
+    unbind();
+    uninstall();
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    useSceneStore.setState({ scene: emptyScene() });
+    cache.clearAll();
+    const deps = use(makeDeps());
+    host = new FakeHost(emptyScene());
+    host.disk.set('/proj/restored.oblique', FakeHost.fileOf(scene));
+    host.heldOpen = '/proj/restored.oblique';
+    rhizome = createRhizome({
+      backend: host,
+      store: useSceneStore,
+      notify: (o) => notify(o),
+      restore: (current, target) =>
+        restoreScene(
+          current,
+          target,
+          { readFile: (p) => restoreDeps.readFile(p), decode: (b) => restoreDeps.decode(b) },
+          (loaded) => useSceneStore.getState().loadScene(loaded),
+        ),
+      events: projectDocumentEvents(restoreProxy),
+      nextFrame: async () => undefined,
+      schedule: () => undefined,
+    });
+    adoptRhizome(rhizome);
+    unbind = bindProjectMeta(rhizome);
+    uninstall = rhizome.install();
+    await rhizome.start([]);
+    await settle();
+
+    expect(deps.readFile).toHaveBeenCalledWith('/proj/restored.oblique.baked/n1.png');
+    expect(cache.get('n1', 'baked')).toBeDefined();
+    expect(sceneNow().nodes.map((n) => n.id)).toEqual(['n1']);
+    expect(sceneNow().nodes[0].dirty).toEqual({ draft: true, working: true });
+    expect(useProjectMetaStore.getState().path).toBe('/proj/restored.oblique');
+    expect(await rhizome.reconcile()).toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
   });
 
   describe('baked-bitmap rehydration (baked-persistence.md)', () => {
@@ -331,10 +443,8 @@ describe('loadProject', () => {
       cache.set('n1', 'baked', fakeBitmap());
       const pngBytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
 
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/proj/round.oblique');
       await saveProject(
-        { as: true },
+        '/proj/round.oblique',
         makeDeps({
           writeFile: vi.fn(async (path: string, bytes: Uint8Array) => {
             fs.set(path, bytes);
@@ -370,9 +480,8 @@ describe('loadProject', () => {
 });
 
 describe('save, open and new over the document host', () => {
-  it('new -> edits -> save -> open: the same scene, and no reconcile diff', async () => {
-    await newProject(async () => true);
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
+  it('new -> edits -> save -> new -> open: the same scene, and no reconcile diff', async () => {
+    await host.newFile();
 
     const store = useSceneStore.getState();
     store.setDocumentSize([640, 480]);
@@ -404,153 +513,92 @@ describe('save, open and new over the document host', () => {
     useSceneStore.getState().setTextProps(t, { content: 'Hi there', fill: '#ff8800' });
     await settle();
     expect(await rhizome.reconcile()).toBe('same');
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
     const before = sceneNow();
 
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/art/piece.oblique');
-    await saveProject({}, use(makeDeps()));
+    await saveProject('/art/piece.oblique', use(makeDeps()));
     expect(notify).not.toHaveBeenCalled();
     expect(host.disk.has('/art/piece.oblique')).toBe(true);
-    expect(useProjectMetaStore.getState()).toMatchObject({
-      path: '/art/piece.oblique',
-      dirtySinceSave: false,
-    });
+    expect(useProjectMetaStore.getState().path).toBe('/art/piece.oblique');
 
-    await newProject(async () => true);
+    await host.newFile();
     expect(sceneNow().nodes).toHaveLength(0);
     expect(useProjectMetaStore.getState().path).toBeNull();
 
     await loadProject('/art/piece.oblique', use(makeDeps()));
     expect(firstDifference(normal(sceneNow()), normal(before))).toBeNull();
     expect(await rhizome.reconcile()).toBe('same');
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
   });
 
-  it('plain Save with a path runs file.save and asks for no dialog; the extension is rhizomes to add', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/art/noext');
-    await arrange(sampleScene());
-    await saveProject({}, use(makeDeps()));
-    expect(useProjectMetaStore.getState().path).toBe('/art/noext.oblique');
-    expect(host.disk.has('/art/noext.oblique')).toBe(true);
+  it('a save writes the baked bitmaps beside the file it names, and a repeat save does too', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    await arrange(scene);
+    cache.set('n1', 'baked', fakeBitmap());
+    const deps = makeDeps();
 
-    (save as ReturnType<typeof vi.fn>).mockClear();
-    host.trace.length = 0;
-    await saveProject({}, use(makeDeps()));
-    expect(save).not.toHaveBeenCalled();
-    expect(host.trace).toContain('run:file.save');
-  });
-
-  it('a cancelled save dialog does nothing', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    await saveProject({}, use(makeDeps()));
-    expect(host.disk.size).toBe(0);
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it('a host that refuses the write is a snackbar, not a crash', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/art/x.oblique');
-    host.saveAs = async () => {
-      throw 'permission denied';
-    };
-    await saveProject({}, use(makeDeps()));
-    expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'error',
-        message: "Couldn't save project",
-        description: 'permission denied',
-      }),
+    await saveProject('/art/a.oblique', use(deps));
+    expect(deps.writeFile).toHaveBeenCalledWith(
+      '/art/a.oblique.baked/n1.png',
+      expect.any(Uint8Array),
     );
+
+    await saveProject('/art/a.oblique', use(deps));
+    expect(deps.writeFile).toHaveBeenCalledTimes(2);
   });
 
-  it('no host (outside the app): a snackbar, not a crash', async () => {
-    adoptRhizome(null);
-    putFile('/proj/x.oblique', sampleScene());
-    await loadProject('/proj/x.oblique', use(makeDeps()));
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
-  });
-
-  it('a macOS open goes through the same path as Cmd+O: at launch and while running', async () => {
-    putFile('/proj/launch.oblique', sampleScene());
-    host.launchPath = '/proj/launch.oblique';
-    // a fresh connect hands the launch path over; the app's onLive then opens it
-    const r2 = createRhizome({
-      backend: host,
-      store: useSceneStore,
-      notify: (o) => notify(o),
-      restore: async (_c, t) => useSceneStore.getState().loadScene(t),
-      nextFrame: async () => undefined,
-      schedule: () => undefined,
+  it('a baked bitmap that will not write is a snackbar, and the save itself stands', async () => {
+    const scene = sampleScene();
+    scene.nodes[0].state = 'locked';
+    await arrange(scene);
+    cache.set('n1', 'baked', fakeBitmap());
+    const deps = makeDeps({
+      writeFile: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
     });
-    // the first instance steps down: this tests `attachDocumentOpening` and nothing else
-    unbind();
-    uninstall();
-    adoptRhizome(r2);
-    unbind = bindProjectMeta(r2);
-    await r2.start([]);
-    await attachDocumentOpening(r2);
-    await settle();
-    expect(sceneNow().nodes.map((n) => n.id)).toEqual(['n1']);
-    expect(useProjectMetaStore.getState().path).toBe('/proj/launch.oblique');
 
-    const second = { ...sampleScene(), nodes: [] };
-    putFile('/proj/second.oblique', second);
-    host.offerOpen('/proj/second.oblique');
-    await settle();
-    expect(sceneNow().nodes).toHaveLength(0);
-    expect(useProjectMetaStore.getState().path).toBe('/proj/second.oblique');
+    await saveProject('/art/a.oblique', use(deps));
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', description: 'disk full' }),
+    );
+    expect(host.disk.has('/art/a.oblique')).toBe(true);
   });
 });
 
 describe('the project meta store follows the status of the document host', () => {
-  it('a new document is not unsaved; an edit, undo and redo are; a save is not; new has no path', async () => {
+  it('a save gives it the path, New takes it away, and an open sets it', async () => {
     const meta = () => useProjectMetaStore.getState();
-    expect(meta()).toMatchObject({ path: null, dirtySinceSave: false });
+    expect(meta()).toMatchObject({ path: null });
 
     useSceneStore.getState().addPixelNode({ sourcePath: '/pics/a.png', sourceSize: [10, 10] });
     await settle();
-    expect(meta().dirtySinceSave).toBe(true);
+    expect(meta().path).toBeNull();
 
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/art/m.oblique');
-    await saveProject({}, use(makeDeps()));
-    expect(meta()).toMatchObject({ path: '/art/m.oblique', dirtySinceSave: false });
+    await saveProject('/art/m.oblique', use(makeDeps()));
+    expect(meta().path).toBe('/art/m.oblique');
 
-    await host.step(true); // Edit > Undo
-    await settle();
-    expect(meta().dirtySinceSave).toBe(true);
+    await host.newFile();
+    expect(meta().path).toBeNull();
 
-    await newProject(async () => true);
-    expect(meta()).toMatchObject({ path: null, dirtySinceSave: false });
-  });
-
-  it('scene churn that is not an edit (a cook clearing its dirty flag) does not mark it unsaved', async () => {
-    await arrange(sampleScene());
-    useSceneStore.getState().markDirty('n1', 'draft');
-    useSceneStore.getState().clearDirty('n1', 'draft');
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
+    await loadProject('/art/m.oblique', use(makeDeps()));
+    expect(meta().path).toBe('/art/m.oblique');
   });
 });
 
-describe('newProject', () => {
-  it('clean project: replaces the document and clears caches/sources without prompting', async () => {
+describe('File > New', () => {
+  it('replaces the document and clears caches and sources', async () => {
     putFile('/proj/x.oblique', sampleScene());
     await loadProject('/proj/x.oblique', use(makeDeps()));
     expect(sceneNow().nodes).toHaveLength(1);
 
     const clearCache = vi.spyOn(cache, 'clearAll');
     const clearSources = vi.spyOn(sources, 'clearAll');
-    const confirmDiscard = vi.fn();
 
-    await newProject(confirmDiscard);
+    await host.newFile();
 
-    expect(confirmDiscard).not.toHaveBeenCalled();
     expect(sceneNow().nodes).toHaveLength(0);
     expect(useProjectMetaStore.getState().path).toBeNull();
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
     expect(clearCache).toHaveBeenCalled();
     expect(clearSources).toHaveBeenCalled();
     expect(await rhizome.reconcile()).toBe('same');
@@ -561,37 +609,15 @@ describe('newProject', () => {
     await loadProject('/proj/x.oblique', use(makeDeps()));
     prefixStore.setLastStack('n1', 'draft', ['x']);
 
-    await newProject(vi.fn());
+    await host.newFile();
 
     expect(prefixStore.getLastStack('n1', 'draft')).toBeUndefined();
-  });
-
-  it('dirty project: prompts, and a cancelled prompt leaves the document untouched', async () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/pics/a.png', sourceSize: [10, 10] });
-    await settle();
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
-
-    const confirmDiscard = vi.fn(async () => false);
-    await newProject(confirmDiscard);
-
-    expect(confirmDiscard).toHaveBeenCalledTimes(1);
-    expect(sceneNow().nodes).toHaveLength(1);
-  });
-
-  it('dirty project: a confirmed prompt starts the new document', async () => {
-    useSceneStore.getState().addPixelNode({ sourcePath: '/pics/a.png', sourceSize: [10, 10] });
-    await settle();
-
-    const confirmDiscard = vi.fn(async () => true);
-    await newProject(confirmDiscard);
-
-    expect(sceneNow().nodes).toHaveLength(0);
   });
 
   it('does not resurrect the discarded scene in undo', async () => {
     useSceneStore.getState().addPixelNode({ sourcePath: '/pics/a.png', sourceSize: [10, 10] });
     await settle();
-    await newProject(async () => true);
+    await host.newFile();
 
     await host.step(true); // Edit > Undo: the new document starts an empty history
     await settle();
@@ -612,7 +638,7 @@ describe('document background image (background-image.md)', () => {
     return scene;
   }
 
-  it('loadProject re-decodes the background from sourcePath', async () => {
+  it('an opened file re-decodes the background from sourcePath', async () => {
     putFile('/proj/x.oblique', sceneWithImage());
     const deps = use(makeDeps());
     await loadProject('/proj/x.oblique', deps);
@@ -648,7 +674,7 @@ describe('document background image (background-image.md)', () => {
 
   it('File -> New drops the held bitmap', async () => {
     backgroundSource.set('/old.png', fakeBitmap());
-    await newProject(async () => true);
+    await host.newFile();
     expect(backgroundSource.heldPath()).toBeUndefined();
   });
 
@@ -793,34 +819,8 @@ describe('writeBakedSidecar', () => {
   });
 });
 
-describe('openProjectDialog vs importImagesDialog (roadmap: split Open vs Import, 2026-07-05)', () => {
-  it('openProjectDialog only accepts .oblique filters and loads the project, never imports', async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    (open as ReturnType<typeof vi.fn>).mockResolvedValue('/proj/x.oblique');
-    putFile('/proj/x.oblique', sampleScene());
-    const importFilesSpy = vi.spyOn(importModule, 'importFiles');
-
-    await openProjectDialog();
-
-    expect(open).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filters: [{ name: `${PRODUCT_NAME} project`, extensions: ['oblique'] }],
-      }),
-    );
-    expect(sceneNow().nodes.map((n) => n.id)).toEqual(['n1']);
-    expect(importFilesSpy).not.toHaveBeenCalled();
-  });
-
-  it('openProjectDialog does nothing when the dialog is cancelled', async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    (open as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-
-    await openProjectDialog();
-
-    expect(sceneNow().id).toBe('empty');
-  });
-
-  it('importImagesDialog adds node(s) via importFiles and never opens a project', async () => {
+describe('importImagesDialog (roadmap: split Open vs Import, 2026-07-05)', () => {
+  it('importImagesDialog adds node(s) via importFiles and never replaces the project', async () => {
     const { open } = await import('@tauri-apps/plugin-dialog');
     (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/pics/a.png']);
     const importFilesSpy = vi
@@ -860,7 +860,7 @@ describe('relative source paths (image-source.md)', () => {
     return scene;
   }
 
-  it('loadProject resolves a relative path against the project folder and keeps it verbatim', async () => {
+  it('an opened file resolves a relative path against the project folder and keeps it verbatim', async () => {
     putFile('/x/proj.oblique', relativeScene('plates/a.png'));
     const readFile = vi.fn(async () => new Uint8Array([1]));
     await loadProject('/x/proj.oblique', use(makeDeps({ readFile })));
@@ -871,7 +871,7 @@ describe('relative source paths (image-source.md)', () => {
     );
   });
 
-  it('loadProject flags a hand-edited strata:// path missing without reading anything', async () => {
+  it('an opened file flags a hand-edited strata:// path missing without reading anything', async () => {
     putFile('/x/proj.oblique', relativeScene('strata://asset/1'));
     const readFile = vi.fn(async () => new Uint8Array([1]));
     await loadProject('/x/proj.oblique', use(makeDeps({ readFile })));
@@ -882,14 +882,12 @@ describe('relative source paths (image-source.md)', () => {
   });
 
   it('a first Save re-checks relative paths: flagged missing before, resolved after; a different size sends layer.set_source', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/x/proj.oblique');
     await arrange(relativeScene('plates/a.png', [200, 100]));
     sources.useSourceMissingStore.getState().setMissing('n1', true, 'relative-unsaved');
 
     const readFile = vi.fn(async () => new Uint8Array([1]));
     const decode = vi.fn(async () => ({ width: 400, height: 100, close: vi.fn() }));
-    await saveProject({}, use(makeDeps({ readFile, decode })));
+    await saveProject('/x/proj.oblique', use(makeDeps({ readFile, decode })));
     await vi.waitFor(() => expect(host.runs.map((r) => r.id)).toContain('layer.set_source'));
 
     expect(readFile).toHaveBeenCalledWith('/x/plates/a.png');
@@ -909,23 +907,19 @@ describe('relative source paths (image-source.md)', () => {
     expect(notify).not.toHaveBeenCalled();
     expect(useProjectMetaStore.getState().path).toBe('/x/proj.oblique');
     // a real undo step, so the document is unsaved straight after the save that caused it
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(true);
+    expect(host.unsaved).toBe(true);
   });
 
   it('a first Save leaves a file of the same size alone: no command, still saved', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/x/proj.oblique');
     await arrange(relativeScene('plates/a.png', [200, 100]));
     sources.useSourceMissingStore.getState().setMissing('n1', true, 'relative-unsaved');
-    await saveProject({}, use(makeDeps())); // decodes 200x100
+    await saveProject('/x/proj.oblique', use(makeDeps())); // decodes 200x100
     expect(sources.isSourceMissing('n1')).toBe(false);
-    expect(host.runs).toEqual([]); // saveAs is not a command run
-    expect(useProjectMetaStore.getState().dirtySinceSave).toBe(false);
+    expect(host.runs).toEqual([]); // a save is not a command run
+    expect(host.unsaved).toBe(false);
   });
 
   it('Save As to another folder re-checks: a relative path that no longer resolves is flagged', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/y/copy.oblique');
     putFile('/x/proj.oblique', relativeScene('plates/a.png'));
     await loadProject('/x/proj.oblique', use(makeDeps()));
     expect(sources.isSourceMissing('n1')).toBe(false);
@@ -934,7 +928,7 @@ describe('relative source paths (image-source.md)', () => {
       if (path === '/y/plates/a.png') throw new Error('ENOENT');
       return new Uint8Array([1]);
     });
-    await saveProject({ as: true }, use(makeDeps({ readFile })));
+    await saveProject('/y/copy.oblique', use(makeDeps({ readFile })));
 
     expect(readFile).toHaveBeenCalledWith('/y/plates/a.png');
     expect(sources.isSourceMissing('n1')).toBe(true);
@@ -942,12 +936,18 @@ describe('relative source paths (image-source.md)', () => {
   });
 
   it('absolute paths are not re-read on Save As', async () => {
-    const { save } = await import('@tauri-apps/plugin-dialog');
     putFile('/x/proj.oblique', sampleScene()); // /pics/a.png
     await loadProject('/x/proj.oblique', use(makeDeps()));
-    (save as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/y/copy.oblique');
     const readFile = vi.fn(async () => new Uint8Array([1]));
-    await saveProject({ as: true }, use(makeDeps({ readFile })));
+    await saveProject('/y/copy.oblique', use(makeDeps({ readFile })));
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('a plain Save to the same file re-checks nothing', async () => {
+    putFile('/x/proj.oblique', relativeScene('plates/a.png'));
+    await loadProject('/x/proj.oblique', use(makeDeps()));
+    const readFile = vi.fn(async () => new Uint8Array([1]));
+    await saveProject('/x/proj.oblique', use(makeDeps({ readFile })));
     expect(readFile).not.toHaveBeenCalled();
   });
 });

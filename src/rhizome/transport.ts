@@ -1,7 +1,8 @@
 /**
  * The one module that talks to rhizome-pom-tauri (Epic 21 story 1): the `pom_*` commands, the
  * `pom://commit` and `pom://status` events, Oblique's own `document_init` / `document_log`, and
- * the document host's `history-stepped` (Epic 22 slice b).
+ * the document host's `history-stepped`, `document-opened` and `document-saved` (Epic 22).
+ * Opening, saving and starting a new document are app-kit's, in Rust: this side only hears.
  * Commands only (rhizome decision 46): there is no way to send a raw edit.
  *
  * Two layers:
@@ -75,6 +76,21 @@ export interface Issue {
   message: string;
 }
 
+/**
+ * The document was replaced from Rust (File > Open, Open Recent, Revert, a Finder open, relaunch
+ * restore, New): the host's `document-opened`. `path` is the file, `null` for a new document.
+ */
+export interface Opened {
+  issues: Issue[];
+  path: string | null;
+}
+
+/** The document was written to `path` (the host's `document-saved`); `previous` is its file before. */
+export interface Saved {
+  previous: string | null;
+  path: string;
+}
+
 /** What `pom_run` answers (rhizome-pom `Ran`, snake_case). */
 export type Ran = 'nothing' | { committed: { seq: number; label: string } } | { text: string };
 
@@ -82,20 +98,20 @@ export type Unlisten = () => void;
 
 /** The raw calls to the document host. */
 export interface RhizomeBackend {
-  /** Makes the host from the sidecar's op catalogue; a second call is a no-op. */
-  init(ops: unknown[]): Promise<void>;
-  /** The front end is listening. Returns a path macOS asked to open before it was. */
-  connect(): Promise<string | null>;
+  /**
+   * Makes the host from the sidecar's op catalogue; a second call is a no-op. Answers whether it
+   * opened a file held until now (relaunch restore, a cold Finder open): that file's
+   * `document-opened` is on its way, and may land before or after this answer.
+   */
+  init(ops: unknown[]): Promise<boolean>;
+  /** The front end is listening: ends any gesture a reloaded page left open, and sends the status. */
+  connect(): Promise<void>;
   view(): Promise<View>;
   status(): Promise<Status>;
   run(id: string, payload?: unknown, coalesce?: string): Promise<Ran>;
   begin(label: string): Promise<number>;
   end(token: number): Promise<void>;
   cancel(token: number): Promise<void>;
-  newDocument(): Promise<void>;
-  /** Replaces the document with the file; what the load couldn't take as written. */
-  open(path: string): Promise<Issue[]>;
-  saveAs(path: string): Promise<void>;
   /** To the terminal running the app; never queued behind edits. */
   log(message: string): Promise<void>;
   onUpdate(f: (u: Update) => void): Promise<Unlisten>;
@@ -105,30 +121,36 @@ export interface RhizomeBackend {
    * have been sent already, so the mirror is current when this fires.
    */
   onHistoryStepped(f: (s: Stepped) => void): Promise<Unlisten>;
-  /** macOS asked to open a document while the front end is listening. */
-  onOpenDocument(f: (path: string) => void): Promise<Unlisten>;
+  /**
+   * Rust replaced the document. Its status events (a new generation) have been sent already;
+   * this is the cue to rebuild the store, and the only one. The listener's promise is awaited
+   * by a test host and by nothing in the app.
+   */
+  onDocumentOpened(f: (o: Opened) => void | Promise<void>): Promise<Unlisten>;
+  /** Rust saved the document; its status events have been sent already. */
+  onDocumentSaved(f: (s: Saved) => void | Promise<void>): Promise<Unlisten>;
 }
 
 /** Only inside the Tauri app: the web build and the tests run Oblique as it is. */
 export const inTauri = (): boolean => isTauri();
 
 export const tauriBackend: RhizomeBackend = {
-  init: (ops) => invoke<void>('document_init', { ops }),
-  connect: () => invoke<string | null>('pom_connect'),
+  init: (ops) => invoke<boolean>('document_init', { ops }),
+  connect: async () => {
+    await invoke<string | null>('pom_connect');
+  },
   view: () => invoke<View>('pom_view'),
   status: () => invoke<Status>('pom_status'),
   run: (id, payload = {}, coalesce) => invoke<Ran>('pom_run', { id, payload, coalesce }),
   begin: (label) => invoke<number>('pom_begin', { label }),
   end: (token) => invoke<void>('pom_end', { token }),
   cancel: (token) => invoke<void>('pom_cancel', { token }),
-  newDocument: () => invoke<void>('pom_new'),
-  open: (path) => invoke<Issue[]>('pom_open', { path }),
-  saveAs: (path) => invoke<void>('pom_save_as', { path }),
   log: (message) => invoke<void>('document_log', { message }).catch(() => undefined),
   onUpdate: (f) => listen<Update>('pom://commit', (e) => f(e.payload)),
   onStatus: (f) => listen<Status>('pom://status', (e) => f(e.payload)),
   onHistoryStepped: (f) => listen<Stepped>('history-stepped', (e) => f(e.payload)),
-  onOpenDocument: (f) => listen<string>('pom://open-document', (e) => f(e.payload)),
+  onDocumentOpened: (f) => listen<Opened>('document-opened', (e) => void f(e.payload)),
+  onDocumentSaved: (f) => listen<Saved>('document-saved', (e) => void f(e.payload)),
 };
 
 // ---------------------------------------------------------------- the ordered channel
@@ -173,9 +195,6 @@ export interface Channel {
   cancel(token: Promise<number>): Promise<void>;
   view(): Promise<View>;
   status(): Promise<Status>;
-  newDocument(): Promise<void>;
-  openDocument(path: string): Promise<Issue[]>;
-  saveAs(path: string): Promise<void>;
 }
 
 export function createChannel(backend: RhizomeBackend, options: ChannelOptions = {}): Channel {
@@ -244,8 +263,5 @@ export function createChannel(backend: RhizomeBackend, options: ChannelOptions =
       }),
     view: () => queued(() => backend.view()),
     status: () => queued(() => backend.status()),
-    newDocument: () => queued(() => backend.newDocument()),
-    openDocument: (path) => queued(() => backend.open(path)),
-    saveAs: (path) => queued(() => backend.saveAs(path)),
   };
 }
