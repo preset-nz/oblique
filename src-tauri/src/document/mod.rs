@@ -54,7 +54,7 @@ const TRANSFORM_AND_PROPS: &[&str] = &[
     "output",
 ];
 
-/// POM built-in commands that write the tree and that Oblique has not moved yet.
+/// POM built-in commands that write the tree. Oblique's own commands replace them, so they refuse.
 const NOT_MOVED: &[&str] = &[
     "value.set",
     "node.add",
@@ -697,8 +697,8 @@ impl ObjectModel for Oblique {
             },
         );
         // POM's other built-ins that write the tree would bypass the rules above, so they
-        // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
-        // commands, copy and export stay as POM has them.
+        // refuse: Oblique's own commands replace them. Undo, redo, the file commands, copy and
+        // export stay as POM has them.
         for id in NOT_MOVED {
             c.add(
                 id,
@@ -719,7 +719,143 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // The document background (background-colour.md, background-image.md): `null` clears
+        // it, a colour is `{type: "color", color}`, an image `{type: "image", sourcePath,
+        // sourceSize}`. Cleared is *unset*, not a stored null, so the scene reads back with no
+        // `background` key, as the store has it. The decoded bitmap is the webview's.
+        c.add(
+            "document.set_background",
+            |_| "Background".into(),
+            |_, p| p.get("background").is_some(),
+            |d, p| {
+                let a: BackgroundArgs = payload(p)?;
+                let background = background_value(&a.background)?;
+                let (_, commit) = d.edit("Background", |tx| {
+                    let doc = live(tx, DOCUMENT_AT)?;
+                    match &background {
+                        Some(b) => set(tx, doc, "background", b),
+                        None => tx.reset(doc, "background"),
+                    }
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // The composition note (composition-note.md). An empty string clears it, which unsets
+        // the value so a saved file stays clean, as `setNote('')` removes the key.
+        c.add(
+            "document.set_note",
+            |_| "Edit Note".into(),
+            |_, p| p.get("note").is_some_and(Json::is_string),
+            |d, p| {
+                let a: NoteArgs = payload(p)?;
+                let (_, commit) = d.edit("Edit Note", |tx| {
+                    let doc = live(tx, DOCUMENT_AT)?;
+                    if a.note.is_empty() {
+                        tx.reset(doc, "note")
+                    } else {
+                        tx.set_value(doc, "note", Value::Text(a.note.clone()))
+                    }
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Lock or unlock a layer (lock-state-machine.md). The bake is the webview's: it cooks
+        // the full-resolution bitmap first and sends this once that has succeeded. Any layer
+        // kind can be locked, and unlocking a locked layer is exactly what this is for, so it
+        // is the one layer command that does not refuse a locked layer. Already in that state,
+        // nothing changes and nothing is a step.
+        c.add(
+            "layer.set_state",
+            |_| "Lock Layer".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("state").is_some_and(Json::is_string)
+            },
+            |d, p| {
+                let a: StateArgs = payload(p)?;
+                let label = if a.state == "locked" {
+                    "Lock Layer"
+                } else {
+                    "Unlock Layer"
+                };
+                let (_, commit) = d.edit(label, |tx| {
+                    if !["active", "locked"].contains(&a.state.as_str()) {
+                        return Err(structural(format!("`{}` isn't a layer state", a.state)));
+                    }
+                    let at = layer_at(tx, &a.at)?;
+                    tx.set_value(at, "state", Value::Choice(a.state.clone()))
+                })?;
+                Ok(commit.into())
+            },
+        );
     }
+}
+
+const DOCUMENT_AT: &str = "/document/document";
+
+/// A background as `document.set_background` takes it, in the one shape the store writes: a
+/// colour has no image fields and an image no colour, so two equal backgrounds are equal trees.
+/// `None` is "no background".
+fn background_value(j: &Json) -> rhizome_core::Result<Option<Json>> {
+    if j.is_null() {
+        return Ok(None);
+    }
+    let o = j
+        .as_object()
+        .ok_or_else(|| structural("a background is null or a record"))?;
+    let only = |keys: &[&str]| -> rhizome_core::Result<()> {
+        match o.keys().find(|k| !keys.contains(&k.as_str())) {
+            Some(k) => Err(structural(format!(
+                "a {} background has no `{k}`",
+                o["type"]
+            ))),
+            None => Ok(()),
+        }
+    };
+    match o.get("type").and_then(Json::as_str) {
+        Some("color") => {
+            only(&["type", "color"])?;
+            let color = o
+                .get("color")
+                .and_then(Json::as_str)
+                .ok_or_else(|| structural("a colour background needs a `color`"))?;
+            Ok(Some(json!({"type": "color", "color": color})))
+        }
+        Some("image") => {
+            only(&["type", "sourcePath", "sourceSize"])?;
+            let path = o
+                .get("sourcePath")
+                .and_then(Json::as_str)
+                .ok_or_else(|| structural("an image background needs a `sourcePath`"))?;
+            let size = o
+                .get("sourceSize")
+                .and_then(Json::as_array)
+                .filter(|a| {
+                    a.len() == 2 && a.iter().all(|n| n.as_f64().is_some_and(f64::is_finite))
+                })
+                .ok_or_else(|| structural("an image background needs a two-number `sourceSize`"))?;
+            Ok(Some(
+                json!({"type": "image", "sourcePath": path, "sourceSize": size}),
+            ))
+        }
+        _ => Err(structural("a background is a `color` or an `image`")),
+    }
+}
+
+#[derive(Deserialize)]
+struct BackgroundArgs {
+    background: Json,
+}
+
+#[derive(Deserialize)]
+struct NoteArgs {
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct StateArgs {
+    at: String,
+    state: String,
 }
 
 #[derive(Deserialize)]

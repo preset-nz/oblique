@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CookScheduler } from '@/cook/scheduler';
 import { useFontCatalogueStore } from '@/fonts/catalogue';
 import { importFile } from '@/project/import';
+import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import { deleteNode } from '@/scene/deleteNode';
+import { type HistoryRehydrateDeps, restoreScene } from '@/scene/restore';
 import * as sources from '@/scene/sources';
 import { DUPLICATE_OFFSET_PX, useSceneStore } from '@/scene/store';
 import { beginNewTextAt, commitActiveTextEdit, useTextEditStore } from '@/scene/textEditState';
@@ -2096,17 +2099,373 @@ describe('vectors and text (vector.*, text.to_outlines)', () => {
   });
 });
 
-describe('refusing what has not moved', () => {
-  it('toasts and changes nothing for an action rhizome does not carry', async () => {
-    await setup([pixel('a')]);
-    const before = state().scene;
-    void state().lockNode('a', async () => ({}) as ImageBitmap);
-    state().setNote('hello');
-    await settle();
-    expect(state().scene).toBe(before);
-    expect(host.runs).toHaveLength(0);
-    expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'warning', message: "Lock node isn't on rhizome yet" }),
-    );
+describe('document and lock (document.*, layer.set_state)', () => {
+  const sent = () => host.runs.map((r) => r.id);
+  const agrees = async () => {
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  };
+  const bitmap = (): ImageBitmap => ({ width: 60, height: 40, close: vi.fn() }) as never;
+  /** What the real restore decodes a background or a pixel source with. */
+  const deps: HistoryRehydrateDeps = {
+    readFile: async () => new Uint8Array([1]),
+    decode: async () => bitmap() as never,
+  };
+  const restoring = (current: Scene, target: Scene) => restoreScene(current, target, deps);
+  const colour = (c: string) => ({ type: 'color' as const, color: c });
+  const picture = (path: string) => ({
+    type: 'image' as const,
+    sourcePath: path,
+    sourceSize: [60, 40] as [number, number],
+  });
+
+  afterEach(() => {
+    backgroundSource.clear();
+    cache.clearAll();
+    sources.clearAll();
+  });
+
+  describe('background (document.set_background)', () => {
+    it('a colour shows at once, and one command carries it', async () => {
+      await setup([pixel('a')]);
+      state().setBackgroundColor('#ff0000');
+      expect(state().scene.background).toEqual(colour('#ff0000')); // local first
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'document.set_background', payload: { background: colour('#ff0000') } },
+      ]);
+      expect(notify).not.toHaveBeenCalled(); // nothing is refused
+      await agrees();
+    });
+
+    it('a colour, then an image, then none: each is a command, and the holder follows the store', async () => {
+      await setup([pixel('a')]);
+      state().setBackgroundColor('#00ff00');
+      backgroundSource.set('/pics/bg.png', bitmap());
+      state().setBackgroundImage('/pics/bg.png', [60, 40]);
+      await settle();
+      expect(state().scene.background).toEqual(picture('/pics/bg.png'));
+      expect(backgroundSource.heldPath()).toBe('/pics/bg.png');
+      state().setBackgroundColor(null);
+      await settle();
+      expect(state().scene.background).toBeUndefined();
+      expect(backgroundSource.heldPath()).toBeUndefined(); // the original drops the bitmap
+      expect(host.runs.map((r) => r.payload)).toEqual([
+        { background: colour('#00ff00') },
+        { background: picture('/pics/bg.png') },
+        { background: null },
+      ]);
+      await agrees();
+    });
+
+    it('undo and redo walk back through all three, and re-decode the image', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      state().setBackgroundColor('#00ff00');
+      await settle();
+      backgroundSource.set('/pics/bg.png', bitmap());
+      state().setBackgroundImage('/pics/bg.png', [60, 40]);
+      await settle();
+      state().setBackgroundColor(null);
+      await settle();
+
+      await undo();
+      expect(state().scene.background).toEqual(picture('/pics/bg.png'));
+      expect(backgroundSource.heldPath()).toBe('/pics/bg.png'); // restoreScene decoded it again
+      await undo();
+      expect(state().scene.background).toEqual(colour('#00ff00'));
+      expect(backgroundSource.heldPath()).toBeUndefined();
+      await undo();
+      expect(state().scene.background).toBeUndefined();
+      await redo();
+      await redo();
+      expect(state().scene.background).toEqual(picture('/pics/bg.png'));
+      expect(backgroundSource.heldPath()).toBe('/pics/bg.png');
+      await redo();
+      expect(state().scene.background).toBeUndefined();
+      expect(backgroundSource.heldPath()).toBeUndefined();
+      await agrees();
+    });
+
+    it('sends nothing for the background the scene already has', async () => {
+      await setup([pixel('a')], true, { background: colour('#123456') });
+      state().setBackgroundColor('#123456');
+      state().setBackgroundColor('#123456');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      state().setBackgroundColor(null);
+      await settle();
+      expect(sent()).toEqual(['document.set_background']); // only the clear
+      expect(state().scene.background).toBeUndefined();
+    });
+
+    it('does nothing for none when there is none', async () => {
+      await setup([pixel('a')]);
+      state().setBackgroundColor(null);
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it('a colour drag is one undo step, and the store never goes back to an older frame', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      transaction.beginTransaction();
+      await settle();
+      let release: () => void = () => undefined;
+      host.hold = new Promise<void>((r) => {
+        release = r;
+      });
+      state().setBackgroundColor('#111111');
+      await vi.waitFor(() => expect(host.runs).toHaveLength(1)); // sent, held
+      state().setBackgroundColor('#222222');
+      state().setBackgroundColor('#333333');
+      host.hold = null;
+      release();
+      await settle();
+      expect(state().scene.background).toEqual(colour('#333333'));
+      transaction.endTransaction();
+      await settle();
+      expect(host.rows.get('row:document')?.values?.background).toEqual(colour('#333333'));
+      await agrees();
+      await undo();
+      expect(state().scene.background).toBeUndefined(); // the whole drag
+      await redo();
+      expect(state().scene.background).toEqual(colour('#333333'));
+    });
+
+    it('a refusal from the host toasts, and the reconcile takes the background back', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      host.reject.add('document.set_background');
+      state().setBackgroundColor('#abcdef');
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(state().scene.background).toBeUndefined();
+    });
+  });
+
+  describe('note (document.set_note)', () => {
+    it('typing is one undo step, shows at once and never snaps back', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      transaction.beginTransaction();
+      await settle();
+      let release: () => void = () => undefined;
+      host.hold = new Promise<void>((r) => {
+        release = r;
+      });
+      state().setNote('h');
+      await vi.waitFor(() => expect(host.runs).toHaveLength(1)); // sent, held
+      for (const n of ['he', 'hel', 'hell', 'hello']) {
+        state().setNote(n);
+        expect(state().scene.note).toBe(n);
+      }
+      host.hold = null;
+      release();
+      await settle();
+      expect(state().scene.note).toBe('hello');
+      transaction.endTransaction();
+      await settle();
+      expect(host.rows.get('row:document')?.values?.note).toBe('hello');
+      expect(host.runs.every((r) => r.coalesce === 'document-note')).toBe(true);
+      expect(notify).not.toHaveBeenCalled();
+      await agrees();
+      await undo();
+      expect(state().scene.note).toBeUndefined(); // the whole session
+      await redo();
+      expect(state().scene.note).toBe('hello');
+      await agrees();
+    });
+
+    it('outside a gesture each edit is a command of its own', async () => {
+      await setup([pixel('a')]);
+      state().setNote('one');
+      await settle();
+      state().setNote('two');
+      await settle();
+      expect(host.runs.map((r) => r.payload)).toEqual([{ note: 'one' }, { note: 'two' }]);
+      await agrees();
+    });
+
+    it('clearing the note removes it from both, and the same note sends nothing', async () => {
+      await setup([pixel('a')], true, { note: 'keep' });
+      state().setNote('keep');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      state().setNote('');
+      await settle();
+      expect('note' in state().scene).toBe(false);
+      expect(host.rows.get('row:document')?.set).not.toContain('note');
+      expect(host.runs.map((r) => r.payload)).toEqual([{ note: '' }]);
+      await agrees();
+      await undo();
+      expect(state().scene.note).toBe('keep');
+    });
+
+    it('a refusal from the host toasts, and the reconcile takes the note back', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      host.reject.add('document.set_note');
+      state().setNote('lost');
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(state().scene.note).toBeUndefined();
+    });
+  });
+
+  describe('lock and unlock (layer.set_state)', () => {
+    const cook = (b = bitmap()) => vi.fn(async () => b);
+
+    it('lock bakes, fills the baked slot and commits locked, then sends the command', async () => {
+      await setup([pixel('a'), pixel('z')]);
+      const baked = bitmap();
+      const run = state().lockNode('a', cook(baked));
+      expect(state().bakingNodeIds.has('a')).toBe(true);
+      await run;
+      expect(node('a')?.state).toBe('locked'); // there before the command is answered
+      expect(cache.get('a', 'baked')).toBe(baked);
+      expect(state().bakingNodeIds.size).toBe(0);
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'layer.set_state', payload: { at: '/layers/a', state: 'locked' } },
+      ]);
+      expect(node('z')?.state).toBe('active');
+      expect(notify).not.toHaveBeenCalled();
+      await agrees();
+    });
+
+    it('a cook failure sends nothing and leaves the layer active', async () => {
+      await setup([pixel('a')]);
+      const failing = vi.fn(async () => {
+        throw new Error('cook failed');
+      });
+      await expect(state().lockNode('a', failing)).rejects.toThrow('cook failed');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(node('a')?.state).toBe('active');
+      expect(cache.get('a', 'baked')).toBeUndefined();
+      expect(state().bakingNodeIds.size).toBe(0);
+    });
+
+    it('a layer baking already, or locked, is a no-op', async () => {
+      await setup([pixel('a'), pixel('l', { state: 'locked' })]);
+      let finish: (b: ImageBitmap) => void = () => undefined;
+      const slow = vi.fn(
+        () =>
+          new Promise<ImageBitmap>((r) => {
+            finish = r;
+          }),
+      );
+      const first = state().lockNode('a', slow);
+      await state().lockNode('a', slow); // baking: returns at once
+      expect(slow).toHaveBeenCalledTimes(1);
+      finish(bitmap());
+      await first;
+      await state().lockNode('a', slow); // locked now
+      await state().lockNode('l', slow); // locked already
+      await state().lockNode('nope', slow); // missing
+      await settle();
+      expect(slow).toHaveBeenCalledTimes(1);
+      expect(sent()).toEqual(['layer.set_state']);
+    });
+
+    it('unlock is commands first: the update drops the baked slot and dirties the layer', async () => {
+      await setup([pixel('a', { state: 'locked' })]);
+      cache.set('a', 'baked', bitmap());
+      state().unlockNode('a');
+      expect(node('a')?.state).toBe('locked'); // nothing local yet
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'layer.set_state', payload: { at: '/layers/a', state: 'active' } },
+      ]);
+      expect(node('a')?.state).toBe('active');
+      expect(node('a')?.dirty).toEqual({ draft: true, working: true });
+      expect(cache.get('a', 'baked')).toBeUndefined();
+      await agrees();
+    });
+
+    it('unlock of a layer that is not locked sends nothing', async () => {
+      await setup([pixel('a')]);
+      state().unlockNode('a');
+      state().unlockNode('nope');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it('lock, undo, redo leaves a usable layer: the scheduler rehydrates the bake', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      const rehydrate = vi.fn(async () => bitmap());
+      const scheduler = new CookScheduler(async () => undefined, rehydrate);
+      scheduler.start();
+      try {
+        const first = bitmap();
+        await state().lockNode('a', cook(first));
+        await settle();
+        expect(cache.get('a', 'baked')).toBe(first);
+
+        await undo(); // the lock is taken back: the bake goes, the layer is editable and dirty
+        expect(node('a')?.state).toBe('active');
+        expect(cache.get('a', 'baked')).toBeUndefined();
+        expect(node('a')?.dirty).toEqual({ draft: true, working: true });
+        expect(rehydrate).not.toHaveBeenCalled();
+
+        await redo(); // locked again, with no bake: the one recovery path cooks it
+        expect(node('a')?.state).toBe('locked');
+        await vi.waitFor(() => expect(cache.get('a', 'baked')).toBeDefined());
+        expect(rehydrate).toHaveBeenCalledTimes(1);
+        expect(rehydrate).toHaveBeenCalledWith('a');
+        expect(cache.get('a', 'baked')).not.toBe(first);
+        await agrees();
+      } finally {
+        scheduler.stop();
+      }
+    });
+
+    it('unlock, undo, redo: undo relocks and the scheduler rehydrates; redo unlocks again', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      const rehydrate = vi.fn(async () => bitmap());
+      const scheduler = new CookScheduler(async () => undefined, rehydrate);
+      scheduler.start();
+      try {
+        await state().lockNode('a', cook());
+        await settle();
+        state().unlockNode('a');
+        await settle();
+        expect(node('a')?.state).toBe('active');
+        expect(cache.get('a', 'baked')).toBeUndefined();
+
+        await undo(); // the unlock is taken back, but the bake was dropped with it
+        expect(node('a')?.state).toBe('locked');
+        expect(node('a')?.dirty).toEqual(clean); // a locked layer carries no dirty flag
+        await vi.waitFor(() => expect(cache.get('a', 'baked')).toBeDefined());
+        expect(rehydrate).toHaveBeenCalledTimes(1);
+
+        await redo();
+        expect(node('a')?.state).toBe('active');
+        expect(cache.get('a', 'baked')).toBeUndefined();
+        expect(node('a')?.dirty).toEqual({ draft: true, working: true });
+        await agrees();
+      } finally {
+        scheduler.stop();
+      }
+    });
+
+    it('a refusal from the host toasts, and the reconcile unlocks the layer and drops its bake', async () => {
+      await setup([pixel('a')], true, {}, restoring);
+      host.reject.add('layer.set_state');
+      await state().lockNode('a', cook());
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(node('a')?.state).toBe('active');
+      expect(cache.get('a', 'baked')).toBeUndefined();
+    });
+
+    it('the compositing props stay writable on a locked layer', async () => {
+      await setup([pixel('a')]);
+      await state().lockNode('a', cook());
+      await settle();
+      state().setNodeProp('a', { opacity: 0.5 });
+      await settle();
+      expect(node('a')?.opacity).toBe(0.5);
+      await agrees();
+    });
   });
 });

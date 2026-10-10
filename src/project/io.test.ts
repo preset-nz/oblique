@@ -678,8 +678,7 @@ describe('document background image (background-image.md)', () => {
     expect(backgroundSource.heldPath()).toBeUndefined();
   });
 
-  it('setBackgroundImageFromPath holds the bitmap and sets the scene background; decode failure raises a snackbar and changes nothing', async () => {
-    uninstall(); // the store's own action, as outside the app: the wrapper refuses it
+  it('setBackgroundImageFromPath holds the bitmap and sends the background to rhizome; decode failure raises a snackbar and changes nothing', async () => {
     const decode = vi.fn(async () => ({ width: 60, height: 40, close: vi.fn() }));
     const ok = await setBackgroundImageFromPath('/pics/bg.png', {
       readFile: vi.fn(async () => new Uint8Array([1])),
@@ -687,11 +686,13 @@ describe('document background image (background-image.md)', () => {
     });
     expect(ok).toBe(true);
     expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
-    expect(sceneNow().background).toEqual({
-      type: 'image',
-      sourcePath: '/pics/bg.png',
-      sourceSize: [60, 40],
-    });
+    const wanted = { type: 'image', sourcePath: '/pics/bg.png', sourceSize: [60, 40] };
+    expect(sceneNow().background).toEqual(wanted);
+    await settle();
+    expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+      { id: 'document.set_background', payload: { background: wanted } },
+    ]);
+    expect(await rhizome.reconcile()).toBe('same');
 
     const failed = await setBackgroundImageFromPath('/pics/bad.png', {
       readFile: vi.fn(async () => new Uint8Array([1])),
@@ -703,20 +704,63 @@ describe('document background image (background-image.md)', () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(sceneNow().background).toMatchObject({ sourcePath: '/pics/bg.png' });
     expect(backgroundSource.get('/pics/bg.png')).toBeDefined();
+    await settle();
+    expect(host.runs).toHaveLength(1); // the failed pick sent nothing
   });
 
-  it('on rhizome it is refused BEFORE the file is read or decoded: a toast, no bitmap held, no background', async () => {
-    const readFile = vi.fn(async () => new Uint8Array([1]));
+  it('a saved image background comes back on open: re-decoded from its path', async () => {
+    await setBackgroundImageFromPath('/pics/bg.png', {
+      readFile: vi.fn(async () => new Uint8Array([1])),
+      decode: vi.fn(async () => ({ width: 60, height: 40, close: vi.fn() })),
+    });
+    await settle();
+    await saveProject('/art/bg.oblique', use(makeDeps()));
+    backgroundSource.clear();
     const decode = vi.fn(async () => ({ width: 60, height: 40, close: vi.fn() }));
-    const ok = await setBackgroundImageFromPath('/pics/bg.png', { readFile, decode });
+    await loadProject('/art/bg.oblique', use(makeDeps({ decode })));
+    expect(sceneNow().background).toMatchObject({ type: 'image', sourcePath: '/pics/bg.png' });
+    expect(backgroundSource.heldPath()).toBe('/pics/bg.png');
+    expect(decode).toHaveBeenCalled();
+  });
+});
 
-    expect(ok).toBe(false);
-    expect(readFile).not.toHaveBeenCalled();
-    expect(decode).not.toHaveBeenCalled();
-    expect(backgroundSource.heldPath()).toBeUndefined();
-    expect(sceneNow().background).toBeUndefined();
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'warning' }));
+describe('lock, save and reopen (layer.set_state)', () => {
+  it('a layer locked in the app is saved with its bake and comes back locked, showing the bake', async () => {
+    const fs = new Map<string, Uint8Array>();
+    await arrange(sampleScene());
+    await useSceneStore.getState().lockNode('n1', async () => fakeBitmap());
+    await settle();
+    expect(host.runs.map((r) => r.id)).toEqual(['layer.set_state']);
+
+    const pngBytes = new Uint8Array([137, 80, 78, 71, 9]);
+    await saveProject(
+      '/proj/locked.oblique',
+      makeDeps({
+        writeFile: vi.fn(async (path: string, bytes: Uint8Array) => {
+          fs.set(path, bytes);
+        }),
+        encodePng: vi.fn(async () => pngBytes),
+      }),
+    );
+    expect(fs.get('/proj/locked.oblique.baked/n1.png')).toEqual(pngBytes);
+
+    cache.clearAll();
+    useSceneStore.setState({ scene: emptyScene() });
+    await loadProject(
+      '/proj/locked.oblique',
+      use(
+        makeDeps({
+          readFile: vi.fn(async (path: string) => {
+            const bytes = fs.get(path);
+            if (!bytes) throw new Error(`not found: ${path}`);
+            return bytes;
+          }),
+        }),
+      ),
+    );
+    expect(sceneNow().nodes[0].state).toBe('locked');
+    expect(cache.get('n1', 'baked')).toBeDefined(); // the bake came from the file, not a cook
+    expect(await rhizome.reconcile()).toBe('same');
   });
 });
 

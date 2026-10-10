@@ -1,7 +1,9 @@
 /**
  * Refusal by construction (Epic 21 story 1, "Behaviour"): while rhizome holds the document,
  * every scene-writing store action that hasn't moved yet says so with a toast and does
- * nothing. Doing it locally would drift from rhizome silently.
+ * nothing. Doing it locally would drift from rhizome silently. Since story 6 every action on
+ * the store has moved, so the refused list is empty today; the mechanism stays so a new
+ * action is refused until it moves.
  *
  * Default-deny: the refused set is every function on the store minus the actions rhizome
  * carries (`ON_RHIZOME`) and the internal ones (`INTERNAL`), computed from the store itself,
@@ -38,6 +40,11 @@ export const ON_RHIZOME = [
   'setVectorPaths',
   'setVectorFillRule',
   'convertTextToOutlines',
+  'setBackgroundColor',
+  'setBackgroundImage',
+  'setNote',
+  'lockNode',
+  'unlockNode',
 ] as const;
 
 /** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */

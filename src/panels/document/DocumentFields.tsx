@@ -24,7 +24,8 @@ import {
  * Applies to empty documents and post-hoc: sets `scene.documentSize` only
  * (`setDocumentSize` is compositing-only, no dirty flag — dirty rule 4 in
  * scene/store.ts), so picking a preset recomposites without recooking any
- * node. Background edits still hit the refusal toast until Epic 21 story 6.
+ * node. The background (colour and image) goes through `document.set_background` on
+ * rhizome, local first, so a colour drag is one undo step.
  */
 const DEFAULT_BACKGROUND_COLOR = '#ffffff';
 

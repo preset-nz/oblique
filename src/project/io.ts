@@ -2,7 +2,6 @@ import { notify } from '@preset.nz/ux-kit';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { mkdir, readDir, remove, writeFile } from '@tauri-apps/plugin-fs';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
-import { isRefused } from '@/rhizome/refusal';
 import type { DocumentEvents } from '@/rhizome/rhizome';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
@@ -313,12 +312,6 @@ export async function setBackgroundImageFromPath(
   path: string,
   deps: ImportDeps = tauriImportDeps,
 ): Promise<boolean> {
-  if (isRefused('setBackgroundImage')) {
-    // Before decoding or holding anything: the store's refusing action toasts and does
-    // nothing, so a bitmap held now would paint a background the scene doesn't have.
-    useSceneStore.getState().setBackgroundImage(path, [0, 0]);
-    return false;
-  }
   try {
     // Through the shared resolver (image-source.md); the picker hands over an
     // absolute path, so this only differs for a path that isn't.

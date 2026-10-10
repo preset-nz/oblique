@@ -142,11 +142,8 @@ fn stack(d: &Document<Oblique>) -> Vec<String> {
 }
 
 fn lock(d: &mut Document<Oblique>, at: &str) {
-    // Locking has no command yet (Epic 21 story 6); the lock state is written directly.
-    d.edit("Lock", |tx| {
-        tx.set_value(at, "state", Value::Choice("locked".into()))
-    })
-    .unwrap();
+    d.run("layer.set_state", &json!({"at": at, "state": "locked"}))
+        .unwrap();
 }
 
 // ---- seed ----
@@ -2291,10 +2288,8 @@ fn every_modifier_and_mask_command_refuses_a_locked_consumer_and_changes_nothing
 }
 
 fn unlock(d: &mut Document<Oblique>, at: &str) {
-    d.edit("Unlock", |tx| {
-        tx.set_value(at, "state", Value::Choice("active".into()))
-    })
-    .unwrap();
+    d.run("layer.set_state", &json!({"at": at, "state": "active"}))
+        .unwrap();
 }
 
 fn attach(
@@ -3169,6 +3164,333 @@ fn a_converted_document_saves_and_opens_with_its_bindings_intact() {
     assert_eq!(back.tree().serialise(), d.tree().serialise());
     assert_eq!(masks_of(&back, "/layers/c/c1"), [("o".into(), "cr".into())]);
     assert_eq!(modifier_names(&back, "/layers/o"), ["t1"]);
+}
+
+// ---- document and lock: document.set_background, document.set_note, layer.set_state ----
+
+const DOC: &str = "/document/document";
+
+fn background(d: &mut Document<Oblique>, b: Json) -> rhizome_pom::Result<Outcome> {
+    run(d, "document.set_background", json!({ "background": b }))
+}
+
+fn colour(c: &str) -> Json {
+    json!({"type": "color", "color": c})
+}
+
+fn image(path: &str) -> Json {
+    json!({"type": "image", "sourcePath": path, "sourceSize": [60.0, 40.0]})
+}
+
+fn stored_background(d: &Document<Oblique>) -> Option<Json> {
+    let n = d.tree().at(DOC).unwrap();
+    n.is_set("background")
+        .then(|| json_of(d, DOC, "background"))
+}
+
+#[test]
+fn set_background_writes_a_colour_in_one_undo_step_named_background() {
+    let mut d = doc();
+    assert_eq!(stored_background(&d), None);
+    is_one_undo_step(&mut d, "Background", |d| {
+        background(d, colour("#ff8800")).unwrap();
+        assert_eq!(stored_background(d), Some(colour("#ff8800")));
+    });
+}
+
+#[test]
+fn set_background_walks_colour_image_none_and_undo_goes_back_through_each() {
+    let mut d = doc();
+    background(&mut d, colour("#112233")).unwrap();
+    background(&mut d, image("/pics/bg.png")).unwrap();
+    background(&mut d, Json::Null).unwrap();
+    assert_eq!(d.tree().history_len(), 3);
+    assert_eq!(
+        stored_background(&d),
+        None,
+        "none is unset, not a stored null"
+    );
+
+    d.undo().unwrap();
+    assert_eq!(stored_background(&d), Some(image("/pics/bg.png")));
+    d.undo().unwrap();
+    assert_eq!(stored_background(&d), Some(colour("#112233")));
+    d.undo().unwrap();
+    assert_eq!(stored_background(&d), None);
+    d.redo().unwrap();
+    d.redo().unwrap();
+    d.redo().unwrap();
+    assert_eq!(stored_background(&d), None);
+    assert_eq!(d.tree().undo_label(), Some("Background"));
+}
+
+#[test]
+fn set_background_to_what_it_already_is_is_not_a_step() {
+    let mut d = doc();
+    background(&mut d, Json::Null).unwrap(); // none, and none already
+    assert_eq!(d.tree().history_len(), 0);
+    background(&mut d, colour("#112233")).unwrap();
+    let steps = d.tree().history_len();
+    let before = d.tree().serialise();
+    background(&mut d, colour("#112233")).unwrap();
+    assert_eq!(d.tree().history_len(), steps);
+    assert_eq!(d.tree().serialise(), before);
+}
+
+#[test]
+fn set_background_keeps_one_shape_so_equal_backgrounds_are_equal_trees() {
+    let mut d = doc();
+    // a colour never carries image fields, nor an image a colour: the store writes neither
+    for bad in [
+        json!({"type": "color", "color": "#fff", "sourcePath": "/x.png"}),
+        json!({"type": "color"}),
+        json!({"type": "color", "color": 3}),
+        json!({"type": "image", "sourcePath": "/x.png"}),
+        json!({"type": "image", "sourcePath": "/x.png", "sourceSize": [1.0]}),
+        json!({"type": "image", "sourcePath": "/x.png", "sourceSize": [1.0, "a"]}),
+        json!({"type": "image", "sourcePath": "/x.png", "sourceSize": [1.0, 2.0], "color": "#fff"}),
+        json!({"type": "gradient"}),
+        json!({"color": "#fff"}),
+        json!("#fff"),
+        json!([1.0]),
+    ] {
+        assert!(background(&mut d, bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(d.tree().history_len(), 0);
+    assert_eq!(stored_background(&d), None);
+    // the key has to be there, even to say none
+    assert!(!d.is_enabled("document.set_background", &json!({})).unwrap());
+    assert!(d.run("document.set_background", &json!({})).is_err());
+}
+
+#[test]
+fn a_colour_drag_inside_a_gesture_is_one_undo_step() {
+    let mut d = doc();
+    background(&mut d, colour("#000000")).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    let g = d.begin("Edit").unwrap();
+    for c in ["#101010", "#202020", "#303030", "#404040"] {
+        background(&mut d, colour(c)).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    assert_eq!(stored_background(&d), Some(colour("#404040")));
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before);
+}
+
+#[test]
+fn set_note_writes_and_clears_it_in_steps_named_edit_note() {
+    let mut d = doc();
+    let note = |d: &mut Document<Oblique>, n: &str| run(d, "document.set_note", json!({"note": n}));
+    let stored = |d: &Document<Oblique>| {
+        d.tree()
+            .at(DOC)
+            .unwrap()
+            .is_set("note")
+            .then(|| value(d, DOC, "note"))
+    };
+    assert_eq!(stored(&d), None);
+    is_one_undo_step(&mut d, "Edit Note", |d| {
+        note(d, "for the poster").unwrap();
+        assert_eq!(
+            value(d, DOC, "note"),
+            Some(Value::Text("for the poster".into()))
+        );
+    });
+    note(&mut d, "for the poster").unwrap();
+    // an empty note removes the value, so a saved file stays clean
+    is_one_undo_step(&mut d, "Edit Note", |d| {
+        note(d, "").unwrap();
+        assert_eq!(stored(d), None);
+    });
+    // empty over nothing, and the same note again, are no step
+    let steps = d.tree().history_len();
+    note(&mut d, "").unwrap();
+    assert_eq!(d.tree().history_len(), steps);
+    note(&mut d, "x").unwrap();
+    let steps = d.tree().history_len();
+    note(&mut d, "x").unwrap();
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn typing_a_note_inside_a_gesture_is_one_undo_step_and_undo_clears_it() {
+    let mut d = doc();
+    let before = d.tree().serialise();
+    let g = d.begin("Edit").unwrap();
+    for n in ["h", "he", "hel", "hello"] {
+        run(&mut d, "document.set_note", json!({"note": n})).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), 1);
+    assert_eq!(value(&d, DOC, "note"), Some(Value::Text("hello".into())));
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before);
+    assert!(!d.tree().at(DOC).unwrap().is_set("note"));
+}
+
+#[test]
+fn set_note_refuses_what_is_not_text() {
+    let mut d = doc();
+    for bad in [json!(3), json!(null), json!(["a"])] {
+        assert!(run(&mut d, "document.set_note", json!({"note": bad})).is_err());
+    }
+    assert!(run(&mut d, "document.set_note", json!({})).is_err());
+    assert!(!d.is_enabled("document.set_note", &json!({})).unwrap());
+    assert_eq!(d.tree().history_len(), 0);
+}
+
+fn set_state(d: &mut Document<Oblique>, at: &str, state: &str) -> rhizome_pom::Result<Outcome> {
+    run(d, "layer.set_state", json!({"at": at, "state": state}))
+}
+
+fn state_of(d: &Document<Oblique>, at: &str) -> Value {
+    value(d, at, "state").unwrap()
+}
+
+fn locked() -> Value {
+    Value::Choice("locked".into())
+}
+
+fn active() -> Value {
+    Value::Choice("active".into())
+}
+
+#[test]
+fn lock_and_unlock_are_one_undo_step_each_and_named_for_what_they_do() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, node("b", "pixel")).unwrap();
+    is_one_undo_step(&mut d, "Lock Layer", |d| {
+        set_state(d, "/layers/a", "locked").unwrap();
+        assert_eq!(state_of(d, "/layers/a"), locked());
+    });
+    set_state(&mut d, "/layers/a", "locked").unwrap();
+    is_one_undo_step(&mut d, "Unlock Layer", |d| {
+        set_state(d, "/layers/a", "active").unwrap();
+        assert_eq!(state_of(d, "/layers/a"), active());
+    });
+    assert_eq!(
+        state_of(&d, "/layers/b"),
+        active(),
+        "the others are left alone"
+    );
+}
+
+#[test]
+fn undo_of_an_unlock_relocks_and_redo_of_a_lock_locks_again() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    lock(&mut d, "/layers/a");
+    unlock(&mut d, "/layers/a");
+    d.undo().unwrap();
+    assert_eq!(state_of(&d, "/layers/a"), locked());
+    d.undo().unwrap();
+    assert_eq!(state_of(&d, "/layers/a"), active());
+    d.redo().unwrap();
+    assert_eq!(state_of(&d, "/layers/a"), locked());
+    // and a locked layer refuses what the lock guards, until it is unlocked
+    assert!(set(&mut d, "/layers/a", "transform2d.rotation", json!(1.0)).is_err());
+    unlock(&mut d, "/layers/a");
+    set(&mut d, "/layers/a", "transform2d.rotation", json!(1.0)).unwrap();
+}
+
+#[test]
+fn every_layer_kind_can_be_locked_and_unlocked() {
+    let mut d = doc();
+    for kind in ["pixel", "vector", "text"] {
+        add(&mut d, node(kind, kind)).unwrap();
+        let at = format!("/layers/{kind}");
+        set_state(&mut d, &at, "locked").unwrap();
+        assert_eq!(state_of(&d, &at), locked(), "{kind}");
+        set_state(&mut d, &at, "active").unwrap();
+        assert_eq!(state_of(&d, &at), active(), "{kind}");
+    }
+}
+
+#[test]
+fn locking_a_layer_in_the_state_it_is_in_is_not_a_step() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    let (steps, before) = (d.tree().history_len(), d.tree().serialise());
+    set_state(&mut d, "/layers/a", "active").unwrap();
+    assert_eq!(
+        (d.tree().history_len(), d.tree().serialise()),
+        (steps, before)
+    );
+    lock(&mut d, "/layers/a");
+    let (steps, before) = (d.tree().history_len(), d.tree().serialise());
+    set_state(&mut d, "/layers/a", "locked").unwrap();
+    assert_eq!(
+        (d.tree().history_len(), d.tree().serialise()),
+        (steps, before)
+    );
+}
+
+#[test]
+fn set_state_refuses_what_is_not_a_layer_or_not_a_state_and_changes_nothing() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m"]);
+    let (steps, before) = (d.tree().history_len(), d.tree().serialise());
+    for (at, state) in [
+        ("/layers/a", "baking"),
+        ("/layers/a", ""),
+        ("/layers/a/m", "locked"),
+        ("/layers", "locked"),
+        ("/document/document", "locked"),
+        ("/layers/zzz", "locked"),
+    ] {
+        assert!(set_state(&mut d, at, state).is_err(), "{at} {state}");
+    }
+    assert!(run(&mut d, "layer.set_state", json!({"at": "/layers/a"})).is_err());
+    assert!(!d.is_enabled("layer.set_state", &json!({})).unwrap());
+    assert_eq!(
+        (d.tree().history_len(), d.tree().serialise()),
+        (steps, before)
+    );
+}
+
+#[test]
+fn the_state_change_names_the_layer_row_the_webview_applies() {
+    // The webview unlocks from the layer row an update carries (`state` active).
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    lock(&mut d, "/layers/a");
+    let Outcome::Committed(c) = set_state(&mut d, "/layers/a", "active").unwrap() else {
+        panic!("not committed")
+    };
+    let patch = d.tree().patch(&c.changes);
+    let rows: Vec<_> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+    assert_eq!(rows, ["/layers/a"]);
+}
+
+#[test]
+fn background_note_and_lock_survive_a_save_and_open() {
+    let store = MemoryStore::default();
+    let mut d =
+        Document::<Oblique>::new_in(catalogue(), store.clone(), IdSource::sequential()).unwrap();
+    add(&mut d, node("a", "pixel")).unwrap();
+    lock(&mut d, "/layers/a");
+    background(&mut d, image("/pics/bg.png")).unwrap();
+    run(&mut d, "document.set_note", json!({"note": "for Ana"})).unwrap();
+    d.save_as("/mem/kept").unwrap();
+    let (back, report) = Document::<Oblique>::open_in(
+        catalogue(),
+        store,
+        "/mem/kept.oblique",
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(back.tree().serialise(), d.tree().serialise());
+    assert_eq!(stored_background(&back), Some(image("/pics/bg.png")));
+    assert_eq!(
+        value(&back, DOC, "note"),
+        Some(Value::Text("for Ana".into()))
+    );
+    assert_eq!(state_of(&back, "/layers/a"), locked());
 }
 
 // ---- POM built-ins that write the tree ----

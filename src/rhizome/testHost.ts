@@ -1,7 +1,8 @@
 /**
  * A fake document host for the tests: the commands moved so far (`layer.add`, `layer.remove`,
  * `layer.reorder`, `layer.duplicate`, `values.set`, `text.set`, `document.set_size`,
- * `vector.*`, `text.to_outlines`, `layer.set_source`, `modifier.*`, `mask.*`, undo and redo, gestures), applied to rows built with the
+ * `vector.*`, `text.to_outlines`, `layer.set_source`, `modifier.*`, `mask.*`, `document.set_background`,
+ * `document.set_note`, `layer.set_state`, undo and redo, gestures), applied to rows built with the
  * adapter's `rowsFromScene`, and emitted as updates before the command answers, as Tauri
  * does. A stand-in for src-tauri/src/document, whose own tests hold the real rules.
  *
@@ -11,7 +12,16 @@
  */
 import { DUPLICATE_OFFSET_PX, textLabel } from '@/scene/store';
 import type { Scene, SceneNode } from '@/scene/types';
-import { layerPath, layerRows, modifierPath, PARAM_PREFIX, rowsFromScene, val } from './adapter';
+import {
+  firstDifference,
+  isSet,
+  layerPath,
+  layerRows,
+  modifierPath,
+  PARAM_PREFIX,
+  rowsFromScene,
+  val,
+} from './adapter';
 import type {
   Opened,
   Ran,
@@ -427,6 +437,40 @@ export class FakeHost implements RhizomeBackend {
         return this.commit('Document Size', () => {
           this.setValue(this.at('/document/document'), 'documentSize', p.size);
         });
+      case 'document.set_background': {
+        const doc = this.at('/document/document');
+        const next = (p.background ?? null) as unknown;
+        if (
+          firstDifference(isSet(doc, 'background') ? val(doc, 'background') : null, next) === null
+        ) {
+          return 'nothing';
+        }
+        return this.commit('Background', () => {
+          if (next === null) this.unset(doc, 'background');
+          else this.setValue(doc, 'background', next);
+        });
+      }
+      case 'document.set_note': {
+        const doc = this.at('/document/document');
+        const next = p.note as string;
+        if (typeof next !== 'string') throw new Error('a note is text');
+        if ((isSet(doc, 'note') ? val(doc, 'note') : '') === next) return 'nothing';
+        return this.commit('Edit Note', () => {
+          if (next === '') this.unset(doc, 'note');
+          else this.setValue(doc, 'note', next);
+        });
+      }
+      case 'layer.set_state': {
+        const row = this.at(p.at as string);
+        this.layerStack(p.at as string); // a layer directly under /layers
+        if (!['active', 'locked'].includes(p.state as string)) {
+          throw new Error(`${p.state} isn't a layer state`);
+        }
+        if (val(row, 'state') === p.state) return 'nothing';
+        return this.commit(p.state === 'locked' ? 'Lock Layer' : 'Unlock Layer', () => {
+          this.setValue(row, 'state', p.state);
+        });
+      }
       case 'edit.undo':
       case 'edit.redo': {
         const from = id === 'edit.undo' ? this.undos : this.redos;
@@ -455,6 +499,11 @@ export class FakeHost implements RhizomeBackend {
   private setValue(row: Row, key: string, value: unknown): void {
     row.values = { ...row.values, [key]: value };
     if (!row.set?.includes(key)) row.set = [...(row.set ?? []), key];
+  }
+
+  private unset(row: Row, key: string): void {
+    if (row.values) delete row.values[key];
+    row.set = (row.set ?? []).filter((k) => k !== key);
   }
 
   private addLayer(node: SceneNode): void {

@@ -28,6 +28,14 @@
  *   `vector.set_fill_rule`, `text.to_outlines`). A path drag inside a gesture is latest-wins, so
  *   it is one undo step. Until the layer's commands are answered its updates are not echoed
  *   (`localLayers`), so an older frame can't pull the store back.
+ * - **Document and lock** (story 6): the note and the background are local first. A typed note
+ *   and a colour drag must not snap back to an older frame, and the echo never writes either
+ *   (`document.set_note`, `document.set_background`; latest wins inside a gesture, which is one
+ *   undo step). `lockNode` is local first too: the original cooks the bake, fills the `baked`
+ *   slot and commits `locked`, then `layer.set_state` follows (a cook failure sends nothing).
+ *   `unlockNode` is commands first; the update unlocks the store through the original, which
+ *   drops the `baked` slot. Undoing an unlock, or redoing a lock, leaves a locked layer with an
+ *   empty `baked` slot: the scheduler's rehydrate cook (lock-state-machine.md) refills it.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
  *   `addVectorNode`, `addTextNode`, `duplicateNode`, `addModifier`, `applyMarqueeAsVectorMask`,
  *   `setVectorPaths`, `setVectorFillRule`, `convertTextToOutlines` and `setTextProps` run the
@@ -41,7 +49,8 @@
  * - **Undo and redo are app-kit's** (Epic 22 slice b): the Edit menu runs the document host's
  *   history in Rust, and the host says `history-stepped` after the commit events. That is the
  *   one cue to rebuild the store from the mirror; nothing here sends `edit.undo`.
- * - **Refusal.** Every other scene-writing action refuses with a toast (`refusal.ts`).
+ * - **Refusal.** Any scene-writing action not carried here refuses with a toast (`refusal.ts`).
+ *   None is refused today: every store action has moved.
  * - **Startup.** The document host is made once the sidecar's op catalogue arrives
  *   (`document_init`); until then the channel is shut and edits wait in its queue.
  * - **Files are app-kit's** (Epic 22 slice c): New, Open, Open Recent, Revert, Save, Save As,
@@ -74,6 +83,7 @@ import {
   isVectorNode,
   type Modifier,
   type Scene,
+  type SceneBackground,
   type SceneNode,
   type Transform2D,
   type VectorMaskRef,
@@ -354,6 +364,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     setVectorPaths: stateNow().setVectorPaths,
     setVectorFillRule: stateNow().setVectorFillRule,
     convertTextToOutlines: stateNow().convertTextToOutlines,
+    setBackgroundColor: stateNow().setBackgroundColor,
+    setBackgroundImage: stateNow().setBackgroundImage,
+    setNote: stateNow().setNote,
+    lockNode: stateNow().lockNode,
+    unlockNode: stateNow().unlockNode,
   };
 
   const withoutDirty = (node: SceneNode) => {
@@ -409,6 +424,10 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     );
     return Object.keys(own).length > 0 ? { params: own } : {};
   }
+
+  /** True when `next` is what the scene's background already is (`null`: none). */
+  const sameBackground = (have: SceneBackground | undefined, next: SceneBackground | null) =>
+    firstDifference(have ?? null, next) === null;
 
   const wrappers: Partial<State> = {
     setPixelSource: (id, sourcePath, sourceSize) => {
@@ -585,6 +604,53 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       sendLocal([id, newId], 'text.to_outlines', { at: layerPath(id), id: newId, paths });
       return newId;
     },
+    setBackgroundColor: (color) => {
+      // Local first: a colour pick or drag must show at once, and nothing reads the update
+      // back (the echo never writes the background), so there is nothing to snap back. The
+      // original also drops the held image bitmap. Inside a gesture latest wins (a drag of the
+      // picker is one undo step); outside one it is a step of its own.
+      const background: SceneBackground | null = color === null ? null : { type: 'color', color };
+      const same = sameBackground(scene().background, background);
+      original.setBackgroundColor(color);
+      if (!same) sendScrub('document-background', 'document.set_background', { background });
+    },
+    setBackgroundImage: (sourcePath, sourceSize) => {
+      // Local first, like the colour. The caller has already put the decoded bitmap in
+      // `backgroundSource` (the Rust side holds only the path and size).
+      const background: SceneBackground = { type: 'image', sourcePath, sourceSize };
+      const same = sameBackground(scene().background, background);
+      original.setBackgroundImage(sourcePath, sourceSize);
+      if (!same) sendScrub('document-background', 'document.set_background', { background });
+    },
+    setNote: (note) => {
+      // Local first: the textarea is controlled by the store, so a command-first round trip
+      // would put the old text back under the caret while typing. Latest wins inside the
+      // Notes panel's editing gesture, which is one undo step.
+      if (note === (scene().note ?? '')) return;
+      original.setNote(note);
+      sendScrub('document-note', 'document.set_note', { note });
+    },
+    lockNode: async (id, cookFullRes) => {
+      const was = nodeOf(id)?.state;
+      // Not lockable now (missing, locked, or baking already): the original does nothing
+      if (was !== 'active' || stateNow().bakingNodeIds.has(id)) {
+        return original.lockNode(id, cookFullRes);
+      }
+      // Local first: the original cooks, puts the bitmap in the cache's `baked` slot and then
+      // commits `locked` to the store, so the layer is never locked without its bake. A cook
+      // failure rejects, nothing is committed and nothing is sent. The command follows the
+      // commit (Rust holds only the state); a refusal is healed by the reconcile.
+      await original.lockNode(id, cookFullRes);
+      if (nodeOf(id)?.state === 'locked') {
+        sendLocal(id, 'layer.set_state', { at: layerPath(id), state: 'locked' });
+      }
+    },
+    unlockNode: (id) => {
+      if (nodeOf(id)?.state !== 'locked') return;
+      // Commands first: a discrete step, and the update coming back unlocks the store through
+      // the original action (`applyEcho`), which drops the `baked` slot and dirties the layer.
+      sendCommand('layer.set_state', { at: layerPath(id), state: 'active' });
+    },
     setTextProps: (id, patch) => {
       const before = scene();
       original.setTextProps(id, patch);
@@ -691,6 +757,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       } else if (r.parent === layers.id) {
         const node = nodeOf(r.name);
         if (!node || localLayers.has(node.id)) continue;
+        // Unlock is commands-first: the store follows the update, through the original, which
+        // drops the baked bitmap and dirties the layer. A lock needs no echo: it is local first.
+        if (!stepped && node.state === 'locked' && val(r, 'state') === 'active') {
+          original.unlockNode(node.id);
+        }
         if (!stepped) applySourceEcho(r);
         const t = transform2d(r);
         const h = nodeOf(node.id)?.transform2d;
