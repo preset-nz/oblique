@@ -1,7 +1,7 @@
 /**
  * A fake document host for the tests: the commands moved so far (`layer.add`, `layer.remove`,
  * `layer.reorder`, `layer.duplicate`, `values.set`, `text.set`, `document.set_size`,
- * `layer.set_source`, `modifier.*`, `mask.*`, undo and redo, gestures), applied to rows built with the
+ * `vector.*`, `text.to_outlines`, `layer.set_source`, `modifier.*`, `mask.*`, undo and redo, gestures), applied to rows built with the
  * adapter's `rowsFromScene`, and emitted as updates before the command answers, as Tauri
  * does. A stand-in for src-tauri/src/document, whose own tests hold the real rules.
  *
@@ -408,6 +408,21 @@ export class FakeHost implements RhizomeBackend {
       }
       case 'mask.from_marquee':
         return this.commit('Mask from Selection', () => this.maskFromMarquee(p));
+      case 'vector.set_paths':
+        return this.commit('Edit Path', () => {
+          this.setValue(this.vector(p.at as string), 'paths', p.paths);
+        });
+      case 'vector.set_fill_rule':
+        return this.commit('Fill Rule', () => {
+          if (!['nonzero', 'evenodd'].includes(p.fillRule as string)) {
+            throw new Error(`${p.fillRule} isn't a fill rule`);
+          }
+          this.setValue(this.vector(p.at as string), 'fillRule', p.fillRule);
+        });
+      case 'text.to_outlines':
+        return this.commit('Convert to Outlines', () =>
+          this.textToOutlines(p.at as string, p.id as string, p.paths),
+        );
       case 'document.set_size':
         return this.commit('Document Size', () => {
           this.setValue(this.at('/document/document'), 'documentSize', p.size);
@@ -529,6 +544,63 @@ export class FakeHost implements RhizomeBackend {
     for (const m of copies) this.rows.set(m.id, m);
     stack.splice(stack.indexOf(src.id), 0, copyId);
     this.at('/layers').orders = { stack };
+  }
+
+  /** The unlocked vector layer's row at `path`. */
+  private vector(path: string): Row {
+    const row = this.at(path);
+    if (row.parent !== 'row:layers' || row.type !== 'vector') {
+      throw new Error(`${path} isn't a vector layer`);
+    }
+    this.unlocked(row);
+    return row;
+  }
+
+  /**
+   * `text.to_outlines`: a vector layer in the text layer's place in the stack, with its props
+   * and transform, its modifier rows moved over (same row ids and names, a new parent and path),
+   * and every binding sourced from the text layer pointing at the vector layer.
+   */
+  private textToOutlines(path: string, id: string, paths: unknown): void {
+    const text = this.at(path);
+    if (text.parent !== 'row:layers' || text.type !== 'text') {
+      throw new Error(`${path} isn't a text layer`);
+    }
+    this.unlocked(text);
+    if (this.rows.has(`row:layer:${id}`)) throw new Error(`${id} already exists`);
+    const vector: Row = {
+      id: `row:layer:${id}`,
+      path: layerPath(id),
+      name: id,
+      type: 'vector',
+      role: 'node',
+      parent: 'row:layers',
+    };
+    for (const key of ['label', 'output', 'visible', 'blendMode', 'opacity']) {
+      this.setValue(vector, key, val(text, key));
+    }
+    for (const key of ['transform2d.position', 'transform2d.scale', 'transform2d.rotation']) {
+      if (text.set?.includes(key)) this.setValue(vector, key, val(text, key));
+    }
+    this.setValue(vector, 'state', 'active');
+    this.setValue(vector, 'paths', paths);
+    this.setValue(vector, 'fillRule', 'nonzero');
+    const order = text.orders?.modifiers ?? [];
+    for (const mid of order) {
+      const m = this.rows.get(mid) as Row;
+      m.parent = vector.id;
+      m.path = `${vector.path}/${m.name}`;
+    }
+    if (order.length > 0) vector.orders = { modifiers: [...order] };
+    this.rows.set(vector.id, vector);
+    for (const r of this.rows.values()) {
+      for (const b of r.bindings ?? []) if (b.source === text.id) b.source = vector.id;
+    }
+    this.rows.delete(text.id);
+    const layers = this.at('/layers');
+    layers.orders = {
+      stack: (layers.orders?.stack ?? []).map((rid) => (rid === text.id ? vector.id : rid)),
+    };
   }
 
   /** The modifier row at `path` and the layer it belongs to. */

@@ -641,6 +641,61 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // Replaces a vector layer's paths wholesale (path-editing.md): an anchor or handle drag,
+        // an inserted or deleted anchor, a reordered path. One value, so inside a gesture the
+        // webview's per-frame writes are latest-wins and the drag is one undo step. A locked
+        // layer refuses (lock-state-machine.md); a malformed `paths` leaves the tree untouched.
+        c.add(
+            "vector.set_paths",
+            |_| "Edit Path".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("paths").is_some_and(Json::is_array)
+            },
+            |d, p| {
+                let a: PathsArgs = payload(p)?;
+                let (_, commit) = d.edit("Edit Path", |tx| {
+                    let at = vector_at(tx, &a.at)?;
+                    set(tx, at, "paths", &a.paths)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // A vector layer's fill rule: how overlapping paths rasterise. The same guards.
+        c.add(
+            "vector.set_fill_rule",
+            |_| "Fill Rule".into(),
+            |_, p| {
+                p.get("at").is_some_and(Json::is_string)
+                    && p.get("fillRule").is_some_and(Json::is_string)
+            },
+            |d, p| {
+                let a: FillRuleArgs = payload(p)?;
+                let (_, commit) = d.edit("Fill Rule", |tx| {
+                    let at = vector_at(tx, &a.at)?;
+                    set(tx, at, "fillRule", &json!(a.fill_rule))
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // Convert to Outlines: the text layer becomes a vector layer in place in the stack, in one
+        // step. TypeScript shapes the text and sends the resulting paths and the new id (it
+        // selects the new layer at once, so this follows the store's `convertTextToOutlines`).
+        c.add(
+            "text.to_outlines",
+            |_| "Convert to Outlines".into(),
+            |_, p| {
+                ["at", "id"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+                    && p.get("paths").is_some_and(Json::is_array)
+            },
+            |d, p| {
+                let a: OutlinesArgs = payload(p)?;
+                let (_, commit) = d.edit("Convert to Outlines", |tx| text_to_outlines(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
         // POM's other built-ins that write the tree would bypass the rules above, so they
         // refuse until the story that moves them (Epic 21 stories 3-6). Undo, redo, the file
         // commands, copy and export stay as POM has them.
@@ -760,6 +815,26 @@ struct MarqueeArgs {
     feather_px: f64,
     expand: f64,
     invert: bool,
+}
+
+#[derive(Deserialize)]
+struct PathsArgs {
+    at: String,
+    paths: Json,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FillRuleArgs {
+    at: String,
+    fill_rule: String,
+}
+
+#[derive(Deserialize)]
+struct OutlinesArgs {
+    at: String,
+    id: String,
+    paths: Json,
 }
 
 #[derive(Deserialize)]
@@ -1383,6 +1458,94 @@ fn mask_from_marquee(tx: &mut Edit<'_>, a: &MarqueeArgs) -> rhizome_core::Result
         }
     }
     Ok(())
+}
+
+// ---- vectors and text ----
+
+/// The vector layer at `at`, unlocked: what the path commands write to.
+fn vector_at(tx: &Edit<'_>, at: &str) -> rhizome_core::Result<NodeId> {
+    let id = layer_at(tx, at)?;
+    if tx.at(id).expect("live").type_name() != "vector" {
+        return Err(structural(format!("{at} isn't a vector layer")));
+    }
+    refuse_locked(tx, id)?;
+    Ok(id)
+}
+
+/// What Convert to Outlines carries from the text layer to the vector layer, besides the
+/// modifiers: the compositing props and the transform. Read as stored, so a text layer that was
+/// never moved gives a vector layer that was never moved (the store carries `transform2d` only
+/// when it is set). The 3D `transform` and `cameraId` are not carried, as in the store.
+const OUTLINE_CARRIED: [&str; 8] = [
+    "label",
+    "output",
+    "visible",
+    "blendMode",
+    "opacity",
+    "transform2d.position",
+    "transform2d.scale",
+    "transform2d.rotation",
+];
+
+/// `text.to_outlines`: `convertTextToOutlines` (src/scene/store.ts) in the tree. The vector
+/// layer takes the text layer's place in the stack. Its modifiers are moved over, not copied,
+/// so they keep their ids and their own mask bindings (a binding is stored on its target). Every
+/// binding sourced from the text layer is re-bound to the vector layer with the same values;
+/// bindings are keyed by the source's node id, so removing the text layer would otherwise drop
+/// them.
+fn text_to_outlines(tx: &mut Edit<'_>, a: &OutlinesArgs) -> rhizome_core::Result<()> {
+    let text = layer_at(tx, &a.at)?;
+    if tx.at(text).expect("live").type_name() != "text" {
+        return Err(structural(format!("{} isn't a text layer", a.at)));
+    }
+    refuse_locked(tx, text)?;
+    let stack = stack_of(tx);
+    let index = stack
+        .iter()
+        .position(|id| *id == text)
+        .ok_or_else(|| structural(format!("{} isn't in the stack", a.at)))?;
+
+    // Everything is read first and written after: `tx.at` borrows the tree.
+    let n = tx.at(text).expect("live");
+    let carried: Vec<(String, Value)> = n
+        .stored_values()
+        .filter(|(k, _)| OUTLINE_CARRIED.contains(k))
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    let modifiers: Vec<NodeId> = n.order("modifiers").iter().map(|m| m.id()).collect();
+    // the bindings this layer is the source of: (target, slot or key, values)
+    let mut repointed = vec![];
+    for b in n.bound_to() {
+        let values: Vec<(&'static str, Value)> = MASK_KEYS
+            .iter()
+            .filter_map(|k| Some((*k, b.value(k)?)))
+            .collect();
+        repointed.push((b.target.id(), b.on.clone(), values));
+    }
+
+    let v = tx.add("/layers", "vector", &a.id)?;
+    for (k, value) in carried {
+        tx.set_value(v, &k, value)?;
+    }
+    tx.set_value(v, "state", Value::Choice("active".into()))?;
+    set(tx, v, "paths", &a.paths)?;
+    set(tx, v, "fillRule", &json!("nonzero"))?;
+
+    for m in &modifiers {
+        tx.move_to(*m, v)?;
+    }
+    if !modifiers.is_empty() {
+        tx.set_order(v, "modifiers", modifiers)?;
+    }
+    for (target, on, values) in repointed {
+        tx.unbind(target, on.clone(), text)?;
+        tx.bind(target, on, v, values)?;
+    }
+
+    let mut stack = stack;
+    stack[index] = v;
+    tx.set_order("/layers", "stack", stack)?;
+    tx.remove(text)
 }
 
 fn stack_of(tx: &Edit<'_>) -> Vec<NodeId> {

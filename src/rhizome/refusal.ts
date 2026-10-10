@@ -35,6 +35,9 @@ export const ON_RHIZOME = [
   'removeModifierMask',
   'setMaskSpace',
   'applyMarqueeAsVectorMask',
+  'setVectorPaths',
+  'setVectorFillRule',
+  'convertTextToOutlines',
 ] as const;
 
 /** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */

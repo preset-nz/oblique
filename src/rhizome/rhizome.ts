@@ -21,9 +21,17 @@
  *   latest-wins, so one drag is one undo step. Their update changes the store through the
  *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier` and
  *   `applyMarqueeAsVectorMask` are local first: the caller uses the id, or the new layer, at once.
+ * - **Vectors and text** (story 5): `setVectorPaths`, `setVectorFillRule` and
+ *   `convertTextToOutlines` are local first: the caller's overlay (a path drag's release, the
+ *   pen's focus) and selection need the result at once, so the original runs, dirtying the layer
+ *   and its masked consumers, and the command follows (`vector.set_paths`,
+ *   `vector.set_fill_rule`, `text.to_outlines`). A path drag inside a gesture is latest-wins, so
+ *   it is one undo step. Until the layer's commands are answered its updates are not echoed
+ *   (`localLayers`), so an older frame can't pull the store back.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
- *   `addVectorNode`, `addTextNode`, `duplicateNode`, `addModifier`, `applyMarqueeAsVectorMask`
- *   and `setTextProps` run the original action at once, then send the command.
+ *   `addVectorNode`, `addTextNode`, `duplicateNode`, `addModifier`, `applyMarqueeAsVectorMask`,
+ *   `setVectorPaths`, `setVectorFillRule`, `convertTextToOutlines` and `setTextProps` run the
+ *   original action at once, then send the command.
  * - **Reconcile.** When nothing is queued and no gesture is open, the scene rebuilt from the
  *   mirror is compared with the store (cook state aside). A difference means rhizome refused
  *   something or the two rule sets disagree: rhizome wins through `restoreScene`, and the
@@ -69,6 +77,7 @@ import {
   type SceneNode,
   type Transform2D,
   type VectorMaskRef,
+  type VectorNode,
 } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 import {
@@ -298,6 +307,25 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     track(sent).catch(fail);
   }
 
+  /**
+   * `sendLocal` for an edit that may repeat inside a gesture: latest wins (a drag is one undo
+   * step), else each is a command of its own. Every call counts against the layer and settles
+   * on the promise it gets back; a frame that replaced a waiting one gets the same promise, so
+   * the count still balances.
+   */
+  function sendLocalScrub(layer: string, key: string, id: string, payload: unknown): void {
+    localLayers.set(layer, (localLayers.get(layer) ?? 0) + 1);
+    const sent = track(gesture ? channel.drag(key, id, payload, key) : channel.run(id, payload));
+    const settled = () => {
+      const left = (localLayers.get(layer) ?? 1) - 1;
+      if (left > 0) localLayers.set(layer, left);
+      else localLayers.delete(layer);
+      scheduleReconcile();
+    };
+    sent.then(settled, settled);
+    sent.catch(fail);
+  }
+
   // ---------------------------------------------------------------- the store's actions
 
   type State = ReturnType<Store['getState']>;
@@ -323,6 +351,9 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     removeModifierMask: stateNow().removeModifierMask,
     setMaskSpace: stateNow().setMaskSpace,
     applyMarqueeAsVectorMask: stateNow().applyMarqueeAsVectorMask,
+    setVectorPaths: stateNow().setVectorPaths,
+    setVectorFillRule: stateNow().setVectorFillRule,
+    convertTextToOutlines: stateNow().convertTextToOutlines,
   };
 
   const withoutDirty = (node: SceneNode) => {
@@ -347,6 +378,12 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   function editable(nodeId: string, modId: string): Modifier | undefined {
     const node = nodeOf(nodeId);
     return node && node.state !== 'locked' ? modifierOf(nodeId, modId) : undefined;
+  }
+
+  /** The vector layer, if the store has it and it isn't locked (Rust holds the lock too). */
+  function editableVector(id: string): VectorNode | undefined {
+    const node = nodeOf(id);
+    return node && isVectorNode(node) && node.state !== 'locked' ? node : undefined;
   }
 
   /**
@@ -522,6 +559,31 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         invert: params.invert,
       });
       return made;
+    },
+    setVectorPaths: (id, paths) => {
+      if (!editableVector(id)) return;
+      // local first: the editor's overlay and the pen's focus read the store at once. Inside a
+      // gesture latest wins (one drag, one undo step); outside one each edit is a step.
+      original.setVectorPaths(id, paths);
+      sendLocalScrub(id, `paths:${id}`, 'vector.set_paths', { at: layerPath(id), paths });
+    },
+    setVectorFillRule: (id, fillRule) => {
+      const node = editableVector(id);
+      if (!node || node.fillRule === fillRule) return; // already that rule: no step
+      original.setVectorFillRule(id, fillRule);
+      sendLocalScrub(id, `fill-rule:${id}`, 'vector.set_fill_rule', {
+        at: layerPath(id),
+        fillRule,
+      });
+    },
+    convertTextToOutlines: (id, paths) => {
+      // The original makes the vector layer at once (the caller selects it) and picks its id;
+      // the command carries that id and the outlines TypeScript shaped. Null for a missing,
+      // non-text or locked layer: nothing changed, nothing to send.
+      const newId = original.convertTextToOutlines(id, paths);
+      if (!newId) return null;
+      sendLocal([id, newId], 'text.to_outlines', { at: layerPath(id), id: newId, paths });
+      return newId;
     },
     setTextProps: (id, patch) => {
       const before = scene();

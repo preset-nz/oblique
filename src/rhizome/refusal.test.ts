@@ -31,15 +31,12 @@ const install = () => {
 };
 
 describe('refusal by construction', () => {
-  it('refuses these eight, each waiting for its story (Epic 21 stories 5 and 6)', () => {
+  it('refuses these five, each waiting for its story (Epic 21 story 6)', () => {
     expect(refusedActions(useSceneStore.getState()).sort()).toEqual([
-      'convertTextToOutlines',
       'lockNode',
       'setBackgroundColor',
       'setBackgroundImage',
       'setNote',
-      'setVectorFillRule',
-      'setVectorPaths',
       'unlockNode',
     ]);
   });
@@ -53,7 +50,8 @@ describe('refusal by construction', () => {
     for (const name of ['lockNode', 'setBackgroundColor']) {
       expect(refused).toContain(name);
     }
-    // the layer edits moved in Epic 21 story 3, the modifiers and masks in story 4
+    // the layer edits moved in Epic 21 story 3, the modifiers and masks in story 4, the path
+    // edits, the fill rule and Convert to Outlines in story 5
     for (const name of [
       'removeNode',
       'reorderNode',
@@ -67,6 +65,9 @@ describe('refusal by construction', () => {
       'removeModifierMask',
       'setMaskSpace',
       'applyMarqueeAsVectorMask',
+      'setVectorPaths',
+      'setVectorFillRule',
+      'convertTextToOutlines',
     ]) {
       expect(refused).not.toContain(name);
       expect(ON_RHIZOME).toContain(name);

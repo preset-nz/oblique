@@ -2711,6 +2711,466 @@ fn the_updates_name_the_rows_the_webview_applies() {
     assert_eq!(removed, 1);
 }
 
+// ---- vectors and text: vector.set_paths, vector.set_fill_rule, text.to_outlines ----
+
+fn two_paths() -> Json {
+    json!([
+        {"anchors": [
+            {"point": {"x": 0.0, "y": 0.0}, "handleOut": {"x": 4.0, "y": 0.0}},
+            {"point": {"x": 10.0, "y": 0.0}, "handleIn": {"x": 6.0, "y": 0.0}},
+            {"point": {"x": 5.0, "y": 8.0}},
+        ], "closed": true},
+        {"anchors": [{"point": {"x": 20.0, "y": 20.0}}, {"point": {"x": 30.0, "y": 25.0}}],
+         "closed": false},
+    ])
+}
+
+fn set_paths(d: &mut Document<Oblique>, at: &str, paths: Json) -> rhizome_pom::Result<Outcome> {
+    run(d, "vector.set_paths", json!({"at": at, "paths": paths}))
+}
+
+fn set_fill_rule(d: &mut Document<Oblique>, at: &str, rule: &str) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "vector.set_fill_rule",
+        json!({"at": at, "fillRule": rule}),
+    )
+}
+
+fn json_of(d: &Document<Oblique>, at: &str, key: &str) -> Json {
+    value(d, at, key).unwrap().to_json()
+}
+
+#[test]
+fn vector_set_paths_replaces_the_paths_in_one_undo_step_named_edit_path() {
+    let mut d = doc();
+    add(&mut d, node("v", "vector")).unwrap();
+    is_one_undo_step(&mut d, "Edit Path", |d| {
+        set_paths(d, "/layers/v", two_paths()).unwrap();
+        assert_eq!(json_of(d, "/layers/v", "paths"), two_paths());
+        // nothing else changes
+        assert_eq!(
+            value(d, "/layers/v", "fillRule"),
+            Some(Value::Choice("nonzero".into()))
+        );
+    });
+}
+
+#[test]
+fn a_path_drag_inside_a_gesture_is_one_undo_step() {
+    let mut d = doc();
+    add(&mut d, node("v", "vector")).unwrap();
+    let steps = d.tree().history_len();
+    let before = d.tree().serialise();
+    let g = d.begin("Edit").unwrap();
+    for x in 1..=8 {
+        let mut paths = two_paths();
+        paths[0]["anchors"][0]["point"]["x"] = json!(x as f64);
+        set_paths(&mut d, "/layers/v", paths).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    // the last frame won
+    assert_eq!(
+        json_of(&d, "/layers/v", "paths")[0]["anchors"][0]["point"]["x"],
+        8.0
+    );
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before, "one undo takes back the drag");
+}
+
+#[test]
+fn vector_set_fill_rule_writes_the_rule_in_one_undo_step_named_fill_rule() {
+    let mut d = doc();
+    add(&mut d, node("v", "vector")).unwrap();
+    is_one_undo_step(&mut d, "Fill Rule", |d| {
+        set_fill_rule(d, "/layers/v", "evenodd").unwrap();
+        assert_eq!(
+            value(d, "/layers/v", "fillRule"),
+            Some(Value::Choice("evenodd".into()))
+        );
+        // the paths are untouched
+        assert_eq!(json_of(d, "/layers/v", "paths")[0]["closed"], false);
+    });
+}
+
+#[test]
+fn the_vector_commands_refuse_a_locked_layer_a_non_vector_and_bad_values_changing_nothing() {
+    let mut d = doc();
+    let mut shape = node("v", "vector");
+    shape["modifiers"] = json!([{"id": "m1", "type": "blur", "enabled": true, "params": {}}]);
+    add(&mut d, shape).unwrap();
+    add(&mut d, node("locked", "vector")).unwrap();
+    add(&mut d, node("t", "text")).unwrap();
+    add(&mut d, node("p", "pixel")).unwrap();
+    lock(&mut d, "/layers/locked");
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+
+    // locked: the paths and the fill rule are cook inputs, so both are guarded
+    let e = set_paths(&mut d, "/layers/locked", two_paths()).unwrap_err();
+    assert!(e.to_string().contains("is locked"), "{e}");
+    let e = set_fill_rule(&mut d, "/layers/locked", "evenodd").unwrap_err();
+    assert!(e.to_string().contains("is locked"), "{e}");
+    // not a vector layer, or not a layer at all
+    for at in [
+        "/layers/t",
+        "/layers/p",
+        "/layers/v/m1",
+        "/layers",
+        "/layers/zzz",
+    ] {
+        assert!(set_paths(&mut d, at, two_paths()).is_err(), "{at}");
+        assert!(set_fill_rule(&mut d, at, "evenodd").is_err(), "{at}");
+    }
+    // a value that does not fit
+    for bad in [
+        json!([{"anchors": 3, "closed": true}]),
+        json!([{"anchors": [{"point": {"x": 1.0}}], "closed": true}]),
+        json!([{"anchors": []}]),
+    ] {
+        assert!(
+            set_paths(&mut d, "/layers/v", bad.clone()).is_err(),
+            "{bad}"
+        );
+    }
+    assert!(set_fill_rule(&mut d, "/layers/v", "winding").is_err());
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+
+    // unlocking lets the same edits through
+    unlock(&mut d, "/layers/locked");
+    set_paths(&mut d, "/layers/locked", two_paths()).unwrap();
+    set_fill_rule(&mut d, "/layers/locked", "evenodd").unwrap();
+}
+
+#[test]
+fn a_path_edit_names_the_vector_row_for_the_webview() {
+    let mut d = doc();
+    add(&mut d, node("v", "vector")).unwrap();
+    for (id, args) in [
+        (
+            "vector.set_paths",
+            json!({"at": "/layers/v", "paths": two_paths()}),
+        ),
+        (
+            "vector.set_fill_rule",
+            json!({"at": "/layers/v", "fillRule": "evenodd"}),
+        ),
+    ] {
+        let Outcome::Committed(c) = run(&mut d, id, args).unwrap() else {
+            panic!("{id}: not committed")
+        };
+        let patch = d.tree().patch(&c.changes);
+        let rows: Vec<String> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+        assert_eq!(rows, ["/layers/v"], "{id}");
+        assert!(patch.removed.is_empty(), "{id}");
+    }
+}
+
+fn outlines(
+    d: &mut Document<Oblique>,
+    at: &str,
+    id: &str,
+    paths: Json,
+) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "text.to_outlines",
+        json!({"at": at, "id": id, "paths": paths}),
+    )
+}
+
+fn bind_mask(d: &mut Document<Oblique>, at: &str, source: &str, refid: &str, feather: f64) {
+    d.edit("Mask", |tx| {
+        tx.bind(
+            at,
+            On::slot("mask"),
+            source,
+            [
+                ("refId", Value::Text(refid.into())),
+                ("featherPx", Value::Float(feather)),
+                ("expand", Value::Float(1.5)),
+                ("invert", Value::Bool(true)),
+                ("space", Value::Shaped(json!("node"))),
+                (
+                    "attachTransform",
+                    Value::Shaped(
+                        json!({"x": 5.0, "y": 6.0, "scaleX": 2.0, "scaleY": 1.5, "rotation": 0.4}),
+                    ),
+                ),
+            ],
+        )
+    })
+    .unwrap();
+}
+
+fn with_blur(mut n: Json, ids: &[&str]) -> Json {
+    n["modifiers"] = json!(ids
+        .iter()
+        .map(|id| json!({"id": id, "type": "blur", "enabled": true, "params": {"radius": 12.0}}))
+        .collect::<Vec<_>>());
+    n
+}
+
+/// A stack of `top`, the text `t`, `v`, `c` and `bottom` (top first). The text has two
+/// modifiers, `t1` masked by the vector `v`; `c` has `c1` and `c2`, both masked by the text.
+fn outline_scene() -> Document<Oblique> {
+    let mut d = doc();
+    add(&mut d, node("bottom", "pixel")).unwrap();
+    add(&mut d, with_blur(node("c", "pixel"), &["c1", "c2"])).unwrap();
+    add(&mut d, node("v", "vector")).unwrap();
+    let mut t = with_blur(node("t", "text"), &["t1", "t2"]);
+    t["label"] = json!("Hello");
+    t["output"] = json!("mask");
+    t["visible"] = json!(false);
+    t["blendMode"] = json!("multiply");
+    t["opacity"] = json!(0.5);
+    t["transform2d"] = json!({"x": 3.0, "y": 4.0, "scaleX": 2.0, "scaleY": 3.0, "rotation": 0.5});
+    add(&mut d, t).unwrap();
+    add(&mut d, node("top", "pixel")).unwrap();
+    bind_mask(&mut d, "/layers/t/t1", "/layers/v", "tr", 3.0);
+    bind_mask(&mut d, "/layers/c/c1", "/layers/t", "cr1", 2.0);
+    bind_mask(&mut d, "/layers/c/c2", "/layers/t", "cr2", 0.5);
+    d
+}
+
+#[test]
+fn convert_to_outlines_replaces_the_text_in_place_with_a_vector_in_one_undo_step() {
+    let mut d = outline_scene();
+    assert_eq!(stack(&d), ["top", "t", "v", "c", "bottom"]);
+    is_one_undo_step(&mut d, "Convert to Outlines", |d| {
+        outlines(d, "/layers/t", "o", two_paths()).unwrap();
+        // the same place in the stack, and the text is gone
+        assert_eq!(stack(d), ["top", "o", "v", "c", "bottom"]);
+        assert!(d.tree().at("/layers/t").is_none());
+        let o = d.tree().at("/layers/o").unwrap();
+        assert_eq!(o.type_name(), "vector");
+        // geometry, nonzero, active
+        assert_eq!(json_of(d, "/layers/o", "paths"), two_paths());
+        assert_eq!(
+            value(d, "/layers/o", "fillRule"),
+            Some(Value::Choice("nonzero".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/o", "state"),
+            Some(Value::Choice("active".into()))
+        );
+        // what carries over
+        assert_eq!(
+            value(d, "/layers/o", "label"),
+            Some(Value::Text("Hello".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/o", "output"),
+            Some(Value::Choice("mask".into()))
+        );
+        assert_eq!(value(d, "/layers/o", "visible"), Some(Value::Bool(false)));
+        assert_eq!(
+            value(d, "/layers/o", "blendMode"),
+            Some(Value::Choice("multiply".into()))
+        );
+        assert_eq!(value(d, "/layers/o", "opacity"), Some(Value::Float(0.5)));
+        near_placement(
+            placement(d, "/layers/o"),
+            Placement {
+                x: 3.0,
+                y: 4.0,
+                scale_x: 2.0,
+                scale_y: 3.0,
+                rotation: 0.5,
+            },
+        );
+    });
+}
+
+#[test]
+fn convert_to_outlines_moves_the_modifiers_with_their_ids_order_values_and_masks() {
+    let mut d = outline_scene();
+    outlines(&mut d, "/layers/t", "o", two_paths()).unwrap();
+    assert_eq!(modifier_names(&d, "/layers/o"), ["t1", "t2"]);
+    assert!(d.tree().at("/layers/t/t1").is_none());
+    assert_eq!(
+        value(&d, "/layers/o/t1", "params.radius"),
+        Some(Value::Float(12.0))
+    );
+    // the text's own modifier is still masked by `v`, with the same ref and values
+    assert_eq!(masks_of(&d, "/layers/o/t1"), [("v".into(), "tr".into())]);
+    assert_eq!(mask_value(&d, "/layers/o/t1", "featherPx"), json!(3.0));
+    assert_eq!(mask_value(&d, "/layers/o/t1", "space"), json!("node"));
+    assert!(d.tree().at("/layers/o/t2").unwrap().bindings().is_empty());
+}
+
+#[test]
+fn convert_to_outlines_repoints_every_binding_sourced_from_the_text() {
+    let mut d = outline_scene();
+    is_one_undo_step(&mut d, "Convert to Outlines", |d| {
+        outlines(d, "/layers/t", "o", two_paths()).unwrap();
+        // same refs, same values, a new source
+        assert_eq!(masks_of(d, "/layers/c/c1"), [("o".into(), "cr1".into())]);
+        assert_eq!(masks_of(d, "/layers/c/c2"), [("o".into(), "cr2".into())]);
+        for (m, feather) in [("c1", 2.0), ("c2", 0.5)] {
+            let at = format!("/layers/c/{m}");
+            assert_eq!(mask_value(d, &at, "featherPx"), json!(feather));
+            assert_eq!(mask_value(d, &at, "expand"), json!(1.5));
+            assert_eq!(mask_value(d, &at, "invert"), json!(true));
+            assert_eq!(mask_value(d, &at, "space"), json!("node"));
+            assert_eq!(
+                attach_of(d, &at),
+                Placement {
+                    x: 5.0,
+                    y: 6.0,
+                    scale_x: 2.0,
+                    scale_y: 1.5,
+                    rotation: 0.4
+                }
+            );
+        }
+        // and what the vector layer is the source of is reachable from it
+        let o = d.tree().at("/layers/o").unwrap();
+        let from_o: Vec<String> = o
+            .bound_to()
+            .iter()
+            .map(|b| b.target.path().to_string())
+            .collect();
+        assert_eq!(from_o, ["/layers/c/c1", "/layers/c/c2"]);
+    });
+    // undo brings the text back with every binding pointing at it again, redo undoes that
+    d.undo().unwrap();
+    assert_eq!(masks_of(&d, "/layers/c/c1"), [("t".into(), "cr1".into())]);
+    assert_eq!(masks_of(&d, "/layers/c/c2"), [("t".into(), "cr2".into())]);
+    assert_eq!(masks_of(&d, "/layers/t/t1"), [("v".into(), "tr".into())]);
+    assert_eq!(modifier_names(&d, "/layers/t"), ["t1", "t2"]);
+    assert_eq!(stack(&d), ["top", "t", "v", "c", "bottom"]);
+    d.redo().unwrap();
+    assert_eq!(masks_of(&d, "/layers/c/c1"), [("o".into(), "cr1".into())]);
+}
+
+#[test]
+fn convert_to_outlines_keeps_a_text_layer_that_was_never_moved_unmoved() {
+    let mut d = doc();
+    add(&mut d, node("t", "text")).unwrap();
+    outlines(&mut d, "/layers/t", "o", two_paths()).unwrap();
+    let o = d.tree().at("/layers/o").unwrap();
+    // the store carries `transform2d` only when it is set
+    assert!(!o.is_set("transform2d.position"));
+    assert!(!o.is_set("transform2d.scale"));
+    assert!(!o.is_set("transform2d.rotation"));
+    assert_eq!(stack(&d), ["o"]);
+}
+
+#[test]
+fn convert_to_outlines_masks_by_a_text_layers_own_modifier_survive_when_it_masks_itself() {
+    // a text layer's modifier masked by the text layer itself: the binding's source moves with it
+    let mut d = doc();
+    add(&mut d, with_blur(node("t", "text"), &["t1"])).unwrap();
+    bind_mask(&mut d, "/layers/t/t1", "/layers/t", "self", 1.0);
+    is_one_undo_step(&mut d, "Convert to Outlines", |d| {
+        outlines(d, "/layers/t", "o", two_paths()).unwrap();
+        assert_eq!(masks_of(d, "/layers/o/t1"), [("o".into(), "self".into())]);
+    });
+}
+
+#[test]
+fn convert_to_outlines_updates_name_the_rows_the_webview_applies() {
+    let mut d = outline_scene();
+    let Outcome::Committed(c) = outlines(&mut d, "/layers/t", "o", two_paths()).unwrap() else {
+        panic!("not committed")
+    };
+    let patch = d.tree().patch(&c.changes);
+    let mut rows: Vec<String> = patch.rows.iter().map(|r| r.path.to_string()).collect();
+    rows.sort();
+    // the new layer, the modifiers under their new parent, the consumers' re-pointed modifiers
+    // and the stack; the text is the one row removed
+    for want in [
+        "/layers",
+        "/layers/o",
+        "/layers/o/t1",
+        "/layers/o/t2",
+        "/layers/c/c1",
+        "/layers/c/c2",
+    ] {
+        assert!(rows.contains(&want.to_string()), "{want} in {rows:?}");
+    }
+    assert!(!rows.iter().any(|r| r.starts_with("/layers/t")), "{rows:?}");
+    // the text layer's row goes; the moved modifiers do not (they keep their rows)
+    assert_eq!(patch.removed.len(), 1);
+    let o = patch
+        .rows
+        .iter()
+        .find(|r| r.path.to_string() == "/layers/o")
+        .unwrap();
+    let moved = patch
+        .rows
+        .iter()
+        .find(|r| r.path.to_string() == "/layers/o/t1")
+        .unwrap();
+    assert_eq!(moved.parent, Some(o.id.clone()));
+    for r in patch
+        .rows
+        .iter()
+        .filter(|r| r.path.to_string().starts_with("/layers/c/"))
+    {
+        assert_eq!(r.bindings.len(), 1);
+        assert_eq!(r.bindings[0].source, o.id);
+    }
+}
+
+#[test]
+fn convert_to_outlines_refuses_a_locked_text_a_non_text_a_taken_id_and_bad_paths() {
+    let mut d = outline_scene();
+    add(&mut d, node("locked", "text")).unwrap();
+    lock(&mut d, "/layers/locked");
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    let e = outlines(&mut d, "/layers/locked", "o", two_paths()).unwrap_err();
+    assert!(e.to_string().contains("is locked"), "{e}");
+    for at in [
+        "/layers/v",
+        "/layers/c",
+        "/layers/t/t1",
+        "/layers",
+        "/layers/zzz",
+    ] {
+        assert!(outlines(&mut d, at, "o", two_paths()).is_err(), "{at}");
+    }
+    // an id a layer already has
+    assert!(outlines(&mut d, "/layers/t", "v", two_paths()).is_err());
+    assert!(outlines(&mut d, "/layers/t", "t", two_paths()).is_err());
+    // paths that do not fit
+    assert!(outlines(&mut d, "/layers/t", "o", json!([{"anchors": 3}])).is_err());
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn a_converted_document_saves_and_opens_with_its_bindings_intact() {
+    let store = MemoryStore::default();
+    let mut d =
+        Document::<Oblique>::new_in(catalogue(), store.clone(), IdSource::sequential()).unwrap();
+    for (id, n) in [
+        ("bottom", node("bottom", "pixel")),
+        ("c", with_blur(node("c", "pixel"), &["c1"])),
+        ("t", with_blur(node("t", "text"), &["t1"])),
+    ] {
+        add(&mut d, n).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    bind_mask(&mut d, "/layers/c/c1", "/layers/t", "cr", 2.0);
+    outlines(&mut d, "/layers/t", "o", two_paths()).unwrap();
+    d.save_as("/mem/outlined").unwrap();
+    let (back, report) = Document::<Oblique>::open_in(
+        catalogue(),
+        store,
+        "/mem/outlined.oblique",
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(back.tree().serialise(), d.tree().serialise());
+    assert_eq!(masks_of(&back, "/layers/c/c1"), [("o".into(), "cr".into())]);
+    assert_eq!(modifier_names(&back, "/layers/o"), ["t1"]);
+}
+
 // ---- POM built-ins that write the tree ----
 
 #[test]

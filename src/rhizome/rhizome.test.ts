@@ -14,6 +14,7 @@ import type {
   TextNode,
   VectorMaskRef,
   VectorNode,
+  VectorPath,
 } from '@/scene/types';
 import { type OpDescriptor, useOpsCacheStore } from '@/sidecar/opsCache';
 import { createRhizome, type DocumentEvents, type Rhizome } from './rhizome';
@@ -1741,6 +1742,356 @@ describe('modifiers and masks (modifier.*, mask.*)', () => {
       await settle();
       expect(host.runs).toHaveLength(0);
       expect(state().scene.nodes).toHaveLength(1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------- vectors and text (story 5)
+
+describe('vectors and text (vector.*, text.to_outlines)', () => {
+  const tri = (dx = 0): VectorPath[] => [
+    {
+      closed: true,
+      anchors: [
+        { point: { x: dx, y: 0 } },
+        { point: { x: 10, y: 0 }, handleOut: { x: 12, y: 2 }, handleIn: { x: 8, y: -2 } },
+        { point: { x: 5, y: 8 } },
+      ],
+    },
+  ];
+  const sent = () => host.runs.map((r) => r.id);
+  const agrees = async () => {
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  };
+  const vec = (id: string) => node(id) as VectorNode;
+  const hot = { draft: true, working: true };
+
+  describe('Edit Path (vector.set_paths)', () => {
+    it('runs the original at once and sends the command after', async () => {
+      await setup([vectorLayer('v'), pixel('z')]);
+      state().setVectorPaths('v', tri());
+      expect(vec('v').paths).toEqual(tri()); // local first: there at once
+      expect(vec('v').dirty).toEqual(hot);
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'vector.set_paths', payload: { at: '/layers/v', paths: tri() } },
+      ]);
+      expect(vec('v').paths).toEqual(tri());
+      expect(vec('v').dirty).toEqual(hot); // a raster change: recook
+      expect(node('z')?.dirty).toEqual(clean);
+      await agrees();
+    });
+
+    it("applies through the store's own action: a layer masked by the shape recooks too", async () => {
+      const { nodes, extra } = maskedScene();
+      await setup(nodes, true, extra);
+      state().setVectorPaths('v', tri());
+      expect(node('m')?.dirty).toEqual(hot); // at once, not when the update comes back
+      await settle();
+      expect(node('m')?.dirty).toEqual(hot); // its mask plane is rasterised from these paths
+      expect(node('z')?.dirty).toEqual(clean);
+      await agrees();
+    });
+
+    it('the update that comes back does not dirty anything a second time', async () => {
+      const { nodes, extra } = maskedScene();
+      await setup(nodes, true, extra);
+      state().setVectorPaths('v', tri());
+      for (const id of ['v', 'm']) {
+        state().clearDirty(id, 'draft');
+        state().clearDirty(id, 'working');
+      }
+      await settle(); // the echo of the command lands here
+      expect(vec('v').dirty).toEqual(clean);
+      expect(node('m')?.dirty).toEqual(clean); // no second recook
+      await agrees();
+    });
+
+    it('is one undo step, and undo and redo agree', async () => {
+      await setup([vectorLayer('v', { paths: tri(1) })]);
+      state().setVectorPaths('v', tri(2));
+      await settle();
+      await undo();
+      expect(vec('v').paths).toEqual(tri(1));
+      await agrees();
+      await redo();
+      expect(vec('v').paths).toEqual(tri(2));
+      await agrees();
+    });
+
+    it('inside a gesture a drag of frames is latest-wins and one undo step, and no frame is pulled back', async () => {
+      await setup([vectorLayer('v', { paths: tri(0) })]);
+      transaction.beginTransaction();
+      for (let x = 1; x <= 6; x++) {
+        state().setVectorPaths('v', tri(x));
+        expect(vec('v').paths).toEqual(tri(x)); // the store follows the pointer
+        await settle();
+        expect(vec('v').paths).toEqual(tri(x)); // and an older frame's update doesn't undo it
+      }
+      transaction.endTransaction();
+      await settle();
+      expect(sent().every((id) => id === 'vector.set_paths')).toBe(true);
+      expect(vec('v').paths).toEqual(tri(6));
+      await undo();
+      expect(vec('v').paths).toEqual(tri(0)); // the whole drag
+      await agrees();
+    });
+
+    it('frames that arrive while a command is in flight are coalesced, and the last one wins', async () => {
+      await setup([vectorLayer('v', { paths: tri(0) })]);
+      transaction.beginTransaction();
+      let release: () => void = () => undefined;
+      host.hold = new Promise<void>((r) => {
+        release = r;
+      });
+      state().setVectorPaths('v', tri(1));
+      await vi.waitFor(() => expect(host.runs).toHaveLength(1)); // sent, held
+      state().setVectorPaths('v', tri(2));
+      state().setVectorPaths('v', tri(3));
+      state().setVectorPaths('v', tri(4));
+      host.hold = null;
+      release();
+      transaction.endTransaction();
+      await settle();
+      expect(host.runs.map((r) => (r.payload as { paths: VectorPath[] }).paths)).toEqual([
+        tri(1),
+        tri(4),
+      ]);
+      expect(vec('v').paths).toEqual(tri(4));
+      await agrees();
+      await undo();
+      expect(vec('v').paths).toEqual(tri(0));
+    });
+
+    it('outside a gesture each edit is a step of its own', async () => {
+      await setup([vectorLayer('v', { paths: tri(0) })]);
+      state().setVectorPaths('v', tri(1));
+      state().setVectorPaths('v', tri(2));
+      await settle();
+      expect(sent()).toEqual(['vector.set_paths', 'vector.set_paths']);
+      await undo();
+      expect(vec('v').paths).toEqual(tri(1));
+    });
+
+    it('sends nothing for a locked layer, a layer that is not a vector, or a missing one', async () => {
+      await setup([vectorLayer('v', { state: 'locked' }), pixel('p'), textLayer('t')]);
+      const before = state().scene;
+      state().setVectorPaths('v', tri());
+      state().setVectorPaths('p', tri());
+      state().setVectorPaths('t', tri());
+      state().setVectorPaths('nope', tri());
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(state().scene).toBe(before);
+    });
+
+    it('a refusal from the host toasts, and the reconcile takes the paths back', async () => {
+      await setup([vectorLayer('v')]);
+      host.reject.add('vector.set_paths');
+      state().setVectorPaths('v', tri());
+      expect(vec('v').paths).toEqual(tri()); // local first
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(vec('v').paths).toEqual([]);
+    });
+
+    it('a transform drag on a vector layer does not rewrite its paths', async () => {
+      await setup([vectorLayer('v', { paths: tri() })]);
+      state().setNodeTransform('v', T(5));
+      await settle();
+      expect(vec('v').dirty).toEqual(clean); // dirty rule 4: a move recooks nothing
+      await agrees();
+    });
+  });
+
+  describe('Fill Rule (vector.set_fill_rule)', () => {
+    it('runs the original at once, dirtying the consumers, and sends the command after', async () => {
+      const { nodes, extra } = maskedScene();
+      await setup(nodes, true, extra);
+      state().setVectorFillRule('v', 'evenodd');
+      expect(vec('v').fillRule).toBe('evenodd'); // local first
+      expect(node('m')?.dirty).toEqual(hot);
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'vector.set_fill_rule', payload: { at: '/layers/v', fillRule: 'evenodd' } },
+      ]);
+      expect(vec('v').fillRule).toBe('evenodd');
+      expect(vec('v').dirty).toEqual(hot);
+      expect(node('m')?.dirty).toEqual(hot);
+      await agrees();
+    });
+
+    it('is one undo step', async () => {
+      await setup([vectorLayer('v')]);
+      state().setVectorFillRule('v', 'evenodd');
+      await settle();
+      await undo();
+      expect(vec('v').fillRule).toBe('nonzero');
+      await agrees();
+      await redo();
+      expect(vec('v').fillRule).toBe('evenodd');
+      await agrees();
+    });
+
+    it('a refusal from the host toasts, and the reconcile takes the rule back', async () => {
+      await setup([vectorLayer('v')]);
+      host.reject.add('vector.set_fill_rule');
+      state().setVectorFillRule('v', 'evenodd');
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(vec('v').fillRule).toBe('nonzero');
+    });
+
+    it('sends nothing for the rule it already has, a locked layer or a non-vector', async () => {
+      await setup([vectorLayer('v'), vectorLayer('l', { state: 'locked' }), pixel('p')]);
+      state().setVectorFillRule('v', 'nonzero');
+      state().setVectorFillRule('l', 'evenodd');
+      state().setVectorFillRule('p', 'evenodd');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+  });
+
+  describe('Convert to Outlines (text.to_outlines)', () => {
+    const mask = (over: Partial<VectorMaskRef>): VectorMaskRef => ref(over);
+
+    /**
+     * `t` is a text layer between `top` and `v`, with its own masked modifier (`tm`, masked by
+     * `v`) and a plain one; `m` has a modifier (`mod1`) masked by the text.
+     */
+    function outlineScene(): { nodes: SceneNode[]; extra: Partial<Scene> } {
+      const t: TextNode = {
+        ...textLayer('t'),
+        label: 'Hello',
+        output: 'mask',
+        visible: false,
+        blendMode: 'multiply',
+        opacity: 0.5,
+        transform2d: { x: 3, y: 4, scaleX: 2, scaleY: 3, rotation: 0.5 },
+        modifiers: [
+          { id: 'tm', type: 'blur', enabled: true, params: { radius: 12 }, maskId: 'tr' },
+          { id: 'tn', type: 'sharpen', enabled: false, params: {} },
+        ],
+      };
+      const m = pixel('m', {
+        modifiers: [{ id: 'mod1', type: 'blur', enabled: true, params: {}, maskId: 'cr' }],
+      });
+      return {
+        nodes: [pixel('top'), t, vectorLayer('v'), m, pixel('z')],
+        extra: {
+          maskRefs: {
+            tr: mask({ id: 'tr', nodeId: 'v' }),
+            cr: mask({ id: 'cr', nodeId: 't', featherPx: 2, invert: false }),
+          },
+        },
+      };
+    }
+    const ids = () => state().scene.nodes.map((n) => n.id);
+
+    it('runs the original at once and sends the id it picked with the outlines', async () => {
+      const { nodes, extra } = outlineScene();
+      await setup(nodes, true, extra);
+      const id = state().convertTextToOutlines('t', tri()) as string;
+      expect(id).toBeTruthy();
+      expect(ids()).toEqual(['top', id, 'v', 'm', 'z']); // local first: there at once, in place
+      await settle();
+      expect(host.runs.map((r) => ({ id: r.id, payload: r.payload }))).toEqual([
+        { id: 'text.to_outlines', payload: { at: '/layers/t', id, paths: tri() } },
+      ]);
+    });
+
+    it('comes to what the store comes to: modifiers and masks kept, no reconcile difference', async () => {
+      const { nodes, extra } = outlineScene();
+      await setup(nodes, true, extra);
+      const id = state().convertTextToOutlines('t', tri()) as string;
+      await settle();
+      await agrees();
+      const v = vec(id);
+      expect(v).toMatchObject({
+        type: 'vector',
+        label: 'Hello',
+        output: 'mask',
+        visible: false,
+        blendMode: 'multiply',
+        opacity: 0.5,
+        fillRule: 'nonzero',
+        transform2d: { x: 3, y: 4, scaleX: 2, scaleY: 3, rotation: 0.5 },
+      });
+      // the modifiers kept their ids and order, and the one with a mask its mask
+      expect(v.modifiers.map((m) => m.id)).toEqual(['tm', 'tn']);
+      expect(v.modifiers[0].maskId).toBe('tr');
+      expect(state().scene.maskRefs?.tr).toEqual(mask({ id: 'tr', nodeId: 'v' }));
+      // a mask the text was the source of now points at the vector layer, same ref
+      expect(state().scene.maskRefs?.cr).toEqual(
+        mask({ id: 'cr', nodeId: id, featherPx: 2, invert: false }),
+      );
+      expect(node('m')?.dirty).toEqual(hot); // the consumer recooks
+      expect(node('z')?.dirty).toEqual(clean);
+    });
+
+    it('is one undo step: undo brings the text and its bindings back, redo converts again', async () => {
+      const { nodes, extra } = outlineScene();
+      await setup(nodes, true, extra);
+      const id = state().convertTextToOutlines('t', tri()) as string;
+      await settle();
+      await undo();
+      expect(ids()).toEqual(['top', 't', 'v', 'm', 'z']);
+      expect(node('t')?.type).toBe('text');
+      expect(node('t')?.modifiers.map((m) => m.id)).toEqual(['tm', 'tn']);
+      expect(state().scene.maskRefs?.cr.nodeId).toBe('t');
+      expect(state().scene.maskRefs?.tr.nodeId).toBe('v');
+      await agrees();
+      await redo();
+      expect(ids()).toEqual(['top', id, 'v', 'm', 'z']);
+      expect(state().scene.maskRefs?.cr.nodeId).toBe(id);
+      await agrees();
+    });
+
+    it('a text layer that was never moved gives a vector layer that was never moved', async () => {
+      await setup([textLayer('t')]);
+      const id = state().convertTextToOutlines('t', tri()) as string;
+      await settle();
+      expect(vec(id).transform2d).toBeUndefined();
+      await agrees();
+    });
+
+    it('returns null and sends nothing for a locked layer, a non-text layer or a missing one', async () => {
+      await setup([{ ...textLayer('t'), state: 'locked' }, vectorLayer('v'), pixel('p')]);
+      expect(state().convertTextToOutlines('t', tri())).toBeNull();
+      expect(state().convertTextToOutlines('v', tri())).toBeNull();
+      expect(state().convertTextToOutlines('nope', tri())).toBeNull();
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(ids()).toEqual(['t', 'v', 'p']);
+    });
+
+    it('a refusal from the host toasts, and the reconcile takes the conversion back', async () => {
+      const { nodes, extra } = outlineScene();
+      await setup(nodes, true, extra);
+      host.reject.add('text.to_outlines');
+      state().convertTextToOutlines('t', tri());
+      await settle();
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      await expect(rhizome.reconcile()).resolves.toBe('restored');
+      expect(ids()).toEqual(['top', 't', 'v', 'm', 'z']);
+      expect(state().scene.maskRefs?.cr.nodeId).toBe('t');
+    });
+
+    it('edits the converted layer afterwards: its paths go through the same commands', async () => {
+      const { nodes, extra } = outlineScene();
+      await setup(nodes, true, extra);
+      const id = state().convertTextToOutlines('t', tri()) as string;
+      await settle();
+      state().setVectorPaths(id, tri(3));
+      state().setVectorFillRule(id, 'evenodd');
+      await settle();
+      expect(sent()).toEqual(['text.to_outlines', 'vector.set_paths', 'vector.set_fill_rule']);
+      expect(vec(id).paths).toEqual(tri(3));
+      expect(node('m')?.dirty).toEqual(hot);
+      await agrees();
     });
   });
 });
