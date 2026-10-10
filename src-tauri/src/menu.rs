@@ -222,7 +222,9 @@ mod tests {
 
     #[test]
     fn document_settings_is_opt_cmd_p_in_the_page_setup_group_after_export() {
-        let chord = SHORTCUTS.iter().find(|(id, _)| *id == "file-document-settings");
+        let chord = SHORTCUTS
+            .iter()
+            .find(|(id, _)| *id == "file-document-settings");
         assert_eq!(chord.map(|(_, a)| *a), Some("CmdOrCtrl+Alt+P"));
         // Shift+Cmd+P stays Page Setup, so nothing here takes it.
         assert!(SHORTCUTS
