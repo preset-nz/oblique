@@ -79,7 +79,9 @@ module.exports = {
     },
   ],
   options: {
-    doNotFollow: { path: 'node_modules' },
+    // A package taken by path (`link:../../packages/…`) resolves outside node_modules; it is
+    // checked in its own repo, not cruised here.
+    doNotFollow: { path: ['node_modules', '^\\.\\./\\.\\./packages/'] },
     tsPreCompilationDeps: true,
     tsConfig: { fileName: 'tsconfig.json' },
     enhancedResolveOptions: {

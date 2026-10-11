@@ -134,6 +134,13 @@ export interface RhizomeBackend {
 /** Only inside the Tauri app: the web build and the tests run Oblique as it is. */
 export const inTauri = (): boolean => isTauri();
 
+/**
+ * A sentence from the document host for the user, such as a held file that failed to open, on
+ * app-kit's note event. app-kit 0.1.3 made its own `useDocumentNotes` a no-op, so the app listens.
+ */
+export const onDocumentNote = (f: (message: string) => void): Promise<Unlisten> =>
+  listen<string>('app-kit://note', (e) => f(e.payload));
+
 export const tauriBackend: RhizomeBackend = {
   init: (ops) => invoke<boolean>('document_init', { ops }),
   connect: async () => {

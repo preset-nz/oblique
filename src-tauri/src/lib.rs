@@ -41,7 +41,6 @@ pub fn run() {
             preset_app_kit::app_kit_commands,
             preset_app_kit::app_kit_menu_state,
             preset_app_kit::app_kit_document,
-            preset_app_kit::app_kit_document_note,
             preset_app_kit::app_kit_history,
             preset_app_kit::app_kit_undo,
             preset_app_kit::app_kit_redo,
@@ -71,7 +70,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // The last document at launch, a document from the Finder or `open`, and the
+            // A document from the Finder or `open`, and the
             // close guard on quit: app-kit's.
             preset_app_kit::on_run_event(app, &event);
         });

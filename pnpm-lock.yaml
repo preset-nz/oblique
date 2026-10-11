@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@preset.nz/app-kit':
-        specifier: ^0.1.2
-        version: 0.1.2(@preset.nz/ux-kit@0.1.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.8.3))(@tauri-apps/api@2.11.1)(react@19.2.7)
+        specifier: link:../../packages/app-kit
+        version: link:../../packages/app-kit
       '@preset.nz/facets':
         specifier: ^0.2.0
         version: 0.2.0(react@19.2.7)
@@ -544,16 +544,6 @@ packages:
     peerDependencies:
       react: '>= 16.8'
       react-dom: '>= 16.8'
-
-  '@preset.nz/app-kit@0.1.2':
-    resolution: {integrity: sha512-grpvEwW910RM0pjrnIPyBsICGbhiYqqUEaKm7M+bektQwY1vDkatVU2yo2h0jjHBYn7RC316kb6bGsOk6wa4/A==}
-    peerDependencies:
-      '@preset.nz/ux-kit': ^0.1.0
-      '@tauri-apps/api': ^2
-      react: ^19
-    peerDependenciesMeta:
-      '@preset.nz/ux-kit':
-        optional: true
 
   '@preset.nz/facets@0.2.0':
     resolution: {integrity: sha512-6ajdjiU4W40G8QVe++M5GGS0M3zwaxkV6CnpaD6t8IuZoVqjwJrRjkv4KOPkv57tyKUKfyD2DyABFwXgJn58/g==}
@@ -2944,13 +2934,6 @@ snapshots:
     dependencies:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-
-  '@preset.nz/app-kit@0.1.2(@preset.nz/ux-kit@0.1.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.8.3))(@tauri-apps/api@2.11.1)(react@19.2.7)':
-    dependencies:
-      '@tauri-apps/api': 2.11.1
-      react: 19.2.7
-    optionalDependencies:
-      '@preset.nz/ux-kit': 0.1.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.8.3)
 
   '@preset.nz/facets@0.2.0(react@19.2.7)':
     dependencies:

@@ -1,4 +1,3 @@
-import { useDocumentNotes } from '@preset.nz/app-kit/core';
 import { notify } from '@preset.nz/ux-kit';
 import { useEffect } from 'react';
 import { loadAiSettings } from './ai/settings';
@@ -9,6 +8,7 @@ import { useFontCatalogueStore } from './fonts/catalogue';
 import { loadFontPreferences } from './fonts/preferences';
 import { projectDocumentEvents } from './project/io';
 import { installRhizome } from './rhizome/rhizome';
+import { onDocumentNote } from './rhizome/transport';
 // Side-effecting import: wires up the app-wide cook scheduler singleton
 // (store subscriptions + debounce/idle timers) the first time this module
 // loads. Safe to import more than once — it's a singleton.
@@ -23,9 +23,14 @@ import './cook/singleton';
  */
 function NativeMenu() {
   useMenuCommands();
-  // A last document that wouldn't reopen at launch, or a held file that failed to open: app-kit
-  // hands over a sentence, shown as a passing message, never a dialog.
-  useDocumentNotes((message) => notify({ message }));
+  // A held file that failed to open: the document host's sentence, shown as a passing message,
+  // never a dialog.
+  useEffect(() => {
+    const un = onDocumentNote((message) => notify({ message }));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
   return null;
 }
 

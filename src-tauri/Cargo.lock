@@ -2600,8 +2600,6 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 [[package]]
 name = "preset-app-kit"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5304a39f7000c4e2a59be42c919e81a704264754ac26301797982720c6ac8efa"
 dependencies = [
  "serde",
  "serde_json",

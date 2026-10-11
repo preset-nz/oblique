@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "cba86beb71928df0a8f2188a09cc828dfa47b7cf05d2a55ffab993cff242005d"
+sha256 = "824fe8e89771b10f11ba568461ee5e9a48b3693efb65f00683c8a06aa53947d2"
 
 [[inputs]]
 path = "sidecar/kernels/Cargo.lock"
@@ -25,11 +25,11 @@ sha256 = "7f177681fe1b27d3b1aeee881dff4a972a9d2b7a19c211f67b886cc8511c7f98"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "862b2a2b2aa1c3c110084e9b1b4811353dc282a4729b6bb2ed30fb807194224d"
+sha256 = "100c1f03eb08d4188ec2e38cd45a014a69a64ad122337e5d7d328784780e8e81"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "4ba2d087a738bf8f4e02b6e88abd6e957643c627260a1961863f3835c7a25132"
+sha256 = "1d5241e5ea7a33818110aeb720b85e6f35de7bfdc503924686659c8a4da6bcb5"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2179,7 +2179,7 @@ scope = "shipped"
 ecosystem = "cargo"
 name = "preset-app-kit"
 version = "0.1.2"
-source = "registry"
+source = "path"
 declared = "MIT"
 scope = "shipped"
 
@@ -4963,14 +4963,6 @@ scope = "shipped"
 ecosystem = "pnpm"
 name = "@phosphor-icons/react"
 version = "2.1.10"
-source = "registry"
-declared = "MIT"
-scope = "shipped"
-
-[[packages]]
-ecosystem = "pnpm"
-name = "@preset.nz/app-kit"
-version = "0.1.2"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
