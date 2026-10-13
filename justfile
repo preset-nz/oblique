@@ -85,7 +85,7 @@ build:
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
     codesign --deep --force --sign - "src-tauri/target/release/bundle/macos/${product}.app"
 
-# Friends build (Epic 14): zipped .app + README + THIRD-PARTY-LICENSES. Unsigned — see epic doc.
+# Friends build (Epic 14): zipped .app + README + LICENSE + THIRD-PARTY-LICENSES. Unsigned — see epic doc.
 [group('build')]
 package: build
     #!/usr/bin/env bash
@@ -98,15 +98,15 @@ package: build
     mkdir -p "$outdir"
     cp -R "src-tauri/target/release/bundle/macos/${product}.app" "$outdir/"
     sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
-    cp THIRD-PARTY-LICENSES "$outdir/"
+    cp LICENSE THIRD-PARTY-LICENSES "$outdir/"
     # ditto, not zip, for the .app itself — plain `zip` doesn't reliably
     # preserve the resource-fork/xattr metadata a code signature depends
-    # on and is the classic cause of "app is damaged" after unzip. The two
+    # on and is the classic cause of "app is damaged" after unzip. The
     # plain text files have no such concerns, so a regular `zip -q` append
     # after is fine for those.
     (cd "$outdir" && \
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
-        zip -q "${product}-v${version}.zip" README.txt THIRD-PARTY-LICENSES)
+        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES)
     echo "Packaged: $outdir/${product}-v${version}.zip"
 
 # Version, changelog, commit and tag from the conventional commits since the last
