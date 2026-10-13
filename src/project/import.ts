@@ -23,7 +23,7 @@ export interface ImportDeps {
 }
 
 async function decodeImageBitmap(bytes: Uint8Array): Promise<ImageBitmap> {
-  const blob = new Blob([bytes]);
+  const blob = new Blob([new Uint8Array(bytes)]);
   return createImageBitmap(blob);
 }
 

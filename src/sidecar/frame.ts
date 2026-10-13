@@ -57,7 +57,7 @@ export function tryDecodeFrame(buffer: Uint8Array): { frame: Frame; bytesConsume
   return { frame: { header, payload }, bytesConsumed: totalLen };
 }
 
-function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(a.byteLength + b.byteLength);
   out.set(a, 0);
   out.set(b, a.byteLength);
@@ -70,7 +70,7 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
  * where the frame boundaries actually get found, TS-side.
  */
 export class FrameReassembler {
-  private buffer = new Uint8Array(0);
+  private buffer: Uint8Array<ArrayBuffer> = new Uint8Array(0);
 
   /** Feed in the next chunk; returns any frames that are now complete. */
   push(chunk: Uint8Array): Frame[] {

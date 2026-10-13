@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "12e0da274a4666f55f21d532546fac95f181a91b8ee51779b70d175caea1fd41"
+sha256 = "bf7f781da7d9ecd52098ee270dd31c74fa93bb0ff00f3e0c029158b390f11d2d"
 
 [[inputs]]
 path = "sidecar/kernels/Cargo.lock"
@@ -5473,6 +5473,166 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "@typescript/typescript-aix-ppc64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-darwin-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-darwin-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-freebsd-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-freebsd-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-arm"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-loong64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-mips64el"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-ppc64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-riscv64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-s390x"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-linux-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-netbsd-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-netbsd-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-openbsd-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-openbsd-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-sunos-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-win32-arm64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@typescript/typescript-win32-x64"
+version = "7.0.2"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "@vitejs/plugin-react"
 version = "4.7.0"
 source = "registry"
@@ -8098,7 +8258,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "typescript"
-version = "5.8.3"
+version = "7.0.2"
 source = "registry"
 declared = "Apache-2.0"
 scope = "dev"
