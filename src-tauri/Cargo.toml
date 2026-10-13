@@ -1,6 +1,6 @@
 [package]
 name = "oblique"
-version = "0.2.0"
+version = "0.2.1"
 description = "An image editor for making things worse — beautifully."
 authors = ["preset.nz"]
 edition = "2021"

@@ -1,0 +1,151 @@
+## 0.2.1 (2026-10-13)
+
+### Features
+
+- app scaffold — Tauri 2 + React 19 + Tailwind v4 + shadcn, Biome, uv sidecar stub, justfile, lefthook
+- canvas viewport — shared viewTransform, cursor-centred zoom, DPR-sharp paint, SVG overlay lock
+- sidecar handshake — framed stdio protocol, Rust relay + supervision, Python op registry, TS client + status dot
+- bottom status bar — zoom, doc-space cursor, save placeholder, relocated sidecar dot
+- InputNumber — scrub-drag numeric input with pure math core
+- starter ops — gaussian_blur, levels, threshold, invert, grain + cook dispatch
+- scene store + architecture tests — typed scene model, dirty rules, dependency-cruiser gate
+- pixel node import — Cmd+O dialog + Tauri drag-drop, serial decode, sources map, toast on failure
+- cook pipeline — executor, scheduler (debounce/idle/supersession/concurrency-2), scene paint, debug stack panel
+- cmyk_halftone op — rotated dot screens, seeded misregistration, paper/over modes; enum params get choices + a real select
+- project persistence — .oblique save/load (atomic write), Cmd+S/Shift+Cmd+S, Cmd+O routing, recook + rehydrate on open, unsaved-changes guard + title/status
+- modifier reorder buttons in debug stack panel
+- cook timing instrumentation — per-op ms in sidecar response header, phase timings via console.debug
+- real multi-node composite — bottom-up span walk, blend table, best-available cache, offscreen WORKING buffer + reblit-only pan/zoom
+- full-res PNG export + aspect/orientation document setup
+- layer list — per-node rows with draft thumbnail, eye, opacity, blend mode, reorder
+- delete layer — trash button per row; deleteNode evicts cook caches + source bitmap
+- modifier scopes + opParamsToSchema — property-editors wired to sidecar op specs
+- real modifier stack — bottom-to-top rows, PropertyPanel params, searchable add, debug panel retired
+- colour_crush, xerox, ink_starved — three flavour ops, zero TS changes
+- Epic 13 — snapshot undo/redo, Cmd+Z/Shift+Cmd+Z
+- display labels + descriptions — backend-owned metadata, UI shows labels
+- native menu bar — File New/Open/Save/Save As/Export, Edit Undo/Redo
+- uniform 2D node transform — move/scale/rotate (Epic 05)
+- tool state machine + toolbar rail (Epic 05)
+- pan-tool click selects the node under the cursor
+- split Open (Cmd+O, projects) vs Import (Cmd+I, images)
+- newly added and duplicated modifiers open expanded
+- base presets — A6/A5/A4 (300 DPI) + 720p/1080p/4K set the long edge
+- rect/ellipse/lasso marquees + shared box-handle geometry (Epic 05)
+- selection to mask — client raster, sidecar blend (Epic 05)
+- VectorNode data model + Path2D rasteriser into the cook path (Epic 06)
+- pen tool — corner/smooth anchors, close on first anchor or Enter (Epic 06)
+- direct-selection path editing — anchors, handles, insert/delete, mode cycling (Epic 06)
+- mask output + compositor span scoping — destination-in span clipping, layer-row mask toggle (Epic 06)
+- live vector-referenced modifier masks — maskRefs table, per-reference feather/expand/invert, cross-node dirty (Epic 06)
+- vectors tab — path list with focus/nudge-reorder/delete, fillRule + output node controls; pathEditState moves to scene/ so panel and canvas share one focus store (Epic 06)
+- lock/unlock state machine — full-res bake on lock, store-boundary guards for cook-dirtying edits, scheduler rehydrate path, undo reconciliation, compositor + export prefer baked (Epic 07)
+- baked-cache persistence — <name>.oblique.baked/<nodeId>.png sidecars with stale sweep, project format v2 (v1 still opens), load-time rehydration + cache clearAll on open (Epic 07)
+- padlock on layer rows + read-only treatment — bake spinner, disabled stack controls with locked hint, PropertyPanel readOnly, overlay mount gate for locked nodes; lockNode production wiring via cookNodeFullRes (Epic 07)
+- pen appends to the selected vector node — selection decides commit target (unlocked vectors only), amber preview cue, appended path focused in the Vectors tab (Epic 06)
+- drag the focused path to move the whole shape within its node — Path2D body hit-test, rigid translate via movePath, one history entry, Escape cancels (Epic 06)
+- document background colour ("paper") — painted before the node walk, immune to masks
+- freeze the Python sidecar with PyInstaller for release builds (Epic 14)
+- friends-build checklist — version, About panel, licences, zip (Epic 14)
+- rename layers inline — double-click or F2 on the layer row, Enter/blur commits, Escape cancels
+- colour param kind — a swatch is a knob like any other (Epic 15)
+- desaturate + pixelate — the two zero-plumbing registry ops (Epic 15)
+- colourise + recolour — one hue, or a ramp (Epic 15)
+- CMYK ink remap — spot inks on the halftone (Epic 15)
+- writes_alpha — the op contract gets a second clause (Epic 16)
+- dilate + erode — the alpha shape grows and shrinks (Epic 16)
+- edge_noise — the torn edge, seeded (Epic 16)
+- cmyk_halftone white_is_alpha — paper goes transparent, ink overprints (Epic 16)
+- edge_noise profile — smooth, saw, rect, straight tears
+- edge_noise linear profile — connect the dots
+- marquees as vectors — one mask kind, editable forever
+- AI backends adapter + settings dialog (Epic 17 story 1)
+- smart select — MobileSAM segment to vector (Epic 17 story 2)
+- colour-range select — the magic wand (Epic 17 story 2b)
+- hatch — tone becomes pen marks, lines and dashes, layers from engraving to crosshatch (Epic 18)
+- hatch crosses + stipple — cell-based marks on the shared tone model (Epic 18)
+- hatch pen — cap stroke width for hairlines, tone keeps building through layers (Epic 18)
+- hatch cross shape — cross_aspect stretches one bar, cross_size lets arms bleed into neighbouring cells (Epic 18)
+- disabledWhen in the op param contract — hatch greys out params its pattern ignores (Epic 18)
+- hatch jitter — lines wobble, crosses drift off their cells, easing out as a layer closes (Epic 18)
+- oblique_kernels PyO3 crate — maturin/uv wiring, shim, canary, Rust licence gate, frozen into the sidecar (Epic 19)
+- smear — sample one row or column and repeat it across the frame
+- bloom — bright areas bleed light, on a lifted shared float blur
+- film_burn — the frame stalls in the gate and the lamp eats it
+- installed-font catalogue from Rust + closest-font matcher — Epic 20 story 1
+- Rust text engine — rustybuzz shaping + glyph outlines, Tauri-free for headless — Epic 20 story 2
+- text node — geometry cache, cook/raster, hit, history, image + stack-mask roles — Epic 20 story 3
+- T tool, overlay editor, Text inspector — typing is one undo step — Epic 20 story 4
+- text layers as live modifier masks — Epic 20 story 5
+- missing fonts — closest substitute, warning on open, Type → Replace Font…; text cooks wait for the catalogue — Epic 20 story 6
+- cmyk_halftone spill — dots sampled from the silhouette and drawn whole past its edge
+- inspector Text field replaces the overlay, kerning amount 0–200%, Enabled toggles, collapsible Text section — Epic 20 story 4b
+- Type → Convert to Outlines (Shift+Cmd+O) — text becomes an editable vector in place — Epic 20 story 7
+- picker lists Latin-capable families, with Recent and Favourites — Epic 20 story 8
+- Edit → Duplicate (Cmd+D) — an independent copy with its whole modifier stack, masks shared by shape
+- mask follows node — node-pinned vector masks travel with the layer; Follows layer toggle; selections default to node-pinned
+- mask-span members indent under their mask with a muted rail — the list shows what each mask clips
+- document background can be an image — native size, top-left, never masked; background edits are now undoable
+- View menu — Zoom In/Out on a stop ladder, Fit in Window, Actual Size; ± and fit in the status bar
+- last cook time in the status bar — amber from 250 ms, details in the tooltip
+- bounded int params get the slider widget — bits, count, size, stops, layers, generations, cell size; seeds stay number fields
+- every param has a human label and a hover description, carried in the op's backend metadata; pytest guard keeps new ops annotated
+- colour_keep — grey everything except one or two hue bands, with soft falloff and a chroma gate so shadows don't light up
+- technicolor — colour records rebuilt as dyes with cross-talk and seeded record fringing; two- and three-strip
+- film_stock — polaroid_600, sx70, cross_process, bleach_bypass, expired as one op; grade, frame-relative vignette and grain
+- drag to reorder layers and modifiers by a grip; Layer menu — Bring Forward/Backward, to Front/Back (Cmd+[ ])
+- eyedropper — a pipette beside every colour param picks a 3×3 average from the displayed composite
+- move snaps to document and layer edges/centres with pink guides; Cmd suspends; View → Snap to Layers (Cmd+;)
+- one free-text composition note per project, in a Notes tab; one undo step per typing session; no recomposite on note-only edits
+- File → Export Proof… — registration marks and CMYK colour bars in a margin around the untouched work area
+- Image section on pixel layers — editable path (absolute or project-relative, as typed), Browse…, Reveal in Finder; Layer → Replace Image… keeps the footprint at full resolution
+- Oblique on ux-kit primitives and facets 0.2 (ux-kit epic 04, pass 1 of 3)
+- Phosphor icons from ux-kit replace lucide-react (ux-kit epic 04, pass 2 of 3)
+- the kit snackbar replaces sonner (ux-kit epic 04, pass 3 of 3)
+- Oblique runs on rhizome (Epic 21, story 1)
+- files on rhizome (Epic 21, story 2)
+- implement app-kit's History and Document on the host
+- run the menu bar, undo and redo through app-kit
+- File, relaunch and Finder via app-kit (Epic 22 slice c)
+- File > Document Settings… (Epic 22 slice d)
+- chords from the menu standard's 2026-10-08 decisions
+- duplicate, delete and reorder layers on rhizome
+- modifiers and masks on rhizome
+- path edits, fill rule and outlines on rhizome
+- background, note and lock on rhizome
+
+### Fixes
+
+- trackpad-first gestures — plain scroll pans, pinch/ctrl+scroll zooms
+- Shift+Cmd shortcuts were dead (e.key is uppercase with Shift); save dialog now opens before cooking
+- allow fs write_file capability — PNG export writes binary, only write-text-file was permitted
+- hide debug_-prefixed ops from the add-modifier list — debug_echo is a protocol canary, not a user op
+- grain respects alpha — noise scales with pixel coverage, transparent regions untouched
+- blend mode as dropdown — seven inline toggles forced horizontal panel scroll
+- truncate long node labels — Draw Things prompt-filenames forced horizontal panel scroll
+- dirty-flag churn no longer resets the WORKING idle timer
+- whole layer row selects — label-only click target kept getting missed
+- drop duplicated op title inside the modifier panel
+- lasso no longer self-closes at drag start; dashed outlines; visible invert checkbox
+- param-less modifiers (invert) are not expandable
+- Escape deselection sticks — only auto-select when the selected node was deleted
+- hit-test uses tight path bounds, not the document-sized raster
+- PathEditor overlay follows the node's transform2d — vectors stick to the painted shape
+- cook mask-output nodes so masked spans survive into the exported PNG
+- StackRow vector-node selector returned a fresh array per snapshot — infinite render loop on node select
+- document-pinned vector masks — rasterise through the consumer's current transform, recook on move; feather/expand/invert controls in the vector-mask picker
+- mask reads the shape's composited position — apply the vector node's own transform2d; full-res cook handles vector nodes (export no longer aborts)
+- masked spans blend against the backdrop — backdrop-seeded scratch, destination-out + lighter stamp-back (cut the hole, insert the blended plug), operator-sequence tests for feathered edges (Epic 06)
+- reseal app signature after bundling, use ditto for the zip (Epic 14)
+- README instructs xattr -cr, not System Settings Open Anyway (Epic 14)
+- clear marquee and selection-tool state when the scene is replaced or the target node vanishes
+- route the product name through PRODUCT_NAME in project I/O
+- hatch registry entry wrapped _coverage_numpy — @op decorator moved back onto hatch; every registered op now cooked through the registry in tests (Epic 19)
+- the canvas actually updates while you scrub — draft throttled, freshness beats resolution
+- @source facets from node_modules — the packages/ path is gone for a clean clone
+- list onnxruntime in THIRD-PARTY-LICENSES — it ships in the frozen sidecar since Epic 17
+- Space no longer swallowed in text fields — pan only claims it outside inputs
+- one glyph orientation per font — tight tracking no longer punches holes where letters overlap
+- a mask-source edit mid-cook no longer clears the consumer's fresh dirty flag
+- decode Mac Roman name records — American Typewriter's Style list was empty
+- start every launch on a fresh Untitled document
