@@ -36,3 +36,15 @@ Alpha is untouched.
 
 - **One-bit screen.** Colour Crush with Bits 1 and Dither on, after Desaturate at Amount 1. Grey areas become a regular pattern of black and white dots.
 - **Green-heavy.** Bits 8, Red bits 3, Blue bits 2: the green stays smooth while red and blue band.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Colour Crush at its defaults](img/colour_crush-defaults.webp)
+
+*Defaults.*
+
+![One bit a channel](img/colour_crush-recipe.webp)
+
+*One bit a channel: Colour Crush (Bits 1).*
+<!-- examples:end -->

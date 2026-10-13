@@ -42,3 +42,15 @@ Colour is not changed, so the new edge is the same colour as the old one.
 - **Torn paper.** On a vector layer drawn as a rectangle, Edge Noise with Amount 0.5, Feature size 14 and Profile smooth, then Grain.
 - **Ragged stencil.** On a text layer set to mask, Edge Noise with Amount 0.4, Feature size 8 and Profile saw: whatever it masks is revealed through teeth.
 - **Polygonal edge.** Profile linear, Feature size 30, Amount 0.3.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Edge Noise at its defaults](img/edge_noise-defaults.webp)
+
+*Defaults.*
+
+![Bitten](img/edge_noise-recipe.webp)
+
+*Bitten: Edge Noise (Amount 1, Feature size 36, Profile saw).*
+<!-- examples:end -->

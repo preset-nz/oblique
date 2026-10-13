@@ -27,3 +27,15 @@ There is no separate greyscale op. Desaturate at 1 is it.
 ## Recipes
 
 - **Faded print.** Desaturate at Amount 0.5, then Film stock with the sx70 stock.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Desaturate at its defaults](img/desaturate-defaults.webp)
+
+*Defaults.*
+
+![Faded to almost nothing](img/desaturate-recipe.webp)
+
+*Faded to almost nothing: Desaturate (Amount 0.85), then Film stock (Stock sx70, Vignette 1, Grain 1).*
+<!-- examples:end -->

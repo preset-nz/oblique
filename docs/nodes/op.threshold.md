@@ -31,3 +31,15 @@ Every pixel becomes black or white depending on its brightness. Pixels at or abo
 
 - **Clean shapes.** Gaussian Blur at Radius 2, then Threshold at Level 127. The blur removes speckle first, so the black and white areas come out as solid blobs.
 - **Two-colour print.** Threshold, then Recolour with Stops 2: Stop 1 is what the black becomes, Stop 2 what the white becomes.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Threshold at its defaults](img/threshold-defaults.webp)
+
+*Defaults.*
+
+![Clean shapes](img/threshold-recipe.webp)
+
+*Clean shapes: Gaussian Blur (Radius 3), then Threshold (Level 150).*
+<!-- examples:end -->

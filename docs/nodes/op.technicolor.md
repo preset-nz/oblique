@@ -44,3 +44,15 @@ Alpha is untouched. On a cutout the colours shift but the outline does not.
 - **Two-strip.** Process two_strip, Dye density 1, Cross-talk 0.15, Amount 1. Everything lands between red and cyan-green.
 - **Heavy misprint.** Dye density 1.4, Fringe 5, Amount 1, then Grain with Amount 0.1.
 - **Lift after.** Technicolor at Dye density 1.6, then Levels with Gamma 1.2, to bring back the brightness the dyes took.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Technicolor at its defaults](img/technicolor-defaults.webp)
+
+*Defaults.*
+
+![Heavy two-strip misprint](img/technicolor-recipe.webp)
+
+*Heavy two-strip misprint: Technicolor (Process two_strip, Dye density 1.6, Cross-talk 0.3, Fringe 8, Amount 1).*
+<!-- examples:end -->

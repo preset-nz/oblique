@@ -41,3 +41,15 @@ The ink fades to white, not to transparent. Alpha is untouched.
 - **Dry cartridge.** Direction h, Starvation 0.7, Banding 0.3, Band spacing 20, on a photo.
 - **Yellow runs out.** Channel y, Starvation 0.9, Banding 0: the far end loses its yellow and cools toward blue. Follow it with CMYK Halftone for dots that thin out.
 - **Black runs out.** Channel k, Starvation 0.8: the shadows lift and go colourful toward the far end.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Ink Starved at its defaults](img/ink_starved-defaults.webp)
+
+*Defaults.*
+
+![Run dry](img/ink_starved-recipe.webp)
+
+*Run dry: Ink Starved (Direction h, Starvation 1, Banding 0.7, Band spacing 36).*
+<!-- examples:end -->

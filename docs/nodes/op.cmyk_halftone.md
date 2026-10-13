@@ -53,3 +53,15 @@ The separation is a simple one: black takes the darkest part of each pixel and t
 - **Riso pink and teal.** Cyan ink a teal, Magenta ink a fluorescent pink, Yellow ink a pale yellow, Black ink a dark navy. Dot size 8.
 - **Misprint over the original.** Mode over, Dot size 10, Misregistration 3.
 - **Dots over the original.** Paper is transparent on, on a duplicate layer stacked above the original: the dots lie over the unchanged picture.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![CMYK Halftone at its defaults](img/cmyk_halftone-defaults.webp)
+
+*Defaults.*
+
+![Big riso dots, out of register](img/cmyk_halftone-recipe.webp)
+
+*Big riso dots, out of register: CMYK Halftone (Cyan ink #1f8a8a, Magenta ink #ff3d9a, Yellow ink #f5e9a0, Black ink #1b2440, Dot size 24, Misregistration 6).*
+<!-- examples:end -->

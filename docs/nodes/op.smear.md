@@ -37,3 +37,15 @@ Where the picked line is transparent and Keep silhouette is on, nothing is writt
 - **Scanner stall.** Smear with Direction h, Mode forward, Position 0.6, on a photo.
 - **Smeared both sides.** Two Smear modifiers: Direction h, Mode backward, Position 0.25, then Direction h, Mode forward, Position 0.75. The middle half stays, with streaks at both edges.
 - **Recoloured cutout.** Smear with Keep silhouette on, Direction v, Mode both, Position 0.5 on a cutout: the outline holds and the colours become one row stretched down.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Smear at its defaults](img/smear-defaults.webp)
+
+*Defaults.*
+
+![Scanner stall](img/smear-recipe.webp)
+
+*Scanner stall: Smear (Direction h, Mode both, Position 0.45).*
+<!-- examples:end -->

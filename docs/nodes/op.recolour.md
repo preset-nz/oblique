@@ -42,3 +42,15 @@ Alpha is untouched.
 - **Duotone.** Stops 2, Stop 1 a deep navy, Stop 2 a pale cream.
 - **Tritone.** Stops 3: Stop 1 near black, Stop 2 a mid red, Stop 3 a warm white. The mid red lands on the midtones.
 - **Two-colour print.** Threshold at Level 127, then Recolour with Stops 2 and two ink colours.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Recolour at its defaults](img/recolour-defaults.webp)
+
+*Defaults.*
+
+![Shard duotone](img/recolour-recipe.webp)
+
+*Shard duotone: Recolour (Stops 2, Stop 1 #2a1f3d, Stop 2 #f1e094).*
+<!-- examples:end -->

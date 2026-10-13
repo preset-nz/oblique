@@ -31,3 +31,15 @@ Dilate is also how a mask is made bigger. On a layer set to output a mask, Dilat
 - **Fatten the letters.** On a text layer, Dilate at Radius 3.
 - **Chunky torn edge.** Dilate at Radius 4, then Edge Noise at Amount 0.6 and Feature size 20: the noise bites into the grown edge.
 - **Close small gaps.** Dilate then Erode at the same Radius fills small gaps and holes and keeps the overall size.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Dilate at its defaults](img/dilate-defaults.webp)
+
+*Defaults.*
+
+![Swollen and torn](img/dilate-recipe.webp)
+
+*Swollen and torn: Dilate (Radius 14), then Edge Noise (Amount 0.8, Feature size 30).*
+<!-- examples:end -->

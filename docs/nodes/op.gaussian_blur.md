@@ -28,3 +28,15 @@ A soft, even blur of the colour. Radius is in document pixels and the preview sc
 
 - **Hatch from broad shapes.** Gaussian Blur at Radius 6, then Hatch. The marks follow the large light and dark areas rather than the fine texture.
 - **Soft focus.** Duplicate the layer, put Gaussian Blur at Radius 12 on the copy, and stack it above the sharp one with the Screen blend mode at low opacity. Bloom does this from the bright areas only.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Gaussian Blur at its defaults](img/gaussian_blur-defaults.webp)
+
+*Defaults.*
+
+![Out of focus](img/gaussian_blur-recipe.webp)
+
+*Out of focus: Gaussian Blur (Radius 30).*
+<!-- examples:end -->

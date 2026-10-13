@@ -34,3 +34,15 @@ Grain follows alpha. Fully transparent pixels stay as they are and soft edges ge
 
 - **Fine film.** Film stock with Grain at 0, then Grain with Amount 0.12 and Grain size 2. Film stock's own grain is sized as a fraction of the frame; this one is sized in pixels.
 - **Rough black and white.** Threshold at Level 127, Gaussian Blur at Radius 1, then Grain with Amount 0.3 and Grain size 3.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Grain at its defaults](img/grain-defaults.webp)
+
+*Defaults.*
+
+![Rough black and white](img/grain-recipe.webp)
+
+*Rough black and white: Threshold (Level 127), then Gaussian Blur (Radius 2), then Grain (Amount 0.6, Grain size 5).*
+<!-- examples:end -->

@@ -39,3 +39,15 @@ The glow takes the colour of the bright pixels it comes from, so a red lamp glow
 - **Night street.** Bloom with Threshold 0.8, Radius 40, Intensity 1.0, on a photo with lit windows.
 - **Neon text.** On a text layer with a pale pink Fill, Bloom with Threshold 0.4, Radius 30, Intensity 1.2 and Glow past edge on. The glow spreads around the letters.
 - **Burning frame.** Film Burn with Burn-through white, then Bloom with Threshold 0.9 and Radius 30.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Bloom at its defaults](img/bloom-defaults.webp)
+
+*Defaults.*
+
+![Everything glows](img/bloom-recipe.webp)
+
+*Everything glows: Bloom (Threshold 0.7, Radius 60, Intensity 1.5, Blend screen).*
+<!-- examples:end -->

@@ -40,6 +40,13 @@ docs:
 docs-check:
     cargo run -q --manifest-path src-tauri/Cargo.toml --example oblique-docs -- --check
 
+# Example images for the op pages (docs/nodes/img/) from the sample render: a
+# colour strip, a cut-out by MobileSAM, then each op at its defaults and with
+# one recipe. Rewrites each page's Examples block.
+[group('docs')]
+examples:
+    cd sidecar && uv run python ../scripts/node_examples.py
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit

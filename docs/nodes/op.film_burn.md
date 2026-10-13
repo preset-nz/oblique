@@ -55,3 +55,11 @@ Alpha is changed only by Blister, which moves it with the picture, and by Burn-t
 - **Burn in progress.** Progress 0.35, Hot spots 1, Irregularity 0.6, defaults otherwise, then Bloom with Threshold 0.9 and Radius 30 so the hole glows.
 - **Burn through to the layer below.** Burn-through transparent, Progress 0.6, over a second picture. The second shows through the hole.
 - **Several fires.** Hot spots 3, Progress 0.3, Blister 0.3, Char width 0.2, Irregularity 0.8.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Burnt through](img/film_burn-recipe.webp)
+
+*Burnt through: Film Burn (Progress 0.3, Hot spots 2, Irregularity 0.1, Feature size 48), then Bloom (Threshold 0.9, Radius 40).*
+<!-- examples:end -->

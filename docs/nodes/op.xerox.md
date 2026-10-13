@@ -44,3 +44,15 @@ It starts by turning the picture grey, since a photocopier prints one ink. **Kee
 - **Heavy contrast.** Generations 10, Skew 0, Toner speckle 0.4. Almost no greys survive.
 - **Colour copy.** Keep colour on, Generations 2, Skew 0.3.
 - **Running dry.** Xerox, then Ink Starved with Direction h, Starvation 0.6 and Banding 0.25: the copy fades toward the far side.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Xerox at its defaults](img/xerox-defaults.webp)
+
+*Defaults.*
+
+![Copy of a copy of a copy](img/xerox-recipe.webp)
+
+*Copy of a copy of a copy: Xerox (Generations 9, Skew 1.2, Toner speckle 0.5, Edge glow 0.4, Edge glow radius 6).*
+<!-- examples:end -->

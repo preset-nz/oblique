@@ -43,3 +43,15 @@ Alpha is untouched.
 
 - **Red coat.** Colour keep with Keep colour a mid red, Hue range 15, Softness 10 and Minimum saturation 0.2, then Grain at Amount 0.1.
 - **Two spots.** Turn on Second colour and keep red and blue, with Amount 0.9 so the rest holds a trace of colour.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Colour keep at its defaults](img/colour_keep-defaults.webp)
+
+*Defaults.*
+
+![Only Oblique's aqua and Shard's lavender](img/colour_keep-recipe.webp)
+
+*Only Oblique's aqua and Shard's lavender: Colour keep (Keep colour #a2e2e3, Hue range 25, Softness 10, Minimum saturation 0.15, Second colour on, Keep colour 2 #bd9ee7, Hue range 2 25).*
+<!-- examples:end -->

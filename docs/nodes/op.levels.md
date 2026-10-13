@@ -36,3 +36,11 @@ Levels does not touch alpha.
 
 - **Stretch a flat scan.** Black point 30 and White point 225 spread the tones that were sitting in the middle across the full range.
 - **Move the cut.** Levels with Gamma 0.7, then Threshold at Level 127: the cut lands in a brighter part of the picture, so more of it goes black.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Crushed hard](img/levels-recipe.webp)
+
+*Crushed hard: Levels (Black point 100, White point 175).*
+<!-- examples:end -->

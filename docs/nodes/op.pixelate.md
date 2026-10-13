@@ -30,3 +30,15 @@ At the right and bottom, when the picture isn't a whole number of cells wide, th
 
 - **Low-res.** Pixelate with Cell size 12, then Colour Crush with Bits 3 and Dither on.
 - **Redacted.** Pixelate with Cell size 24 on a masked modifier, with a vector layer as the mask, to block out one area.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Pixelate at its defaults](img/pixelate-defaults.webp)
+
+*Defaults.*
+
+![Low-res](img/pixelate-recipe.webp)
+
+*Low-res: Pixelate (Cell size 32), then Colour Crush (Bits 2, Dither on).*
+<!-- examples:end -->

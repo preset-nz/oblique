@@ -26,3 +26,15 @@ Inverting twice gives back the original. Put it after Threshold to swap which si
 ## Recipes
 
 - **Cut and flip.** Threshold, then Invert: the same hard black and white with the sides swapped.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Invert at its defaults](img/invert-defaults.webp)
+
+*Defaults.*
+
+![Cut and flip](img/invert-recipe.webp)
+
+*Cut and flip: Threshold (Level 127), then Invert.*
+<!-- examples:end -->

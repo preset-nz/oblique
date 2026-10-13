@@ -69,3 +69,15 @@ Redraws the picture as pen marks. Light areas get few or thin marks, dark areas 
 - **Engraving.** Pattern lines, Layers 1, Spacing 5, Angle 0, Pen width 1.
 - **Ink over colour.** Hatch with Paper is transparent on, on a duplicate layer stacked above the original: the marks lie over the unchanged picture.
 - **Stipple print.** Pattern stipple, Spacing 4, Ink colour a dark brown, Paper colour a cream.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Hatch at its defaults](img/hatch-defaults.webp)
+
+*Defaults.*
+
+![Pen drawing](img/hatch-recipe.webp)
+
+*Pen drawing: Gaussian Blur (Radius 3), then Hatch (Pattern lines, Layers 3, Spacing 12, Angle 30, Pen width 0.6, Jitter 0.4).*
+<!-- examples:end -->

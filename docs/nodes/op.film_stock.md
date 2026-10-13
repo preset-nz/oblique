@@ -51,3 +51,15 @@ Alpha is untouched.
 - **Grade only.** Film stock with cross_process, Vignette 0 and Grain 0, then Grain with Amount 0.1 and Grain size 2, so the grain size is in pixels, not tied to the frame.
 - **Gritty.** Film stock with bleach_bypass, Vignette 0.8, Grain 0.8: a hard, grey picture with a coarse mono grain.
 - **Another roll.** Film stock with expired and change Seed until the cast suits the picture.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Film stock at its defaults](img/film_stock-defaults.webp)
+
+*Defaults.*
+
+![Expired roll](img/film_stock-recipe.webp)
+
+*Expired roll: Film stock (Stock expired, Vignette 1, Grain 1, Seed 3).*
+<!-- examples:end -->

@@ -37,3 +37,15 @@ Alpha is untouched.
 - **Sepia.** Colourise with the default brown at Amount 1 and Keep brightness on, then Grain.
 - **Cyanotype.** Levels to set the contrast, then Colourise with a deep blue and Keep brightness off: whites become that blue and blacks stay black.
 - **Coloured shape.** On a vector layer, Colourise with any Colour and Keep brightness off.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+![Colourise at its defaults](img/colourise-defaults.webp)
+
+*Defaults.*
+
+![Cyanotype](img/colourise-recipe.webp)
+
+*Cyanotype: Levels (Black point 40, White point 215), then Colourise (Colour #1f3a8a, Keep brightness off).*
+<!-- examples:end -->
