@@ -19,7 +19,7 @@ title: Oblique nodes
 ## Modifier
 
 - [Bloom](op.bloom.md): Bright areas bleed light into their surroundings.
-- [CMYK Halftone](op.cmyk_halftone.md): Screen-printed CMYK dot raster: classic screen angles, optional seeded misregistration, and swappable ink colours for spot-ink and riso looks. `white_is_alpha` makes the paper transparent (in mode='paper' only) so the dots overprint the layers below. `spill` (with white_is_alpha, paper mode) samples the dots from the layer's tone over paper instead of cutting them to its silhouette, so dots complete themselves past the edge.
+- [CMYK Halftone](op.cmyk_halftone.md): Prints the picture as the four dot screens of CMYK, at the classic angles, with optional misregistration and inks you can swap for spot-colour and riso looks.
 - [Colour Crush](op.colour_crush.md): Per-channel bit-depth reduction — posterise's meaner sibling, with optional Bayer dither.
 - [Colour keep](op.colour_keep.md): Turn everything greyscale except the chosen colours.
 - [Colourise](op.colourise.md): Tint the image with a single ink, keeping the source luminance.

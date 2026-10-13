@@ -2,13 +2,13 @@
 title: CMYK Halftone
 node: op.cmyk_halftone
 group: modifier
-summary: "Screen-printed CMYK dot raster: classic screen angles, optional seeded misregistration, and swappable ink colours for spot-ink and riso looks. `white_is_alpha` makes the paper transparent (in mode='paper' only) so the dots overprint the layers below. `spill` (with white_is_alpha, paper mode) samples the dots from the layer's tone over paper instead of cutting them to its silhouette, so dots complete themselves past the edge."
+summary: Prints the picture as the four dot screens of CMYK, at the classic angles, with optional misregistration and inks you can swap for spot-colour and riso looks.
 ---
 
 # CMYK Halftone
 
 <!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
-Screen-printed CMYK dot raster: classic screen angles, optional seeded misregistration, and swappable ink colours for spot-ink and riso looks. `white_is_alpha` makes the paper transparent (in mode='paper' only) so the dots overprint the layers below. `spill` (with white_is_alpha, paper mode) samples the dots from the layer's tone over paper instead of cutting them to its silhouette, so dots complete themselves past the edge.
+Prints the picture as the four dot screens of CMYK, at the classic angles, with optional misregistration and inks you can swap for spot-colour and riso looks.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
