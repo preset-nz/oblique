@@ -23,3 +23,31 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Grades the picture the way a particular photographic film would have rendered it. Each stock is a set of tone curves, a colour mix, a tint in the shadows and a tint in the highlights, plus its own vignette and its own grain. One op, five stocks.
+
+**The stocks.**
+
+- **polaroid_600**: milky lifted blacks that lean cyan-green, creamy highlights, low contrast. The instant-film snapshot.
+- **sx70**: warmer and more faded than polaroid_600, with brown shadows and amber highlights. Named for the Polaroid SX-70 camera and its film.
+- **cross_process**: slide film developed in the chemistry meant for colour negative film, which was done on purpose for its look. Hard contrast, blue shadows, yellow-green highlights, saturated colour.
+- **bleach_bypass**: a lab step that leaves the silver in the print, which strips colour and hardens contrast. Mostly grey, hard and metallic, with grain that carries no colour.
+- **expired**: old film with a faded base. Its colour shift and its cast, magenta or cyan, are picked by Seed, so each seed is a different roll.
+
+**What each control does.**
+
+- **Amount** is how much of the stock's colour grade is applied. 0 leaves the colours as they were, 1 is the full stock.
+- **Vignette** darkens toward the corners. It is a share of the stock's own depth, which differs by stock: 1 is the stock's full vignette, 0 is none. It follows the frame, so it looks the same at any size.
+- **Grain** is film grain as a share of the stock's own. The specks are sized relative to the whole picture, so a small preview shows the same texture as the full-size render. Grain is strongest in the midtones, and bleach_bypass is the only stock whose grain is grey.
+- **Seed** changes the grain pattern and, on expired, the colour shift and cast.
+
+**Amount does not switch the look off.** Vignette and Grain are independent of Amount. At Amount 0 the colours are untouched but the vignette and grain still apply at their own settings. To turn the op off, use its Enabled switch, or set all three to 0.
+
+Alpha is untouched.
+
+## Recipes
+
+- **Faded snapshot.** Film stock with polaroid_600, Amount 1, Vignette 0.7, Grain 0.4.
+- **Grade only.** Film stock with cross_process, Vignette 0 and Grain 0, then Grain with Amount 0.1 and Grain size 2, so the grain size is in pixels, not tied to the frame.
+- **Gritty.** Film stock with bleach_bypass, Vignette 0.8, Grain 0.8: a hard, grey picture with a coarse mono grain.
+- **Another roll.** Film stock with expired and change Seed until the cast suits the picture.

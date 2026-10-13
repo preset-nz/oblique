@@ -25,3 +25,20 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Maps brightness onto a ramp of two to four colours. The darkest pixels take Stop 1, the lightest take the last stop in use, and everything between is blended along the ramp. The original hues are discarded: only how bright each pixel is decides its colour.
+
+- **Stops** is how many colours are in the ramp, 2 to 4, spaced evenly from dark to light. Two is a duotone, three a tritone.
+- **Stop 1 to Stop 4** are the colours, darkest first. Stops past the count are ignored.
+- **Blend** mixes the remap with the original: 0 changes nothing, 1 is the full ramp.
+- **Keep brightness** rescales the result so each pixel has the brightness it started with. It keeps the picture's light and dark structure intact, and the ramp colours you set shift in brightness to do it.
+
+The stop colours are set up for four stops: Black, a dark purple, a clay red and white. At the default of 2 stops the lightest colour is Stop 2, the purple, so the picture comes out dark. Set Stop 2 to the colour you want the lights to become.
+
+Alpha is untouched.
+
+## Recipes
+
+- **Duotone.** Stops 2, Stop 1 a deep navy, Stop 2 a pale cream.
+- **Tritone.** Stops 3: Stop 1 near black, Stop 2 a mid red, Stop 3 a warm white. The mid red lands on the midtones.
+- **Two-colour print.** Threshold at Level 127, then Recolour with Stops 2 and two ink colours.

@@ -28,3 +28,13 @@ References: `cameraId`, `source`.
 <!-- generated:end -->
 
 ## What it's for
+
+A pixel layer holds a picture: a photo or scan you opened, or an image dropped onto the window. It is the usual starting point for a document. The first one you open sets the size of the document.
+
+**Modifiers.** Effects sit on the layer in a stack and run from the bottom row to the top. Each one changes the picture the one below it produced, so the order matters: Grain then Threshold turns the noise into speckled shapes, while Threshold then Grain leaves clean shapes with noise on top. Every modifier has an Enabled switch that turns it off without losing its settings.
+
+**Masks on a modifier.** A modifier can apply to part of the picture. Pick a vector or text layer as its mask, or make one from a selection. Feather softens the edge, Expand grows or shrinks the area, and Invert swaps it. Vector and text layers have the details.
+
+**Moving and locking.** Position, Scale and Rotation move the layer without recooking it. Setting State to locked bakes the layer at full size and freezes it: its modifiers and its position can't change, while opacity, blend mode and visibility still can. Unlocking makes the layer editable again.
+
+**If the file moves.** If the picture's file is missing when the document opens, the layer stays in the stack with a striped placeholder. It is never deleted.

@@ -19,3 +19,11 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Pulls each pixel's colour toward its grey. At Amount 1 the picture is greyscale; at 0 nothing changes; in between it is a faded version of the original. Grey here is Rec. 709 luma, so green counts most and blue least: a pure green looks light, a pure blue looks dark.
+
+There is no separate greyscale op. Desaturate at 1 is it.
+
+## Recipes
+
+- **Faded print.** Desaturate at Amount 0.5, then Film stock with the sx70 stock.

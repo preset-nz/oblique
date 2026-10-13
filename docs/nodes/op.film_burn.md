@@ -27,3 +27,31 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Plays one frame of film burning in a projector gate. A blister swells up, the emulsion chars, and a hole opens that grows until the whole frame is gone. It is built to be scrubbed: **Progress** is the time axis.
+
+**Progress starts at 0, and at 0 the op does nothing.** Drag it up and the burn grows out from its starting points. At 1 the whole frame has burnt through.
+
+**Four zones, from the clean image inward.**
+
+- Intact: untouched.
+- Blister: the picture bulges outward away from the burn, and goes a little lighter and less colourful.
+- Scorch: the picture is replaced by the **Char colour**.
+- Burn-through: **Burn-through** decides what is left. White makes the hole white, as if it were the projector lamp, and keeps the layer's alpha. Transparent clears alpha so the layers below show through the hole.
+
+The zones blend smoothly into each other.
+
+- **Hot spots** is how many places the burn starts from, 1 to 4. You don't place them: they come from Seed, so change Seed to move them. At a given seed the first hot spot stays put as the count goes up, so more hot spots only add.
+- **Irregularity** is how ragged the front is. At 0 it is a clean circle around each hot spot; higher is uneven.
+- **Feature size** is the size of the bumps in the front, in document pixels.
+- **Blister** is how hard the picture bulges. 0 is flat, 1 pushes it by up to a twentieth of the frame's diagonal. It fades once a pixel has charred.
+- **Char width** is how wide the blister and scorch bands are. At 0 they are thin; at 1 each is up to a quarter of the diagonal.
+- **Seed** moves the hot spots and the shape of the front.
+
+Alpha is changed only by Blister, which moves it with the picture, and by Burn-through set to transparent.
+
+## Recipes
+
+- **Burn in progress.** Progress 0.35, Hot spots 1, Irregularity 0.6, defaults otherwise, then Bloom with Threshold 0.9 and Radius 30 so the hole glows.
+- **Burn through to the layer below.** Burn-through transparent, Progress 0.6, over a second picture. The second shows through the hole.
+- **Several fires.** Hot spots 3, Progress 0.3, Blister 0.3, Char width 0.2, Irregularity 0.8.

@@ -20,3 +20,14 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Every pixel becomes black or white depending on its brightness. Pixels at or above Level turn white and the rest black, so raising Level gives more black. The result is flat two-tone shapes with no greys.
+
+**Softness** turns the hard cut into a short ramp of greys centred on Level. At 0 the edge is hard and jagged; at higher values it fades over that many brightness steps. A gradient in the picture gives a soft band; a sharp edge in the picture stays sharp.
+
+**Alpha** is untouched, so a cutout keeps its outline and only its colour goes black and white.
+
+## Recipes
+
+- **Clean shapes.** Gaussian Blur at Radius 2, then Threshold at Level 127. The blur removes speckle first, so the black and white areas come out as solid blobs.
+- **Two-colour print.** Threshold, then Recolour with Stops 2: Stop 1 is what the black becomes, Stop 2 what the white becomes.

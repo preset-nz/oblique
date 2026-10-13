@@ -21,3 +21,16 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Adds random speckle to the picture, the same on red, green and blue, so it reads as brightness noise and does not tint. The noise is seeded: the same Seed always gives the same grain.
+
+- **Amount** is how strong the speckle is. At 0.1 it is a fine texture. At 1 it overwhelms the picture.
+- **Grain size** is the width of each speck in document pixels. Larger gives chunkier grain.
+- **Seed** picks a different pattern of the same strength.
+
+Grain follows alpha. Fully transparent pixels stay as they are and soft edges get proportionally less, so a cutout does not grow a speckled halo.
+
+## Recipes
+
+- **Fine film.** Film stock with Grain at 0, then Grain with Amount 0.12 and Grain size 2. Film stock's own grain is sized as a fraction of the frame; this one is sized in pixels.
+- **Rough black and white.** Threshold at Level 127, Gaussian Blur at Radius 1, then Grain with Amount 0.3 and Grain size 3.

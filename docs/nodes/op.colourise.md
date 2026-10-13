@@ -21,3 +21,19 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Throws away the picture's own hues and paints it in one colour, with the lights and darks of the original. Think of printing a photograph in a single ink.
+
+- **Colour** is the ink.
+- **Amount** blends between the original (0) and the full tint (1).
+- **Keep brightness** is on by default: each pixel keeps the brightness it had, so the picture does not get darker. With a dark ink the lightest areas may not reach pure white and come out as a lighter tint of it. Off, the tint multiplies the picture's brightness by the ink: white becomes exactly the ink colour and everything else is darker. That is the classic single-ink look, and a dark ink gives a dark picture.
+
+A vector layer draws white, so on one, turn Keep brightness off to get the shape in the ink colour itself. With it on, the colour comes out lighter than the swatch.
+
+Alpha is untouched.
+
+## Recipes
+
+- **Sepia.** Colourise with the default brown at Amount 1 and Keep brightness on, then Grain.
+- **Cyanotype.** Levels to set the contrast, then Colourise with a deep blue and Keep brightness off: whites become that blue and blacks stay black.
+- **Coloured shape.** On a vector layer, Colourise with any Colour and Keep brightness off.

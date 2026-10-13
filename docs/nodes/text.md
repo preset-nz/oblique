@@ -48,3 +48,22 @@ A binding from it carries:
 <!-- generated:end -->
 
 ## What it's for
+
+A text layer is words set in any font installed on the computer, placed on the canvas with the T tool. Click where the first line sits, then type the words in the inspector's Text field; edit them there at any time. Each line break is one you type. There is no box and no wrapping.
+
+**What you set.** The font is chosen by family and one of its own named styles, such as Bold Condensed or Light Italic. Size is in document pixels. Tracking opens or tightens the space between every letter. Kerning scales the font's built-in pair spacing: 100 is as the font intends, 0 is none, 200 is double. Line height is a multiple of the size. Fill is the colour inside the letters and Stroke an outline of its own width, painted over the fill and centred on the edge. Align sets which edge the lines line up against.
+
+**As an image.** The layer is a picture of the letters on a transparent ground, and takes modifiers like any other layer. Grain and Xerox rough it up. Dilate and Erode thicken and thin it, and Edge Noise frays the outlines, because there is an edge to work on. Ops that read tone, such as Hatch, see the Fill colour, so set it to the shade you want.
+
+**As a mask for the layers below.** Set Output to mask and the letters clip everything beneath them, up to the next mask layer. For a mask the Fill and Stroke colours do not matter, only where they cover. Modifiers on the text layer reshape that mask only when the layer is a mask layer; they do not change it when the text masks a single modifier elsewhere.
+
+**As a mask for one modifier.** Pick the text layer as a modifier's mask and that modifier applies only inside the letters: Grain only inside the word. The mask follows the words, the font and the position as they change. Here the mask is the glyph shapes alone: the Stroke does not widen it. Use Expand for a fatter or thinner mask. The binding has the same controls as on a vector layer:
+
+- **Feather** softens the edge so the effect fades in.
+- **Expand** grows the masked area, or shrinks it when negative.
+- **Invert** swaps inside and outside.
+- **Space** is whether the mask is fixed on the document or travels with the layer it masks.
+
+**If the font is missing.** Opening a document on a computer without the font gives one warning that lists each substitute. The layer is drawn in the closest installed font, and the layer remembers the font it wanted, so installing it and reopening brings it back. Type → Replace Font… makes a swap permanent for the document.
+
+**Convert to Outlines.** Type → Convert to Outlines turns the layer into a vector layer in the same place in the stack. The letterforms become points you can edit. Modifiers, mask role and position stay; Fill and Stroke colour do not carry across. It is one-way, and undo restores the live text.

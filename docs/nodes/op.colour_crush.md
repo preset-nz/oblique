@@ -23,3 +23,16 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Reduces each colour channel to a few evenly spaced levels. With fewer bits there are fewer values per channel, so smooth gradients break into flat bands and colours snap to a small set.
+
+- **Bits** is how many bits each channel keeps, 1 to 8. At 8 nothing changes. At 3 each channel has 8 levels. At 1 each channel is either 0 or 255, so the picture has only eight colours.
+- **Dither** replaces the flat bands with a fixed 4 by 4 dot pattern, so the lost gradation reads as texture. The pattern is the same every time and does not move with a seed.
+- **Red bits, Green bits, Blue bits** override Bits for one channel. 0 means use Bits.
+
+Alpha is untouched.
+
+## Recipes
+
+- **One-bit screen.** Colour Crush with Bits 1 and Dither on, after Desaturate at Amount 1. Grey areas become a regular pattern of black and white dots.
+- **Green-heavy.** Bits 8, Red bits 3, Blue bits 2: the green stays smooth while red and blue band.

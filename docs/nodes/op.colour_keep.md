@@ -26,3 +26,20 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Everything goes grey except colours near the one you pick. Pixels inside the band keep their colour; the rest are pulled toward their Rec. 709 grey.
+
+Only the hue of **Keep colour** counts. Its brightness and saturation are ignored, so a pale pink and a deep red keep the same pixels. A grey swatch has no hue and counts as red.
+
+- **Hue range** is the half-width of the kept band in degrees around the hue. At 20 it keeps shades close to the colour; at 180 it keeps every hue.
+- **Softness** is how many degrees past the band the colour fades out. At 0 the edge between colour and grey is hard, which shows as a ragged line where hues drift.
+- **Amount** is how grey the rest goes. 1 is full greyscale, 0 changes nothing.
+- **Minimum saturation** stops dull pixels counting as kept. A near-grey pixel has no real hue, and a dark shadow's hue is noise, so a reddish shadow would otherwise stay red. Pixels below half of this value are never kept and the ones between half and the full value fade in. Raise it if grey areas near the colour keep a tint; set 0 to let every pixel through.
+- **Second colour** adds a second band with its own Keep colour 2 and Hue range 2. Softness and Minimum saturation are shared. The two bands are unioned: a pixel keeps whichever of them keeps more.
+
+Alpha is untouched.
+
+## Recipes
+
+- **Red coat.** Colour keep with Keep colour a mid red, Hue range 15, Softness 10 and Minimum saturation 0.2, then Grain at Amount 0.1.
+- **Two spots.** Turn on Second colour and keep red and blue, with Amount 0.9 so the rest holds a trace of colour.

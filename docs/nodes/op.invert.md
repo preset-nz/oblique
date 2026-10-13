@@ -18,3 +18,11 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Every red, green and blue value is flipped: black becomes white, white becomes black, a colour becomes its opposite. The result looks like a film negative. Alpha stays as it was, so a cutout keeps its outline.
+
+Inverting twice gives back the original. Put it after Threshold to swap which side of the cut is black.
+
+## Recipes
+
+- **Cut and flip.** Threshold, then Invert: the same hard black and white with the sides swapped.

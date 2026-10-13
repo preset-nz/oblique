@@ -19,3 +19,14 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+Splits the picture into square cells and fills each with its average colour. Cell size is in document pixels and the preview scales it, so the blocks stay the same proportion of the picture at any resolution. At 1 nothing happens.
+
+**Alpha keeps its original detail.** Only colour is blocked; a cutout keeps its smooth outline. Transparent pixels contribute no colour to a cell, so the edge of a cutout does not pick up black from behind it.
+
+At the right and bottom, when the picture isn't a whole number of cells wide, the last cells are narrower and average only the pixels they cover.
+
+## Recipes
+
+- **Low-res.** Pixelate with Cell size 12, then Colour Crush with Bits 3 and Dither on.
+- **Redacted.** Pixelate with Cell size 24 on a masked modifier, with a vector layer as the mask, to block out one area.

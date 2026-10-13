@@ -19,3 +19,12 @@ Slots: `mask`.
 <!-- generated:end -->
 
 ## What it's for
+
+A soft, even blur of the colour. Radius is in document pixels and the preview scales it, so a draft and a full-size render show the same softness. At 0 nothing happens.
+
+**Alpha is not blurred.** On a picture with transparency the colour softens while the outline stays crisp. That also means Gaussian Blur on a mask layer does not feather the mask, because a mask reads only alpha. To soften a mask's edge, use Feather on the binding where a modifier is masked by a layer.
+
+## Recipes
+
+- **Hatch from broad shapes.** Gaussian Blur at Radius 6, then Hatch. The marks follow the large light and dark areas rather than the fine texture.
+- **Soft focus.** Duplicate the layer, put Gaussian Blur at Radius 12 on the copy, and stack it above the sharp one with the Screen blend mode at low opacity. Bloom does this from the bright areas only.
