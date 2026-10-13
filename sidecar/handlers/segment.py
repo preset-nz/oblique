@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from ml.fetch import ensure_weights
 from ml.session import run_segment
 from ml.trace import trace_mask

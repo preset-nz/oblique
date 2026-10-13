@@ -19,7 +19,6 @@ import time
 from typing import Any
 
 import numpy as np
-
 from ops import OPS
 
 

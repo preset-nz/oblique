@@ -8,7 +8,6 @@ import time
 
 import numpy as np
 import pytest
-
 from handlers.cook import handle_cook
 
 

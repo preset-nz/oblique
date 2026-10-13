@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import handlers.segment as segment_module
 import numpy as np
 import pytest
-
-import handlers.segment as segment_module
 from handlers.segment import COARSE_MASK_BYTES, handle_segment
 from ml import fetch
 from ml.trace import trace_mask

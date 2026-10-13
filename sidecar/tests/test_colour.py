@@ -9,7 +9,6 @@ import time
 
 import numpy as np
 import pytest
-
 from ml.colour import select_colour
 
 
@@ -212,7 +211,13 @@ def test_same_image_same_seed_same_params_is_byte_identical():
     img = rng.integers(0, 256, size=(24, 24, 4), dtype=np.uint8)
     img[..., 3] = 255
 
-    kwargs = dict(tolerance=40, contiguous=True, space="lab", expand=1, min_island=4)
+    kwargs = {
+        "tolerance": 40,
+        "contiguous": True,
+        "space": "lab",
+        "expand": 1,
+        "min_island": 4,
+    }
     a = select_colour(img, (5, 5), **kwargs)
     b = select_colour(img, (5, 5), **kwargs)
 

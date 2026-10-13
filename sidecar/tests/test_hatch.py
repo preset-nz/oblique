@@ -18,7 +18,6 @@ import time
 
 import numpy as np
 import pytest
-
 from ops import OPS, _kernels
 from ops.hatch import (
     _area,
@@ -1556,18 +1555,18 @@ def test_kernel_coverage_crosses_jitter_2048_under_0_1_seconds():
     img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
     t = _tone(img, {})
     h, w = 2048, 2048
-    args = dict(
-        pattern="crosses",
-        layers=4,
-        spacing=8.0,
-        angle=45.0,
-        weight=1.0,
-        pen=1.0,
-        cross_size=1.0,
-        cross_aspect=1.0,
-        jitter=0.5,
-        seed=0,
-    )
+    args = {
+        "pattern": "crosses",
+        "layers": 4,
+        "spacing": 8.0,
+        "angle": 45.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "seed": 0,
+    }
 
     _coverage_kernel(t, h, w, **args)  # warm up
     start = time.perf_counter()
@@ -1590,18 +1589,18 @@ def test_kernel_coverage_lines_jitter_2048_under_0_05_seconds():
     img = np.random.default_rng(0).integers(0, 256, (2048, 2048, 4), dtype=np.uint8)
     t = _tone(img, {})
     h, w = 2048, 2048
-    args = dict(
-        pattern="lines",
-        layers=4,
-        spacing=8.0,
-        angle=45.0,
-        weight=1.0,
-        pen=1.0,
-        cross_size=1.0,
-        cross_aspect=1.0,
-        jitter=0.5,
-        seed=0,
-    )
+    args = {
+        "pattern": "lines",
+        "layers": 4,
+        "spacing": 8.0,
+        "angle": 45.0,
+        "weight": 1.0,
+        "pen": 1.0,
+        "cross_size": 1.0,
+        "cross_aspect": 1.0,
+        "jitter": 0.5,
+        "seed": 0,
+    }
 
     _coverage_kernel(t, h, w, **args)  # warm up
     start = time.perf_counter()

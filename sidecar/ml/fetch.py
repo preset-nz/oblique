@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 MODEL_SUBDIR = "mobile_sam"
 
@@ -45,7 +45,7 @@ Downloader = Callable[[str, Path], None]
 
 
 def _default_downloader(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url) as response, open(dest, "wb") as f:  # noqa: S310 - fixed https HF URL, pinned SHA verified after
+    with urllib.request.urlopen(url) as response, open(dest, "wb") as f:
         while chunk := response.read(1 << 20):
             f.write(chunk)
 

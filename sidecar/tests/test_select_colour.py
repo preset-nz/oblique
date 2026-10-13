@@ -7,7 +7,6 @@ red-square-on-white synthetic image.
 from __future__ import annotations
 
 import numpy as np
-
 from handlers.select_colour import handle_select_colour
 from ml.trace import trace_mask
 
@@ -75,7 +74,7 @@ def test_contiguous_false_on_two_same_colour_squares_selects_both():
         },
     }
 
-    response_header, response_payload = handle_select_colour(header, payload)
+    _response_header, response_payload = handle_select_colour(header, payload)
 
     mask = np.frombuffer(response_payload, dtype=np.uint8).reshape(h, w) > 0
     assert mask[3, 3]
@@ -108,7 +107,7 @@ def test_negative_seed_subtracts_from_positive_union():
         },
     }
 
-    response_header, response_payload = handle_select_colour(header, payload)
+    _response_header, response_payload = handle_select_colour(header, payload)
 
     mask = np.frombuffer(response_payload, dtype=np.uint8).reshape(h, w) > 0
     assert mask[3, 3]
@@ -151,7 +150,7 @@ def test_bad_payload_size_is_ok_false():
         "height": 4,
         "seeds": [{"x": 0, "y": 0, "label": 1}],
     }
-    response_header, response_payload = handle_select_colour(header, b"\x00\x01\x02")
+    response_header, _response_payload = handle_select_colour(header, b"\x00\x01\x02")
     assert response_header["ok"] is False
     assert "payload" in response_header["error"]
 

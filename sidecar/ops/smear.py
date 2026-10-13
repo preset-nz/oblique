@@ -104,7 +104,7 @@ def smear(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     out = img.copy()
 
     axis_len = w if direction == "h" else h
-    idx = int(round(position * (axis_len - 1)))
+    idx = round(position * (axis_len - 1))
     idx = max(0, min(axis_len - 1, idx))
 
     if direction == "h":

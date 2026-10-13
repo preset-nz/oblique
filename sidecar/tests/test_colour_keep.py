@@ -5,10 +5,10 @@ conventions as `test_flavour_ops.py`.
 from __future__ import annotations
 
 import colorsys
+import itertools
 
 import numpy as np
 import pytest
-
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS
 from ops.colour_keep import colour_keep
 from ops.desaturate import desaturate
@@ -85,7 +85,7 @@ def test_hue_distance_wraps_around_360():
 
 
 def test_softness_gives_a_monotonic_falloff():
-    hues = [20 + 2 * i for i in range(0, 21)]  # 20..60, band edge at 20
+    hues = [20 + 2 * i for i in range(21)]  # 20..60, band edge at 20
     img = _row(*[_hue_pixel(h) for h in hues])
     out = colour_keep(img, {**BASE, "softness": 40.0, "hue_range": 20.0})
 
@@ -96,7 +96,7 @@ def test_softness_gives_a_monotonic_falloff():
     assert chromas[0] == chroma(img[0, 0])  # at the edge: untouched
     assert chromas[-1] == 0  # a full softness past the edge: grey
     # Colour is only ever lost as the hue moves away from the band.
-    for a, b in zip(chromas, chromas[1:]):
+    for a, b in itertools.pairwise(chromas):
         assert b <= a + 1
     assert chromas[len(chromas) // 2] > 0  # genuinely partial in the middle
     assert chromas[len(chromas) // 2] < chromas[0]

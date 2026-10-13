@@ -9,7 +9,6 @@ quietly running its NumPy fallback forever.
 from __future__ import annotations
 
 import numpy as np
-
 from ops import _kernels
 
 

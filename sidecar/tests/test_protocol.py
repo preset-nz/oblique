@@ -1,7 +1,6 @@
 import io
 
 import pytest
-
 from protocol import read_exact, read_frame, write_frame
 
 
@@ -28,7 +27,7 @@ def test_round_trip_with_no_payload():
 
 
 def test_round_trip_large_payload():
-    payload = bytes((i % 256 for i in range(10 * 1024 * 1024)))
+    payload = bytes(i % 256 for i in range(10 * 1024 * 1024))
     stream = io.BytesIO()
     write_frame(stream, {"id": "big", "ok": True}, payload)
     stream.seek(0)

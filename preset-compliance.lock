@@ -20,7 +20,7 @@ sha256 = "3f62a6c1e1d305d8fd2e9aa9a359db23fd0c40de581e778c53dd577e9c231073"
 [[inputs]]
 path = "sidecar/uv.lock"
 ecosystem = "uv"
-sha256 = "ddb28b2f7a4ad6179d480095356cc44b3c7689fa4503f09a7ba1b92dacec71a6"
+sha256 = "8b31c5fc682e313e526892411cf6fc343f1d9d48ced1c8d657f2b014058517e7"
 
 [[inputs]]
 path = "src-tauri/Cargo.lock"
@@ -8482,7 +8482,7 @@ scope = "dev"
 [[packages]]
 ecosystem = "uv"
 name = "ruff"
-version = "0.15.20"
+version = "0.17.0"
 source = "registry"
 declared = "MIT"
 scope = "dev"

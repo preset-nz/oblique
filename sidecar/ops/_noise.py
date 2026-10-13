@@ -41,8 +41,8 @@ def noise_field(h: int, w: int, scale: float, seed: int, profile: str) -> np.nda
     variants. Values are bounded to roughly [-1, 1]."""
     rng = np.random.default_rng(seed)
     field_scale = scale * 3.0 if profile == "straight" else scale
-    small_h = max(1, int(round(h / field_scale)))
-    small_w = max(1, int(round(w / field_scale)))
+    small_h = max(1, round(h / field_scale))
+    small_w = max(1, round(w / field_scale))
     noise_small = rng.uniform(-1.0, 1.0, size=(small_h, small_w)).astype(np.float32)
     noise_img = Image.fromarray(noise_small, mode="F")
 

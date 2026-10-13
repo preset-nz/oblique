@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS
 from ops.bloom import bloom
 from ops.cmyk_halftone import _screen_channel, _separate, cmyk_halftone

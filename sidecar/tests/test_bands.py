@@ -10,11 +10,11 @@ the machine-independent guard for that.
 
 from __future__ import annotations
 
+import itertools
 import os
 
 import numpy as np
 import pytest
-
 from ops import _bands
 from ops._bands import map_rows, worker_count
 
@@ -46,7 +46,7 @@ def test_map_rows_band_count_is_min_of_worker_count_and_ceil_height_over_min_row
     assert len(calls) == 3
     assert calls[0][0] == 0
     assert calls[-1][1] == 1000
-    for (_, y1a), (y0b, _) in zip(calls, calls[1:]):
+    for (_, y1a), (y0b, _) in itertools.pairwise(calls):
         assert y1a == y0b  # contiguous: no gap, no overlap
 
 

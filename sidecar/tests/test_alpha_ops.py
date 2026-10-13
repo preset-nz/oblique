@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from ops import OPS
 from ops.dilate import dilate
 from ops.edge_noise import edge_noise

@@ -17,8 +17,9 @@ alongside its Rust-side twin).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 ParamScale = Literal["spatial", "none"]
 ParamType = Literal["float", "int", "bool", "enum", "color"]
@@ -290,26 +291,26 @@ def debug_echo(payload: bytes, params: dict[str, Any]) -> bytes:
 
 # Imported for registration side effect only — each module calls `@op(...)`
 # at import time. Keep at the bottom so `OPS`/`op`/`P` exist first.
-from ops import bloom as _bloom  # noqa: E402, F401
-from ops import cmyk_halftone as _cmyk_halftone  # noqa: E402, F401
-from ops import colour_crush as _colour_crush  # noqa: E402, F401
-from ops import colour_keep as _colour_keep  # noqa: E402, F401
-from ops import colourise as _colourise  # noqa: E402, F401
-from ops import desaturate as _desaturate  # noqa: E402, F401
-from ops import dilate as _dilate  # noqa: E402, F401
-from ops import edge_noise as _edge_noise  # noqa: E402, F401
-from ops import erode as _erode  # noqa: E402, F401
-from ops import film_burn as _film_burn  # noqa: E402, F401
-from ops import film_stock as _film_stock  # noqa: E402, F401
-from ops import gaussian_blur as _gaussian_blur  # noqa: E402, F401
-from ops import grain as _grain  # noqa: E402, F401
-from ops import hatch as _hatch  # noqa: E402, F401
-from ops import ink_starved as _ink_starved  # noqa: E402, F401
-from ops import invert as _invert  # noqa: E402, F401
-from ops import levels as _levels  # noqa: E402, F401
-from ops import pixelate as _pixelate  # noqa: E402, F401
-from ops import recolour as _recolour  # noqa: E402, F401
-from ops import smear as _smear  # noqa: E402, F401
-from ops import technicolor as _technicolor  # noqa: E402, F401
-from ops import threshold as _threshold  # noqa: E402, F401
-from ops import xerox as _xerox  # noqa: E402, F401
+from ops import bloom as _bloom  # noqa: F401
+from ops import cmyk_halftone as _cmyk_halftone  # noqa: F401
+from ops import colour_crush as _colour_crush  # noqa: F401
+from ops import colour_keep as _colour_keep  # noqa: F401
+from ops import colourise as _colourise  # noqa: F401
+from ops import desaturate as _desaturate  # noqa: F401
+from ops import dilate as _dilate  # noqa: F401
+from ops import edge_noise as _edge_noise  # noqa: F401
+from ops import erode as _erode  # noqa: F401
+from ops import film_burn as _film_burn  # noqa: F401
+from ops import film_stock as _film_stock  # noqa: F401
+from ops import gaussian_blur as _gaussian_blur  # noqa: F401
+from ops import grain as _grain  # noqa: F401
+from ops import hatch as _hatch  # noqa: F401
+from ops import ink_starved as _ink_starved  # noqa: F401
+from ops import invert as _invert  # noqa: F401
+from ops import levels as _levels  # noqa: F401
+from ops import pixelate as _pixelate  # noqa: F401
+from ops import recolour as _recolour  # noqa: F401
+from ops import smear as _smear  # noqa: F401
+from ops import technicolor as _technicolor  # noqa: F401
+from ops import threshold as _threshold  # noqa: F401
+from ops import xerox as _xerox  # noqa: F401

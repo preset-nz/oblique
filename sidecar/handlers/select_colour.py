@@ -35,7 +35,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-
 from ml.colour import select_colour
 from ml.trace import trace_mask
 

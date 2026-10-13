@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from ops import OPS
 from ops.film_stock import (
     _STOCKS,

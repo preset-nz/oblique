@@ -76,8 +76,8 @@ def _resize_longest_side(
 ) -> tuple[np.ndarray, float]:
     height, width = rgb.shape[:2]
     scale = target / max(height, width)
-    new_h = max(1, int(round(height * scale)))
-    new_w = max(1, int(round(width * scale)))
+    new_h = max(1, round(height * scale))
+    new_w = max(1, round(width * scale))
     resized = np.array(Image.fromarray(rgb).resize((new_w, new_h), Image.BILINEAR))
     return resized.astype(np.float32), scale
 

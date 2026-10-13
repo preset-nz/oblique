@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from main import dispatch
 from ops import OPS, ParamSpec, default_label, hex_to_rgb01, op
 from ops.cmyk_halftone import cmyk_halftone
@@ -327,7 +326,7 @@ def test_op_to_dict_includes_label_and_description():
 
 def test_op_to_dict_derives_label_when_not_supplied():
     @op("temp_test_op_for_label_fallback")
-    def _temp(img, params):  # noqa: ANN001, ARG001
+    def _temp(img, params):
         return img
 
     try:
@@ -465,7 +464,7 @@ def test_disabled_when_path_must_name_another_param_of_the_same_op():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_unknown_path" not in OPS
@@ -485,7 +484,7 @@ def test_disabled_when_path_cannot_name_itself():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_self_path" not in OPS
@@ -510,7 +509,7 @@ def test_disabled_when_requires_exactly_one_operator():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_two_operators" not in OPS
@@ -531,7 +530,7 @@ def test_disabled_when_requires_at_least_one_operator():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_no_operator" not in OPS
@@ -552,7 +551,7 @@ def test_disabled_when_rejects_unknown_operator_key():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_unknown_key" not in OPS
@@ -579,7 +578,7 @@ def test_disabled_when_in_must_be_a_non_empty_list_or_tuple(case, operand):
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert op_name not in OPS
@@ -607,7 +606,7 @@ def test_disabled_when_enum_value_must_be_a_valid_choice():
                 ),
             ],
         )
-        def _temp(img, params):  # noqa: ANN001, ARG001
+        def _temp(img, params):
             return img
 
     assert "temp_test_disabled_when_bad_enum_value" not in OPS
@@ -626,7 +625,7 @@ def test_disabled_when_valid_registration_round_trips_through_to_dict():
             ),
         ],
     )
-    def _temp(img, params):  # noqa: ANN001, ARG001
+    def _temp(img, params):
         return img
 
     try:

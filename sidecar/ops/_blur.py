@@ -48,7 +48,7 @@ def box_blur_1d(arr: np.ndarray, axis: int, radius: int) -> np.ndarray:
 def soften(arr: np.ndarray, radius: float) -> np.ndarray:
     """Cheap 3-pass box blur (approximates a Gaussian) at `radius` px,
     applied separably. Plain NumPy — no `scipy` in the sidecar."""
-    r = max(1, int(round(radius)))
+    r = max(1, round(radius))
     out = arr
     for _ in range(3):
         out = box_blur_1d(out, axis=0, radius=r)

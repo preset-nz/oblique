@@ -5,7 +5,6 @@ roughness kept (Hausdorff bound), min-area drop, keep_holes.
 from __future__ import annotations
 
 import numpy as np
-
 from ml.trace import trace_mask
 
 

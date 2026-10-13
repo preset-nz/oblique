@@ -201,8 +201,7 @@ from typing import Any
 
 import numpy as np
 
-from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, hex_to_rgb01, op
-from ops import _kernels
+from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, _kernels, hex_to_rgb01, op
 from ops._bands import map_rows
 
 # Layer k's angle offset from the `angle` param, degrees, for the

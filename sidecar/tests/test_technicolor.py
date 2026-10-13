@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from ops import OPS
 from ops.technicolor import _record_offsets, _shift_record, technicolor
 
@@ -156,7 +155,7 @@ def test_denser_dyes_darken_and_cross_talk_softens_colour():
 
     sharp = technicolor(img, {**base, "dye_density": 1.0})
     soft = technicolor(img, {**base, "dye_density": 1.0, "cross_talk": 1.0})
-    spread = lambda o: int(o[0, 0, :3].max()) - int(o[0, 0, :3].min())  # noqa: E731
+    spread = lambda o: int(o[0, 0, :3].max()) - int(o[0, 0, :3].min())
     assert spread(soft) < spread(sharp)
 
 

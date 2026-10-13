@@ -55,6 +55,7 @@ end).
 
 from __future__ import annotations
 
+import math
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -189,7 +190,7 @@ def _clamp(value: Any, lo: float, hi: float, default: float) -> float:
         v = float(value)
     except (TypeError, ValueError):
         return default
-    if v != v:  # NaN
+    if math.isnan(v):
         return default
     return max(lo, min(hi, v))
 
