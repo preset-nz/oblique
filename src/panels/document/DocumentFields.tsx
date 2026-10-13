@@ -17,9 +17,8 @@ import {
 
 /**
  * The document's own fields: aspect preset, base size, orientation and
- * background. One component, two homes: File → Document Settings… (the dialog,
- * `DocumentSettingsDialog.tsx`) and the inspector with nothing selected
- * (`StackPanel.tsx`), per the menu standard's decision 11.
+ * background, shown only in File → Document Settings… (the dialog,
+ * `DocumentSettingsDialog.tsx`), per the menu standard's decision 11.
  *
  * Applies to empty documents and post-hoc: sets `scene.documentSize` only
  * (`setDocumentSize` is compositing-only, no dirty flag — dirty rule 4 in

@@ -112,8 +112,7 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
     // App → Settings… (`app.settings`, app-kit's own item, Epic 17 story 1)
     'app.settings': run(openSettingsDialog),
     'file-import': run(importImagesDialog),
-    // File → Document Settings… (Epic 22 slice d): the fields the inspector shows with nothing
-    // selected. An open text edit commits first, as its neighbours do: the size change is its
+    // File → Document Settings… (Epic 22 slice d): the only place the document's fields show. An open text edit commits first, as its neighbours do: the size change is its
     // own undo step.
     'file-document-settings': {
       run: () => {
