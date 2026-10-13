@@ -28,6 +28,18 @@ kernels:
 run:
     pnpm tauri dev
 
+# Node pages (docs/nodes/) from the words the kinds carry; the op kinds are read from
+# the sidecar through uv. Rewrites each page's generated block and leaves the prose
+# around it.
+[group('docs')]
+docs:
+    cargo run -q --manifest-path src-tauri/Cargo.toml --example oblique-docs
+
+# Fails if a page is missing, stale or orphaned, or a kind has no summary.
+[group('docs')]
+docs-check:
+    cargo run -q --manifest-path src-tauri/Cargo.toml --example oblique-docs -- --check
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit
@@ -40,6 +52,7 @@ check:
     # output isn't there, and checking doesn't need it. An existing build is left alone.
     mkdir -p sidecar/dist/oblique-sidecar
     cargo test --manifest-path src-tauri/Cargo.toml --lib
+    just docs-check
     ./node_modules/.bin/depcruise src
     just licences
 

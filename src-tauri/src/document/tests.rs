@@ -17,14 +17,15 @@ use tauri::Listener as _;
 
 use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
-    fit_replaced_transform, refit_attach_transform, Catalogue, DocumentHost, Oblique, Op, OpParam,
-    Placement, DUPLICATE_OFFSET_PX,
+    fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue, DocumentHost,
+    Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
 };
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
     OpParam {
         name: name.into(),
         label: None,
+        description: None,
         kind: kind.into(),
         default,
         min,
@@ -42,6 +43,7 @@ fn catalogue() -> Arc<Catalogue> {
     Arc::new(Catalogue(vec![Op {
         name: "blur".into(),
         label: None,
+        description: None,
         params: vec![
             param("radius", "float", json!(5.0), Some(0.0), Some(100.0)),
             param("steps", "int", json!(3), Some(1.0), Some(10.0)),
@@ -607,6 +609,7 @@ fn an_op_param_named_enabled_cannot_clash_with_the_modifiers_switch() {
         Arc::new(Catalogue(vec![Op {
             name: "odd".into(),
             label: None,
+            description: None,
             params: vec![param("enabled", "bool", json!(false), None, None)],
         }])),
         MemoryStore::default(),
@@ -1903,6 +1906,7 @@ fn labelled() -> Document<Oblique> {
         Arc::new(Catalogue(vec![Op {
             name: "gaussian_blur".into(),
             label: Some("Gaussian blur".into()),
+            description: None,
             params: vec![radius],
         }])),
         MemoryStore::default(),
@@ -3542,6 +3546,7 @@ fn a_param_with_only_a_min_keeps_it_and_is_unbounded_above() {
     let ops = Op {
         name: "one_sided".into(),
         label: None,
+        description: None,
         params: vec![
             param("floor", "float", json!(2.0), Some(1.0), None),
             param("ceiling", "float", json!(2.0), None, Some(10.0)),
@@ -3968,33 +3973,9 @@ fn the_change_hook_may_be_scheduled_while_the_document_is_locked() {
 /// needs it to know the `op.*` kinds a real project holds; an empty one would let those load as
 /// unknown nodes and round-trip without proving anything.
 fn real_catalogue() -> Arc<Catalogue> {
-    let text = match std::env::var("OBLIQUE_OPS") {
-        Ok(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")),
-        Err(_) => {
-            let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sidecar");
-            let out = std::process::Command::new("uv")
-                .arg("run")
-                .arg("--project")
-                .arg(&sidecar)
-                .args(["python", "-I", "-c"])
-                .arg(
-                    "import json, sys\nsys.path.insert(0, sys.argv[1])\nfrom ops import OPS\n\
-                     print(json.dumps([o.to_dict() for o in OPS.values()]))",
-                )
-                .arg(&sidecar)
-                .output()
-                .expect("uv: set OBLIQUE_OPS to a list_ops JSON file instead");
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            String::from_utf8(out.stdout).unwrap()
-        }
-    };
-    let ops: Vec<Op> = serde_json::from_str(&text).expect("the op catalogue as list_ops JSON");
-    assert!(!ops.is_empty(), "an empty op catalogue proves nothing");
-    Arc::new(Catalogue(ops))
+    let cx = sidecar_catalogue().unwrap_or_else(|e| panic!("{e}"));
+    assert!(!cx.0.is_empty(), "an empty op catalogue proves nothing");
+    Arc::new(cx)
 }
 
 /// The first place two JSON values differ, as a path and both sides.
@@ -4091,4 +4072,94 @@ fn the_round_trip_check_reports_the_first_difference() {
         first_difference(&json!([1]), &json!([1, 2]), ""),
         ": 1 vs 2 items"
     );
+}
+
+// ---- node words (design node-documentation, step 4) ----
+
+/// Two ops, one described by the sidecar and one not: only what the sidecar said may appear.
+fn described() -> Document<Oblique> {
+    let mut radius = param("radius", "float", json!(5.0), Some(0.0), Some(100.0));
+    radius.label = Some("Blur radius".into());
+    radius.description = Some("How far each pixel is smeared into its neighbours.".into());
+    let bare = param("amount", "float", json!(1.0), Some(0.0), Some(1.0));
+    Document::new_in(
+        Arc::new(Catalogue(vec![
+            Op {
+                name: "gaussian_blur".into(),
+                label: Some("Gaussian blur".into()),
+                description: Some("Softens the picture evenly.".into()),
+                params: vec![radius],
+            },
+            Op {
+                name: "plain".into(),
+                label: None,
+                description: None,
+                params: vec![bare],
+            },
+        ])),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_ops_words_reach_its_kind_and_its_params_reach_their_values() {
+    let schema = described().tree().registry().schema();
+    let ty = |name: &str| schema.types.iter().find(|t| t.name == name).unwrap();
+    let blur = ty("op.gaussian_blur");
+    assert_eq!(blur.label.as_deref(), Some("Gaussian blur"));
+    assert_eq!(blur.summary.as_deref(), Some("Softens the picture evenly."));
+    assert_eq!(blur.group.as_deref(), Some("modifier"));
+    let radius = blur
+        .values
+        .iter()
+        .find(|v| v.key == "params.radius")
+        .unwrap();
+    assert_eq!(radius.label.as_deref(), Some("Blur radius"));
+    assert_eq!(
+        radius.description.as_deref(),
+        Some("How far each pixel is smeared into its neighbours.")
+    );
+    assert_eq!(radius.unit, None, "the sidecar has no units to carry");
+}
+
+#[test]
+fn missing_words_stay_unset() {
+    let schema = described().tree().registry().schema();
+    let plain = schema.types.iter().find(|t| t.name == "op.plain").unwrap();
+    assert_eq!(
+        (plain.label.as_deref(), plain.summary.as_deref()),
+        (None, None)
+    );
+    assert_eq!(plain.group.as_deref(), Some("modifier"));
+    let amount = plain
+        .values
+        .iter()
+        .find(|v| v.key == "params.amount")
+        .unwrap();
+    assert_eq!(
+        (amount.label.as_deref(), amount.description.as_deref()),
+        (None, None)
+    );
+}
+
+#[test]
+fn every_built_in_kind_says_what_it_is() {
+    let schema = described().tree().registry().schema();
+    for name in ["document", "pixel", "vector", "text"] {
+        let t = schema.types.iter().find(|t| t.name == name).unwrap();
+        assert!(t.label.is_some() && t.summary.is_some(), "{name}");
+    }
+    let group = |n: &str| {
+        schema
+            .types
+            .iter()
+            .find(|t| t.name == n)
+            .and_then(|t| t.group.clone())
+    };
+    assert_eq!(group("document").as_deref(), Some("document"));
+    for n in ["pixel", "vector", "text"] {
+        assert_eq!(group(n).as_deref(), Some("layer"), "{n}");
+    }
 }

@@ -29,8 +29,9 @@ fontdb = "0.24"
 ttf-parser = "0.25"
 
 rustybuzz = "0.20"
-# The document lives in rhizome (Epic 21), from crates.io. Try a local change with a
-# temporary [patch.crates-io] rhizome-* = { path = "..." }, never committed.
+# The document lives in rhizome (Epic 21). The [patch.crates-io] below points it at the sibling
+# checkout in packages/ until the next publish (family rule: path dependencies are allowed,
+# 2026-10-12); the patch wins over these versions.
 rhizome-core = "0.1.5"
 rhizome-pom = "0.1.5"
 rhizome-pom-tauri = "0.1.5"
@@ -41,7 +42,20 @@ rhizome-pom-tauri = "0.1.5"
 preset-app-kit = "0.1.3"
 
 [dev-dependencies]
+# `just docs`: node pages from the schema (examples/oblique-docs.rs).
+rhizome-docs = "0.1.5"
 # A mock app, so the host's emitted events can be heard in tests.
 tauri = { version = "2", features = ["test"] }
 # Golden-render test rasteriser only (text/raster_tests.rs); nothing ships. BSD-3-Clause.
 tiny-skia = "0.11"
+
+# rhizome by path, until its next publish (family rule: path dependencies are allowed,
+# family-alignment "Path dependencies are allowed", 2026-10-12): the words on node kinds
+# (label, summary, group, description, unit) and rhizome-docs are in 0.1.6. A clean clone
+# builds only beside the packages/ checkouts, and CI fails until Oblique is back on versions.
+# Listed in runbooks/pending-releases.md.
+[patch.crates-io]
+rhizome-core = { path = "../../../packages/rhizome/crates/rhizome-core" }
+rhizome-pom = { path = "../../../packages/rhizome/crates/rhizome-pom" }
+rhizome-pom-tauri = { path = "../../../packages/rhizome/crates/rhizome-pom-tauri" }
+rhizome-docs = { path = "../../../packages/rhizome/crates/rhizome-docs" }

@@ -89,6 +89,9 @@ pub struct Op {
     /// The panel label ("Gaussian blur"), for undo step names. Optional on the wire.
     #[serde(default)]
     pub label: Option<String>,
+    /// One sentence on what the op does to the picture. Optional on the wire.
+    #[serde(default)]
+    pub description: Option<String>,
     pub params: Vec<OpParam>,
 }
 
@@ -98,6 +101,9 @@ pub struct OpParam {
     /// The panel label ("Cell size"), for undo step names. Optional on the wire.
     #[serde(default)]
     pub label: Option<String>,
+    /// One sentence on what the control does. Optional on the wire.
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
@@ -111,6 +117,39 @@ pub struct OpParam {
 /// The op catalogue: what modifier kinds exist (rhizome decision 52).
 #[derive(Default)]
 pub struct Catalogue(pub Vec<Op>);
+
+/// The op catalogue as the sidecar reports it, for tools that have no window to ask:
+/// `OBLIQUE_OPS` (a `list_ops` JSON file) if set, else read from the sidecar's own `OPS`
+/// through `uv`. Shared by the `real_projects` test and `just docs`.
+pub fn sidecar_catalogue() -> Result<Catalogue, String> {
+    let text = match std::env::var("OBLIQUE_OPS") {
+        Ok(path) => std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?,
+        Err(_) => {
+            let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sidecar");
+            let out = std::process::Command::new("uv")
+                .arg("run")
+                .arg("--project")
+                .arg(&sidecar)
+                .args(["python", "-I", "-c"])
+                .arg(
+                    "import json, sys\nsys.path.insert(0, sys.argv[1])\nfrom ops import OPS\n\
+                     print(json.dumps([o.to_dict() for o in OPS.values()]))",
+                )
+                .arg(&sidecar)
+                .output()
+                .map_err(|e| {
+                    format!("uv: {e} (set OBLIQUE_OPS to a list_ops JSON file instead)")
+                })?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+            String::from_utf8(out.stdout).map_err(|e| e.to_string())?
+        }
+    };
+    let ops: Vec<Op> = serde_json::from_str(&text)
+        .map_err(|e| format!("the op catalogue as list_ops JSON: {e}"))?;
+    Ok(Catalogue(ops))
+}
 
 pub struct Oblique;
 
@@ -127,7 +166,20 @@ pub fn param_key(name: &str) -> String {
     format!("{PARAM_PREFIX}{name}")
 }
 
+/// An op param as a value. The sidecar's label and description come across when it has them
+/// (it has no units); missing words stay unset rather than being made up.
 fn param_spec(p: &OpParam) -> Option<ValueSpec> {
+    let mut spec = param_value(p)?;
+    if let Some(label) = &p.label {
+        spec = spec.label(label);
+    }
+    if let Some(description) = &p.description {
+        spec = spec.description(description);
+    }
+    Some(spec)
+}
+
+fn param_value(p: &OpParam) -> Option<ValueSpec> {
     let key = param_key(&p.name);
     let f = |d: &Json| d.as_f64().unwrap_or(0.0);
     Some(match p.kind.as_str() {
@@ -179,34 +231,86 @@ fn point() -> Shape {
 /// What every layer has (`SceneNode`).
 fn layer(name: &str) -> NodeType {
     NodeType::new(name)
+        .group("layer")
         .in_categories(&["layers"])
         .text("label", "")
+        .described("Name", "What the layer is called in the layer list.")
         .choice("state", &["active", "locked"], "active")
+        .described(
+            "State",
+            "A locked layer can't be moved, scaled or rotated; its look can still change.",
+        )
         .choice("output", &["image", "mask", "transform", "data"], "image")
+        .described(
+            "Output",
+            "What the layer hands on: its picture, a mask for other layers, a transform, or data.",
+        )
         .bool("visible", true)
+        .described("Visible", "Shows or hides the layer on the canvas.")
         .choice("blendMode", BLEND, "normal")
+        .described(
+            "Blend mode",
+            "How the layer's colours mix with the layers beneath it.",
+        )
         .float("opacity", 0.0..=1.0, 1.0)
+        .described(
+            "Opacity",
+            "How solid the layer is, from fully see-through (0) to fully solid (1).",
+        )
         // transform2d is optional in Oblique (identity when absent): split so a drag writes
         // one key, and "set" tells present from absent
         .vec2("transform2d.position", [0.0, 0.0])
+        .described(
+            "Position",
+            "Where the layer sits, as a shift in document pixels.",
+        )
+        .unit("px")
         .vec2("transform2d.scale", [1.0, 1.0])
+        .described(
+            "Scale",
+            "How much the layer is stretched across and down; 1 is its own size.",
+        )
         .float_unbounded("transform2d.rotation", 0.0)
+        .described(
+            "Rotation",
+            "How far the layer is turned around its own centre.",
+        )
+        .unit("rad")
         .floats("transform", &[0.0; 16])
+        .described(
+            "Transform",
+            "A full transform handed on to other layers when the output is a transform.",
+        )
         .reference("cameraId")
 }
 
 /// The values a modifier mask carries (`VectorMaskRef` less its node).
 fn mask_values() -> Vec<ValueSpec> {
     vec![
-        ValueSpec::text("refId", ""),
-        ValueSpec::float_unbounded("featherPx", 0.0),
-        ValueSpec::float_unbounded("expand", 0.0),
-        ValueSpec::bool("invert", false),
+        ValueSpec::text("refId", "").described("Mask layer", "Which layer shapes the mask."),
+        ValueSpec::float_unbounded("featherPx", 0.0)
+            .described("Feather", "Softens the mask's edge so the effect fades in.")
+            .unit("px"),
+        ValueSpec::float_unbounded("expand", 0.0)
+            .described(
+                "Expand",
+                "Grows the masked area outwards, or shrinks it when negative.",
+            )
+            .unit("px"),
+        ValueSpec::bool("invert", false)
+            .described("Invert", "Swaps the masked and unmasked areas."),
         ValueSpec::shaped(
             "space",
             Shape::optional(Shape::choice(&["document", "node"])),
+        )
+        .described(
+            "Space",
+            "Whether the mask stays fixed on the document or travels with the layer.",
         ),
-        ValueSpec::shaped("attachTransform", Shape::optional(transform2d())),
+        ValueSpec::shaped("attachTransform", Shape::optional(transform2d())).described(
+            "Attached transform",
+            "Where the mask sits relative to the layer when it travels with it.",
+        ),
     ]
 }
 
@@ -221,11 +325,22 @@ impl ObjectModel for Oblique {
             .category("layers", Origin::Loaded);
         k.kind(
             NodeType::new("document")
+                .label("Document")
+                .summary("The canvas everything is built on: its size, background and notes.")
+                .group("document")
                 .in_categories(&["document"])
                 .text("sceneId", "")
+                .described("Scene id", "An internal id for the document; you never need to change it.")
                 .vec2("documentSize", [0.0, 0.0])
+                .described("Size", "The width and height of the canvas.")
+                .unit("px")
                 .choice("resolution", &["draft", "working", "baked"], "working")
+                .described(
+                    "Resolution",
+                    "How much detail is shown while you work: draft is quickest, baked is full size.",
+                )
                 .text("note", "")
+                .described("Note", "Free text kept with the document.")
                 .shaped(
                     "background",
                     Shape::optional(Shape::record([
@@ -235,6 +350,7 @@ impl ObjectModel for Oblique {
                         ("sourceSize", Shape::optional(Shape::Vec2)),
                     ])),
                 )
+                .described("Background", "What sits behind every layer: a flat colour or an image.")
                 .reference("defaultCameraId"),
         )
         .not_deletable()
@@ -243,11 +359,20 @@ impl ObjectModel for Oblique {
 
         k.kind(
             layer("pixel")
+                .label("Pixel layer")
+                .summary("A picture, such as a photo you've opened.")
                 .reference("source")
-                .vec2("sourceSize", [0.0, 0.0]),
+                .vec2("sourceSize", [0.0, 0.0])
+                .described(
+                    "Source size",
+                    "The width and height of the picture the layer shows.",
+                )
+                .unit("px"),
         );
         k.kind(
             layer("vector")
+                .label("Vector layer")
+                .summary("Drawn shapes with smooth edges, which can also mask other layers.")
                 .shaped(
                     "paths",
                     Shape::list(Shape::record([
@@ -262,12 +387,20 @@ impl ObjectModel for Oblique {
                         ("closed", Shape::Bool),
                     ])),
                 )
+                .described("Paths", "The outlines that make up the shape, point by point.")
                 .choice("fillRule", &["nonzero", "evenodd"], "nonzero")
+                .described(
+                    "Fill rule",
+                    "How overlapping outlines fill: non-zero fills them all, even-odd leaves holes where they cross.",
+                )
                 .bindable(mask_values()),
         );
         k.kind(
             layer("text")
+                .label("Text layer")
+                .summary("Typed words in any installed font, which can also mask other layers.")
                 .text("content", "")
+                .described("Content", "The words the layer shows.")
                 .shaped(
                     "font",
                     Shape::record([
@@ -279,12 +412,32 @@ impl ObjectModel for Oblique {
                         ("category", Shape::Text),
                     ]),
                 )
+                .described("Font", "Which typeface the words are set in.")
                 .float_unbounded("fontSize", 72.0)
+                .described("Size", "How tall the letters are.")
+                .unit("px")
                 .float_unbounded("tracking", 0.0)
+                .described(
+                    "Tracking",
+                    "Opens up or tightens the space between every letter, in thousandths of an em.",
+                )
                 .float("kerning", 0.0..=200.0, 100.0)
+                .described(
+                    "Kerning",
+                    "How much of the font's own pair spacing is used; 100 is as the font intends.",
+                )
                 .float_unbounded("lineHeight", 1.2)
+                .described(
+                    "Line height",
+                    "The space between lines, as a multiple of the font size.",
+                )
                 .choice("align", &["left", "center", "right"], "left")
+                .described("Align", "Which edge the lines of text line up against.")
                 .shaped("fill", Shape::optional(Shape::Text))
+                .described(
+                    "Fill",
+                    "The colour inside the letters; empty leaves them unfilled.",
+                )
                 .shaped(
                     "stroke",
                     Shape::optional(Shape::record([
@@ -292,13 +445,30 @@ impl ObjectModel for Oblique {
                         ("width", Shape::Float),
                     ])),
                 )
+                .described(
+                    "Stroke",
+                    "An outline around the letters, with its own colour and width.",
+                )
                 .shaped("position", point())
+                .described("Text origin", "Where the text starts on the canvas.")
                 .bindable(mask_values()),
         );
         for op in &ops.0 {
             let mut t = NodeType::new(&op_type(&op.name))
                 .in_categories(&["layers"])
+                .group("modifier");
+            if let Some(label) = &op.label {
+                t = t.label(label);
+            }
+            if let Some(description) = &op.description {
+                t = t.summary(description);
+            }
+            t = t
                 .bool("enabled", true)
+                .described(
+                    "Enabled",
+                    "Turns the effect on or off without losing its settings.",
+                )
                 .slot("mask");
             for p in &op.params {
                 if let Some(spec) = param_spec(p) {

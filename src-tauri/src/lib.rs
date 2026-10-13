@@ -1,4 +1,6 @@
 mod document;
+// For the `oblique-docs` example (`just docs`), which builds the registry without a window.
+pub use document::{sidecar_catalogue, Catalogue, Oblique};
 mod fonts;
 mod menu;
 mod sidecar;
