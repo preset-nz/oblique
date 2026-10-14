@@ -11,14 +11,8 @@ publish = false
 [dependencies]
 # The registry and the sidecar catalogue, without a window.
 oblique = { path = "../../src-tauri" }
-rhizome-core = "0.1.5"
-rhizome-pom = "0.1.5"
+rhizome-core = "0.1.6"
+rhizome-pom = "0.1.6"
 # By path until preset-docs is first published (runbooks/pending-releases.md).
 preset-docs = { path = "../../../../packages/preset-docs", features = ["rhizome"] }
 
-# Same patch as src-tauri/Cargo.toml: a [patch] only counts in the root manifest, so it is
-# repeated here. Drop both together when rhizome 0.1.6 is published.
-[patch.crates-io]
-rhizome-core = { path = "../../../../packages/rhizome/crates/rhizome-core" }
-rhizome-pom = { path = "../../../../packages/rhizome/crates/rhizome-pom" }
-rhizome-pom-tauri = { path = "../../../../packages/rhizome/crates/rhizome-pom-tauri" }
