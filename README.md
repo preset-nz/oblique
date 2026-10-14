@@ -1,36 +1,71 @@
 # Oblique
 
-**An image editor for making things worse — beautifully.**
+An image editor for making things worse.
 
-Most image software is built to perfect pictures: sharper, cleaner, more correct. Oblique points the other way. It's a desktop editor built around **disruption, fracture, and decay** — for images that look like they *survived something*: five generations of photocopying, a dying printer, a flooded archive, an underground print run that nobody proofread.
+A desktop app for macOS. A photo or a scan goes through a stack of operators,
+and each one is something that happened to the image: a copier on its ninth
+generation, a starved ink roller, film burnt through by the projector lamp, a
+halftone screen out of register. Every operator stays live and reorderable,
+so nothing is baked in until you say so.
 
-The target aesthetic is expressionistic, grim-dark TTRPG art — the world of MÖRK BORG zines, CY_BORG handouts, and Death in Space ephemera — where a lossy, imperfect, physically damaged image isn't a mistake. It's the point.
+One sample image through eight of the operators:
 
-## How it works (the two-minute version)
-
-You don't paint in Oblique. You **stack operators**.
-
-Drop in a photo, a scan, a render. Then pile treatments onto it — a blur, a threshold, a CMYK silkscreen raster, film grain — and *scrub* their parameters while the canvas answers in real time. Every operator stays live and reorderable forever: nothing is baked in until you say so, and every knob can be revisited three weeks later. The same image can be pushed through *copy-of-a-copy hell*, starved of ink, crushed to a brutal palette, or eaten at the edges — and pulled back, because nothing was destroyed along the way.
-
-Each operator is designed to represent **something that happened to the image**, not a graphics algorithm. Not "posterize" — a photocopier on its fifth generation. Not "noise" — toner speckle collecting in the shadows.
-
-## Where it's going
-
-- **A full stack of layers** — images, vector shapes, and text as peers, blending and masking each other, treated per-layer or all at once.
-- **3D as raw material, not a mode switch** — drop in a low-poly model or a Gaussian splat of a real object, steal its silhouette, and abuse it like any other layer.
-- **Print as a first-class destination** — silkscreen-style separations, registration drift, colour bars: output that looks like it came off a press with opinions.
-- **Assisted vandalism** — paint roughly around a thing and let a model find its edges, so you can delete, mask, or corrupt *objects*, not pixels. None of it needs to be perfect. Perfect is the enemy.
-
-## Status
-
-Personal project, early and moving fast. The heart — live operator stacking on real images, with projects that save and reopen exactly as you left them — works today. Not published, not accepting contributions (yet); if you're seeing this over someone's shoulder: yes, it's supposed to look like that.
+| | | | |
+|:-:|:-:|:-:|:-:|
+| <a href="docs/nodes/op.cmyk_halftone.md"><img src="docs/nodes/img/cmyk_halftone-recipe.webp" width="180" alt="CMYK Halftone"></a><br>CMYK Halftone | <a href="docs/nodes/op.xerox.md"><img src="docs/nodes/img/xerox-recipe.webp" width="180" alt="Copy of a Copy"></a><br>Copy of a Copy | <a href="docs/nodes/op.hatch.md"><img src="docs/nodes/img/hatch-recipe.webp" width="180" alt="Hatch"></a><br>Hatch | <a href="docs/nodes/op.film_burn.md"><img src="docs/nodes/img/film_burn-recipe.webp" width="180" alt="Film Burn"></a><br>Film Burn |
+| <a href="docs/nodes/op.technicolor.md"><img src="docs/nodes/img/technicolor-recipe.webp" width="180" alt="Dye Transfer"></a><br>Dye Transfer | <a href="docs/nodes/op.edge_noise.md"><img src="docs/nodes/img/edge_noise-recipe.webp" width="180" alt="Edge Noise"></a><br>Edge Noise | <a href="docs/nodes/op.grain.md"><img src="docs/nodes/img/grain-recipe.webp" width="180" alt="Grain"></a><br>Grain | <a href="docs/nodes/op.colour_crush.md"><img src="docs/nodes/img/colour_crush-recipe.webp" width="180" alt="Colour Crush"></a><br>Colour Crush |
 
 ---
 
-*Oblique — after Virilio's "oblique function": nothing here stands upright on purpose.*
+## Download
 
-## Developer notes
+The latest zip is on [Releases](https://github.com/preset-nz/oblique/releases). Free, pre-release, Apple Silicon (M-series) Macs only.
 
-- Recipes: `just --list` (`just run`, `just check`). Full architecture and roadmap live in the guidance repo: `~/rhizomatic-preset/guidance/projects/oblique/`.
-- IDE: [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
-- Branding: the product name is defined in `src/branding.ts` (PRODUCT_NAME) **and** `src-tauri/tauri.conf.json` (productName/window title) — update both together.
+It isn't signed by Apple, so the first time macOS says **"Oblique.app is damaged and can't be opened"**. It isn't damaged; macOS doesn't recognise the developer. Fix it once:
+
+1. Open Terminal (`Cmd+Space`, type `Terminal`).
+2. Type `xattr -cr ` (with a trailing space), drag `Oblique.app` into the Terminal window, and press Return.
+3. Double-click the app again. It opens from then on.
+
+---
+
+## Use it
+
+`Shift-Cmd-I` imports an image as a layer. With a layer selected, **Add
+modifier** puts an operator on it; drag its controls and the canvas follows. Operators reorder by
+dragging, and each one can be switched off.
+
+`Cmd-S` saves an `.oblique` file and `Cmd-O` opens one. **File → Export PNG…**
+writes the result.
+
+What each operator does, with examples, is in [docs/nodes](docs/nodes/README.md).
+
+---
+
+## Build it
+
+To build it from source instead:
+
+**Prerequisites**
+[Rust](https://rustup.rs), [Node](https://nodejs.org),
+[pnpm](https://pnpm.io), [uv](https://docs.astral.sh/uv/),
+[just](https://github.com/casey/just), and the Xcode Command Line Tools
+(`xcode-select --install`). `just prep` reports what is installed.
+
+```sh
+just install     # dependencies, including the Python sidecar and its native kernels
+just run         # the app
+```
+
+`just build` makes a release bundle. `just check` runs the tests, linters and
+licence gate.
+
+---
+
+## Licence
+
+[MIT](LICENSE).
+
+---
+
+*Oblique, after Virilio's "oblique function": nothing here stands upright on purpose.*
