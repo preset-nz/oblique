@@ -1,5 +1,5 @@
 """Unit tests for the 2026-07-04 flavour-ops batch: `colour_crush`,
-`xerox`, `ink_starved`. Same conventions as `test_ops.py` — shape/dtype
+`xerox` (Copy of a Copy), `ink_starved`. Same conventions as `test_ops.py` — shape/dtype
 preservation, alpha passthrough, seed determinism, edge-of-range params.
 """
 

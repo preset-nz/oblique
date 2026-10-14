@@ -53,7 +53,7 @@ A text layer is words set in any font installed on the computer, placed on the c
 
 **What you set.** The font is chosen by family and one of its own named styles, such as Bold Condensed or Light Italic. Size is in document pixels. Tracking opens or tightens the space between every letter. Kerning scales the font's built-in pair spacing: 100 is as the font intends, 0 is none, 200 is double. Line height is a multiple of the size. Fill is the colour inside the letters and Stroke an outline of its own width, painted over the fill and centred on the edge. Align sets which edge the lines line up against.
 
-**As an image.** The layer is a picture of the letters on a transparent ground, and takes modifiers like any other layer. Grain and Xerox rough it up. Dilate and Erode thicken and thin it, and Edge Noise frays the outlines, because there is an edge to work on. Ops that read tone, such as Hatch, see the Fill colour, so set it to the shade you want.
+**As an image.** The layer is a picture of the letters on a transparent ground, and takes modifiers like any other layer. Grain and Copy of a Copy rough it up. Dilate and Erode thicken and thin it, and Edge Noise frays the outlines, because there is an edge to work on. Ops that read tone, such as Hatch, see the Fill colour, so set it to the shade you want.
 
 **As a mask for the layers below.** Set Output to mask and the letters clip everything beneath them, up to the next mask layer. For a mask the Fill and Stroke colours do not matter, only where they cover. Modifiers on the text layer reshape that mask only when the layer is a mask layer; they do not change it when the text masks a single modifier elsewhere.
 

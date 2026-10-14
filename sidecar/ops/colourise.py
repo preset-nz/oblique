@@ -1,6 +1,6 @@
 """`colourise` — GIMP-colorize in shape: throw away the source hue, keep
 the luminance, tint with a single ink. Rec. 709 luma (`ops.LUMA_R709` etc.,
-the same weights `desaturate`/`xerox` use) multiplied by the target colour
+the same weights Desaturate and Copy of a Copy use) multiplied by the target colour
 gives the tinted result; blending that against the source RGB by `amount`
 makes the op usable at partial strength. Alpha untouched.
 """

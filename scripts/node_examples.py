@@ -219,7 +219,7 @@ RECIPES: dict[str, tuple[str, Chain]] = {
         [("gaussian_blur", {"radius": 3.0}), ("threshold", {"level": 150.0})],
     ),
     "xerox": (
-        "Copy of a copy of a copy",
+        "Nine generations down",
         [
             (
                 "xerox",

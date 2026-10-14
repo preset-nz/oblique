@@ -81,8 +81,13 @@ def test_registered_with_labelled_params():
         assert params[name]["scale"] == "none"
         assert params[name]["label"]
         assert params[name]["description"]
-    for stock in STOCKS:  # each stock's character is described on the enum
-        assert stock in params["stock"]["description"]
+    # Each stock's character is described on the enum, under its display name
+    # (the picker shows the raw value; the description names the look).
+    shown = {"polaroid_600": "Instant", "sx70": "Instant, Faded"}
+    for stock in STOCKS:
+        assert shown.get(stock, stock) in params["stock"]["description"]
+    assert "polaroid" not in params["stock"]["description"].lower()
+    assert "sx70" not in params["stock"]["description"]
 
 
 @pytest.mark.parametrize("stock", STOCKS)
@@ -197,7 +202,7 @@ def test_cross_process_raises_contrast():
     img = _colour_gradient()
     out = film_stock(img, {"stock": "cross_process", **GRADE_ONLY})
     assert _luma_std(out) > _luma_std(img) * 1.1
-    # Polaroid and SX-70 do the opposite.
+    # The two instant stocks do the opposite.
     for soft in ("polaroid_600", "sx70"):
         assert _luma_std(film_stock(img, {"stock": soft, **GRADE_ONLY})) < _luma_std(
             img
@@ -221,7 +226,7 @@ def test_faded_stocks_lift_pure_black(stock):
     assert out[0, 0, :3].mean() > 12
 
 
-def test_polaroid_blacks_are_lifted_and_whites_dimmed():
+def test_instant_blacks_are_lifted_and_whites_dimmed():
     out = film_stock(_solid((0, 0, 0)), {"stock": "polaroid_600", **GRADE_ONLY})
     assert (out[0, 0, :3] > 0).all()
     white = film_stock(_solid((255, 255, 255)), {"stock": "polaroid_600", **GRADE_ONLY})
@@ -229,7 +234,7 @@ def test_polaroid_blacks_are_lifted_and_whites_dimmed():
     assert white[0, 0, 0] > white[0, 0, 2]  # warm, creamy
 
 
-def test_sx70_is_warmer_than_polaroid_600():
+def test_instant_faded_is_warmer_than_instant():
     img = _solid((128, 128, 128))
     pol = film_stock(img, {"stock": "polaroid_600", **GRADE_ONLY})[0, 0].astype(int)
     sx = film_stock(img, {"stock": "sx70", **GRADE_ONLY})[0, 0].astype(int)

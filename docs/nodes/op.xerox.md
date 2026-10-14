@@ -1,12 +1,12 @@
 ---
-title: Xerox
+title: Copy of a Copy
 node: op.xerox
 group: modifier
 summary: "Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle."
 thumbnail: img/xerox-thumb.webp
 ---
 
-# Xerox
+# Copy of a Copy
 
 <!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle.
@@ -44,16 +44,16 @@ It starts by turning the picture grey, since a photocopier prints one ink. **Kee
 - **Tired office copier.** Generations 4, Skew 0.5, Toner speckle 0.2, Edge glow 0.1.
 - **Heavy contrast.** Generations 10, Skew 0, Toner speckle 0.4. Almost no greys survive.
 - **Colour copy.** Keep colour on, Generations 2, Skew 0.3.
-- **Running dry.** Xerox, then Ink Starved with Direction h, Starvation 0.6 and Banding 0.25: the copy fades toward the far side.
+- **Running dry.** Copy of a Copy, then Ink Starved with Direction h, Starvation 0.6 and Banding 0.25: the copy fades toward the far side.
 
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->
-![Xerox at its defaults](img/xerox-defaults.webp)
+![Copy of a Copy at its defaults](img/xerox-defaults.webp)
 
 *Defaults.*
 
-![Copy of a copy of a copy](img/xerox-recipe.webp)
+![Nine generations down](img/xerox-recipe.webp)
 
-*Copy of a copy of a copy: Xerox (Generations 9, Skew 1.2, Toner speckle 0.5, Edge glow 0.4, Edge glow radius 6).*
+*Nine generations down: Copy of a Copy (Generations 9, Skew 1.2, Toner speckle 0.5, Edge glow 0.4, Edge glow radius 6).*
 <!-- examples:end -->

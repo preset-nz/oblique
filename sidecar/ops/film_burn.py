@@ -30,7 +30,7 @@ given seed — `count=4`'s coverage is a strict superset of `count=1`'s.
 No point-picker field kind exists yet (two normalised sliders is a bad
 placement UI — you can't see where you're dropping a point while
 dragging a number), the same wall that parked `stargazer`'s manual
-placement; `film_burn` follows `xerox`/`ink_starved`/`edge_noise` in
+placement; `film_burn` follows Copy of a Copy, `ink_starved` and `edge_noise` in
 taking no coordinates at all.
 
 **Four zones, smoothstepped, not hard-cut.** Let

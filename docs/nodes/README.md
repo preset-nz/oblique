@@ -40,6 +40,6 @@ title: Oblique nodes
 | ![Pixelate](img/pixelate-thumb.webp) | [Pixelate](op.pixelate.md) | Flat-mean square-cell mosaic — each cell renders as one solid colour. |
 | ![Recolour](img/recolour-thumb.webp) | [Recolour](op.recolour.md) | Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone workhorse. |
 | ![Smear](img/smear-thumb.webp) | [Smear](op.smear.md) | The scanner head stalled: sample one row or column and repeat it across the frame. |
-| ![Technicolor](img/technicolor-thumb.webp) | [Technicolor](op.technicolor.md) | Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register. |
+| ![Dye Transfer](img/technicolor-thumb.webp) | [Dye Transfer](op.technicolor.md) | Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register. |
 | ![Threshold](img/threshold-thumb.webp) | [Threshold](op.threshold.md) | Hard (or smoothstepped) luminance cut to pure black and white. |
-| ![Xerox](img/xerox-thumb.webp) | [Xerox](op.xerox.md) | Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle. |
+| ![Copy of a Copy](img/xerox-thumb.webp) | [Copy of a Copy](op.xerox.md) | Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle. |

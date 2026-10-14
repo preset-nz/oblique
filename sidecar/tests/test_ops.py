@@ -319,7 +319,7 @@ def test_every_registered_non_debug_op_has_a_description():
 
 def test_op_to_dict_includes_label_and_description():
     xerox_entry = OPS["xerox"].to_dict()
-    assert xerox_entry["label"] == "Xerox"
+    assert xerox_entry["label"] == "Copy of a Copy"
     assert "description" in xerox_entry
     assert xerox_entry["description"]
 

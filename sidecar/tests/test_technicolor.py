@@ -1,4 +1,4 @@
-"""`technicolor` — dye-transfer colour with seeded record fringing. Same
+"""`technicolor` (Dye Transfer) — dye-transfer colour with seeded record fringing. Same
 conventions as `test_colour_keep.py`.
 """
 

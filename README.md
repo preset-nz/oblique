@@ -10,7 +10,7 @@ The target aesthetic is expressionistic, grim-dark TTRPG art — the world of M�
 
 You don't paint in Oblique. You **stack operators**.
 
-Drop in a photo, a scan, a render. Then pile treatments onto it — a blur, a threshold, a CMYK silkscreen raster, film grain — and *scrub* their parameters while the canvas answers in real time. Every operator stays live and reorderable forever: nothing is baked in until you say so, and every knob can be revisited three weeks later. The same image can be pushed through *xerox hell*, starved of ink, crushed to a brutal palette, or eaten at the edges — and pulled back, because nothing was destroyed along the way.
+Drop in a photo, a scan, a render. Then pile treatments onto it — a blur, a threshold, a CMYK silkscreen raster, film grain — and *scrub* their parameters while the canvas answers in real time. Every operator stays live and reorderable forever: nothing is baked in until you say so, and every knob can be revisited three weeks later. The same image can be pushed through *copy-of-a-copy hell*, starved of ink, crushed to a brutal palette, or eaten at the edges — and pulled back, because nothing was destroyed along the way.
 
 Each operator is designed to represent **something that happened to the image**, not a graphics algorithm. Not "posterize" — a photocopier on its fifth generation. Not "noise" — toner speckle collecting in the shadows.
 

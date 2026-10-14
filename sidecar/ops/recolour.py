@@ -1,6 +1,6 @@
 """`recolour` — luminance-indexed remap onto an ordered ramp, the
 duotone/tritone workhorse. Rec. 709 luma (`ops.LUMA_R709` etc., the same
-weights `desaturate`/`xerox`/`colourise` use) becomes a position `t` in
+weights Desaturate, Copy of a Copy and Colourise use) becomes a position `t` in
 `[0, 1]`, then each channel is a piecewise-linear interpolation across the
 `stops` active colours placed at even positions (`stops=3` -> stops at
 0.0, 0.5, 1.0). Alpha untouched.

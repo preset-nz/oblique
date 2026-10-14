@@ -36,7 +36,7 @@ describe('opLabel', () => {
 
 describe('search-by-label filtering', () => {
   const ops: OpDescriptor[] = [
-    descriptor({ name: 'xerox', label: 'Xerox' }),
+    descriptor({ name: 'xerox', label: 'Copy of a Copy' }),
     descriptor({ name: 'cmyk_halftone', label: 'CMYK Halftone' }),
     descriptor({ name: 'invert', label: 'Invert' }),
   ];

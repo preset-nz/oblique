@@ -1,5 +1,5 @@
-"""`technicolor` — dye-transfer colour, not a tint. The image is split into
-colour records, rebuilt as subtractive dyes (cyan, magenta, yellow) with
+"""Dye Transfer (op id `technicolor`) — dye-transfer colour, not a tint. The
+image is split into colour records, rebuilt as subtractive dyes (cyan, magenta, yellow) with
 cross-talk between them and a density curve, printed slightly out of
 register, then blended with the original. That is what gives three-strip
 prints their saturated reds, teal-cyans and slightly unreal skin.
@@ -108,7 +108,7 @@ def _cross_talk_matrix(cross_talk: float) -> np.ndarray:
 
 @op(
     "technicolor",
-    label="Technicolor",
+    label="Dye Transfer",
     description=(
         "Dye-transfer colour from old three-strip and two-strip film: "
         "saturated reds, teal-cyans and slightly unreal skin, with the "

@@ -1,6 +1,6 @@
-"""`xerox` — photocopy generation loss: the image as it degrades through
-repeated copy-of-a-copy passes on a tired machine. Each generation blows
-out contrast a little further and lets the exposure threshold drift, a
+"""Copy of a Copy (op id `xerox`) — photocopy generation loss: the image as
+it degrades through repeated copy-of-a-copy passes on a tired machine. Each
+generation blows out contrast a little further and lets the exposure threshold drift, a
 slight rotation creeps in from a crooked platen, and toner-starved
 speckle builds up in the dark fields, with a soft bloom haloing the
 remaining edges. Streak banding is deliberately NOT here — bands are
@@ -55,7 +55,7 @@ def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
 
 @op(
     "xerox",
-    label="Xerox",
+    label="Copy of a Copy",
     description="Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle.",
     params=[
         P(

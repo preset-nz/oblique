@@ -1,12 +1,12 @@
 ---
-title: Technicolor
+title: Dye Transfer
 node: op.technicolor
 group: modifier
 summary: "Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register."
 thumbnail: img/technicolor-thumb.webp
 ---
 
-# Technicolor
+# Dye Transfer
 
 <!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register.
@@ -26,9 +26,9 @@ Slots: `mask`.
 
 ## Using it
 
-A rebuild of the picture in the way Technicolor's dye-transfer prints made colour. It is not a tint: the picture is split into colour records, turned into cyan, magenta and yellow dyes, and printed back together.
+A rebuild of the picture in the way old dye-transfer prints made colour. It is not a tint: the picture is split into colour records, turned into cyan, magenta and yellow dyes, and printed back together.
 
-**The process.** A Technicolor camera used a beam splitter to expose a separate black-and-white negative for each colour record. Dyes made from those negatives were transferred onto one print. Three-strip film recorded red, green and blue. The earlier two-strip film recorded only a red-orange record and a cyan-green one, so it had no true blue.
+**The process.** The cameras behind early three-strip film used a beam splitter to expose a separate black-and-white negative for each colour record. Dyes made from those negatives were transferred onto one print. Three-strip film recorded red, green and blue. The earlier two-strip film recorded only a red-orange record and a cyan-green one, so it had no true blue.
 
 - **Process**: three_strip keeps three records. two_strip keeps two, and the picture is rebuilt from red and cyan-green alone, so blues collapse toward cyan-green.
 - **Dye density** is how heavy the dyes are. On three_strip at 1, with Cross-talk and Fringe at 0, the picture comes out as it went in. Above 1 the colours deepen and saturate and the shadows darken, and neutrals get slightly darker too, because nothing makes the brightness up. Below 1 the dyes go thin and pale. At 0 the film is clear and the result is white.
@@ -44,16 +44,16 @@ Alpha is untouched. On a cutout the colours shift but the outline does not.
 - **Three-strip.** The defaults on a daylight photo: deeper, more saturated colour and a faint coloured fringe on edges.
 - **Two-strip.** Process two_strip, Dye density 1, Cross-talk 0.15, Amount 1. Everything lands between red and cyan-green.
 - **Heavy misprint.** Dye density 1.4, Fringe 5, Amount 1, then Grain with Amount 0.1.
-- **Lift after.** Technicolor at Dye density 1.6, then Levels with Gamma 1.2, to bring back the brightness the dyes took.
+- **Lift after.** Dye Transfer at Dye density 1.6, then Levels with Gamma 1.2, to bring back the brightness the dyes took.
 
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->
-![Technicolor at its defaults](img/technicolor-defaults.webp)
+![Dye Transfer at its defaults](img/technicolor-defaults.webp)
 
 *Defaults.*
 
 ![Heavy two-strip misprint](img/technicolor-recipe.webp)
 
-*Heavy two-strip misprint: Technicolor (Process two_strip, Dye density 1.6, Cross-talk 0.3, Fringe 8, Amount 1).*
+*Heavy two-strip misprint: Dye Transfer (Process two_strip, Dye density 1.6, Cross-talk 0.3, Fringe 8, Amount 1).*
 <!-- examples:end -->

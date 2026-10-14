@@ -84,8 +84,8 @@ class _Stock(NamedTuple):
 
 
 _STOCKS: dict[str, _Stock] = {
-    # Lifted milky blacks, cyan-green shadows, warm creamy highlights, low
-    # contrast, wide soft vignette.
+    # Instant: lifted milky blacks, cyan-green shadows, warm creamy highlights,
+    # low contrast, wide soft vignette.
     "polaroid_600": _Stock(
         lift=(0.08, 0.12, 0.13),
         ceil=(0.97, 0.95, 0.88),
@@ -100,8 +100,8 @@ _STOCKS: dict[str, _Stock] = {
         grain_strength=0.10,
         grain_colour=0.3,
     ),
-    # Warmer and more faded than polaroid_600: browner shadows, amber
-    # highlights, even lower contrast.
+    # Instant, Faded: warmer and more faded than Instant, with browner shadows,
+    # amber highlights and even lower contrast.
     "sx70": _Stock(
         lift=(0.12, 0.10, 0.07),
         ceil=(0.98, 0.91, 0.76),
@@ -303,8 +303,8 @@ def _grain_noise(h: int, w: int, seed: int, colour: float) -> np.ndarray:
             choices=tuple(_STOCKS),
             label="Stock",
             description=(
-                "polaroid_600: milky lifted blacks, cyan-green shadows, warm creamy highlights, low contrast. "
-                "sx70: warmer and more faded, with amber highlights and brown shadows. "
+                "Instant: milky lifted blacks, cyan-green shadows, warm creamy highlights, low contrast. "
+                "Instant, Faded: warmer and more faded, with amber highlights and brown shadows. "
                 "cross_process: slide film in the wrong chemistry, with hard contrast, blue shadows and yellow-green highlights. "
                 "bleach_bypass: silver left in, so the colour is mostly gone and the contrast is hard and metallic. "
                 "expired: faded old stock with a seeded colour shift and a magenta or cyan cast."

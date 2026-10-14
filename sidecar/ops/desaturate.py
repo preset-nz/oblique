@@ -1,5 +1,5 @@
 """`desaturate` — blend each pixel's colour toward its Rec. 709 luma by a
-chosen amount. Uses the same luma weights as `xerox`'s mono conversion
+chosen amount. Uses the same luma weights as Copy of a Copy's mono conversion
 (`ops.LUMA_R709` etc., lifted to the registry module rather than defined
 twice), so the two ops agree on what grey means.
 

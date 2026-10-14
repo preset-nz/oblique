@@ -100,7 +100,7 @@ P = ParamSpec
 
 
 # Rec. 709 luma weights — the one definition of "what grey means" shared by
-# every op that needs it (`xerox`'s mono conversion, `desaturate`'s amount=1
+# every op that needs it (Copy of a Copy's mono conversion, `desaturate`'s amount=1
 # greyscale). Lifted here rather than duplicated per-op so they can't drift.
 LUMA_R709, LUMA_G709, LUMA_B709 = 0.2126, 0.7152, 0.0722
 

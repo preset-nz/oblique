@@ -27,7 +27,7 @@ There is no separate greyscale op. Desaturate at 1 is it.
 
 ## Recipes
 
-- **Faded print.** Desaturate at Amount 0.5, then Film stock with the sx70 stock.
+- **Faded print.** Desaturate at Amount 0.5, then Film stock with the Instant, Faded stock (`sx70` in the picker).
 
 ## Examples
 
