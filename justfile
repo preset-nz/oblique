@@ -30,15 +30,16 @@ run:
 
 # Node pages (docs/nodes/) from the words the kinds carry; the op kinds are read from
 # the sidecar through uv. Rewrites each page's generated block and leaves the prose
-# around it.
+# around it. The generator is its own crate (docs/gen) and the only thing that needs
+# preset-docs, checked out at ../../packages/preset-docs (family-alignment: "preset-docs is optional").
 [group('docs')]
 docs:
-    cargo run -q --manifest-path src-tauri/Cargo.toml --example oblique-docs
+    cargo run -q --manifest-path docs/gen/Cargo.toml
 
 # Fails if a page is missing, stale or orphaned, or a kind has no summary.
 [group('docs')]
 docs-check:
-    cargo run -q --manifest-path src-tauri/Cargo.toml --example oblique-docs -- --check
+    cargo run -q --manifest-path docs/gen/Cargo.toml -- --check
 
 # Example images for the op pages (docs/nodes/img/) from the sample render: a
 # colour strip, a cut-out by MobileSAM, then each op at its defaults and with
@@ -61,7 +62,8 @@ check:
     # output isn't there, and checking doesn't need it. An existing build is left alone.
     mkdir -p sidecar/dist/oblique-sidecar
     cargo test --manifest-path src-tauri/Cargo.toml --lib
-    just docs-check
+    # preset-docs is optional: a clone without it skips the node-page check.
+    if [ -d ../../packages/preset-docs ]; then just docs-check; else echo "docs-check: skipped (../../packages/preset-docs not present)"; fi
     ./node_modules/.bin/depcruise src
     just licences
 

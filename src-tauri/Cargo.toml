@@ -42,9 +42,6 @@ rhizome-pom-tauri = "0.1.5"
 preset-app-kit = "0.1.3"
 
 [dev-dependencies]
-# `just docs`: node pages from the schema (examples/oblique-docs.rs). By path until
-# preset-docs is first published (runbooks/pending-releases.md).
-preset-docs = { path = "../../../packages/preset-docs", features = ["rhizome"] }
 # A mock app, so the host's emitted events can be heard in tests.
 tauri = { version = "2", features = ["test"] }
 # Golden-render test rasteriser only (text/raster_tests.rs); nothing ships. BSD-3-Clause.

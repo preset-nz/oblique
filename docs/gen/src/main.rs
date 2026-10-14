@@ -1,7 +1,7 @@
 //! `just docs`: one markdown page per Oblique node kind in `docs/nodes/`, from the words
 //! the kinds carry (`document::kinds`). `--check` writes nothing and fails on a missing,
 //! stale or orphaned page or a kind without a summary (`just docs-check`, part of
-//! `just check`).
+//! `just check` when preset-docs is checked out beside this repo).
 //!
 //! The op kinds come from the Python sidecar's `OPS`, read the way the `real_projects` test
 //! reads them: through `uv`, or from the `list_ops` JSON file named by `OBLIQUE_OPS`.
@@ -40,7 +40,7 @@ fn main() -> ExitCode {
     let schema = preset_docs::Catalogue::from(&schema);
 
     let app = Oblique::NAME;
-    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/nodes"));
+    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../nodes"));
     if !check {
         match preset_docs::write(&dir, &schema, app) {
             Ok(files) => {

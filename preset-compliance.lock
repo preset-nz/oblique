@@ -4,6 +4,15 @@
 version = 1
 
 [[inputs]]
+path = "docs/gen/Cargo.lock"
+ecosystem = "cargo"
+sha256 = "56c4f82122882906d482e5e5e7581e526284c87bc1f4c2897bce2238e83b76c4"
+
+[[inputs]]
+path = "docs/gen/Cargo.toml"
+sha256 = "524a31289191bfada21821ddfca0b78c5499151bbfc34d924aa5752aec7c8490"
+
+[[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
 sha256 = "bf7f781da7d9ecd52098ee270dd31c74fa93bb0ff00f3e0c029158b390f11d2d"
@@ -25,11 +34,11 @@ sha256 = "8b31c5fc682e313e526892411cf6fc343f1d9d48ced1c8d657f2b014058517e7"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "e26b0aaa8aa71697f070dd3cc382300d8b909a86f50e4593ec0547d10e6ad13c"
+sha256 = "c5b3b332a80d3d23f4bf6ddc345f1412fe1db05066c37befcfc8c22b1af072c6"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "f26a50c04579cda58b36172ac0c07418047bca774f24110c8180dcd0bd33d979"
+sha256 = "411647a0e564b89f04cb54ac8a65249681a57802899511bd8fcc77c9d625ceee"
 
 [[packages]]
 ecosystem = "cargo"
@@ -819,6 +828,14 @@ scope = "build"
 ecosystem = "cargo"
 name = "equivalent"
 version = "1.0.2"
+source = "registry"
+declared = "Apache-2.0 OR MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
+name = "equivalent"
+version = "1.0.3"
 source = "registry"
 declared = "Apache-2.0 OR MIT"
 scope = "shipped"
@@ -1985,6 +2002,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "oblique"
+version = "0.2.1"
+source = "path"
+declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
 name = "once_cell"
 version = "1.21.4"
 source = "registry"
@@ -2221,7 +2246,7 @@ name = "preset-docs"
 version = "0.1.0"
 source = "path"
 declared = "MIT"
-scope = "dev"
+scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
@@ -3177,6 +3202,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "tokio"
+version = "1.53.3"
+source = "registry"
+declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
 name = "tokio-util"
 version = "0.7.20"
 source = "registry"
@@ -4073,8 +4106,24 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "zerocopy"
+version = "0.8.63"
+source = "registry"
+declared = "BSD-2-Clause OR Apache-2.0 OR MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
 name = "zerocopy-derive"
 version = "0.8.62"
+source = "registry"
+declared = "BSD-2-Clause OR Apache-2.0 OR MIT"
+scope = "build"
+
+[[packages]]
+ecosystem = "cargo"
+name = "zerocopy-derive"
+version = "0.8.63"
 source = "registry"
 declared = "BSD-2-Clause OR Apache-2.0 OR MIT"
 scope = "build"

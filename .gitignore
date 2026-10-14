@@ -14,6 +14,7 @@ dist-ssr
 src-tauri/target
 sidecar/.venv
 sidecar/kernels/target
+docs/gen/target
 
 # Generated at package time (Epic 14 friends build) — see justfile `package` recipe
 /THIRD-PARTY-LICENSES

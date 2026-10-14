@@ -1,0 +1,24 @@
+# `just docs`: the node pages in docs/nodes/. Its own crate, outside the src-tauri package and
+# not a workspace member, so the app builds and tests without preset-docs (family requirement
+# "preset-docs is optional", 2026-10-14). Nothing in src-tauri names this crate.
+[package]
+name = "oblique-docs"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+# The registry and the sidecar catalogue, without a window.
+oblique = { path = "../../src-tauri" }
+rhizome-core = "0.1.5"
+rhizome-pom = "0.1.5"
+# By path until preset-docs is first published (runbooks/pending-releases.md).
+preset-docs = { path = "../../../../packages/preset-docs", features = ["rhizome"] }
+
+# Same patch as src-tauri/Cargo.toml: a [patch] only counts in the root manifest, so it is
+# repeated here. Drop both together when rhizome 0.1.6 is published.
+[patch.crates-io]
+rhizome-core = { path = "../../../../packages/rhizome/crates/rhizome-core" }
+rhizome-pom = { path = "../../../../packages/rhizome/crates/rhizome-pom" }
+rhizome-pom-tauri = { path = "../../../../packages/rhizome/crates/rhizome-pom-tauri" }
