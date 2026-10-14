@@ -31,7 +31,7 @@ Prints the picture as the four dot screens of CMYK, at the classic angles, with 
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Prints the picture as the dot screens of four-colour printing. Each of cyan, magenta, yellow and black is a separate screen of round dots; darker areas get bigger dots. Close up it is dots, at a distance the colours mix. It is the look of a newspaper, a comic or a cheap flyer.
 

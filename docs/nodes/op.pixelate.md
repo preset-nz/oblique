@@ -18,7 +18,7 @@ Flat-mean square-cell mosaic — each cell renders as one solid colour.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Splits the picture into square cells and fills each with its average colour. Cell size is in document pixels and the preview scales it, so the blocks stay the same proportion of the picture at any resolution. At 1 nothing happens.
 

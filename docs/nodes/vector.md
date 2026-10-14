@@ -39,7 +39,7 @@ A binding from it carries:
 | Attached transform | structured | empty | Where the mask sits relative to the layer when it travels with it. |
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A vector layer is a shape drawn with the pen tool: closed or open paths made of points and curve handles. You can edit any point afterwards and everything that depends on the shape updates. It exists to be a shape, a stencil or a mask.
 

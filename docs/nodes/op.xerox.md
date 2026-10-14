@@ -24,7 +24,7 @@ Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner s
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 The picture as a photocopy of a photocopy. Each copy loses a little: the greys harden toward black and white, the page sits slightly off true, specks of toner drop out of the dark areas, and the edges pick up a faint glow. Run enough copies and little of the original is left.
 

@@ -21,7 +21,7 @@ The scanner head stalled: sample one row or column and repeat it across the fram
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A scanner head that stalled: it read one line of the picture and kept repeating it. One row or column of the picture is picked and copied across the frame as streaks.
 

@@ -23,7 +23,7 @@ The printer running dry: ink coverage fades along one axis, with worn-roller ban
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A printer running out of ink. The ink fades along one direction until the far end is close to blank paper, and stripes from a worn roller cut across it.
 

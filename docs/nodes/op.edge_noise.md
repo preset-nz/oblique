@@ -21,7 +21,7 @@ Tear and crumble the layer's edge — the interior stays solid.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Roughens the boundary of a shape, as if it had been torn or had crumbled. Only the edge moves: the solid inside and the empty outside stay as they are. It acts on alpha, so it needs transparency to work with. On a fully opaque layer there is no edge and nothing happens. Use it on text, on a vector layer, or on a cutout.
 

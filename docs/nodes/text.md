@@ -47,7 +47,7 @@ A binding from it carries:
 | Attached transform | structured | empty | Where the mask sits relative to the layer when it travels with it. |
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A text layer is words set in any font installed on the computer, placed on the canvas with the T tool. Click where the first line sits, then type the words in the inspector's Text field; edit them there at any time. Each line break is one you type. There is no box and no wrapping.
 

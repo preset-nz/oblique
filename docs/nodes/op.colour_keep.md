@@ -25,7 +25,7 @@ Turn everything greyscale except the chosen colours.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Everything goes grey except colours near the one you pick. Pixels inside the band keep their colour; the rest are pulled toward their Rec. 709 grey.
 

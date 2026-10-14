@@ -23,7 +23,7 @@ Dye-transfer colour from old three-strip and two-strip film: saturated reds, tea
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A rebuild of the picture in the way Technicolor's dye-transfer prints made colour. It is not a tint: the picture is split into colour records, turned into cyan, magenta and yellow dyes, and printed back together.
 

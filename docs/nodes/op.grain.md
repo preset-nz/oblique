@@ -20,7 +20,7 @@ Seeded, chunky film-grain noise added to the RGB channels.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Adds random speckle to the picture, the same on red, green and blue, so it reads as brightness noise and does not tint. The noise is seeded: the same Seed always gives the same grain.
 

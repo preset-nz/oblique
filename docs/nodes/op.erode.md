@@ -18,7 +18,7 @@ Eat the layer's shape inward from its edge.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Eats the layer's shape inward from its edge by Radius, in document pixels. It works on alpha, so it needs transparency: on a fully opaque layer there is no edge and nothing happens. Use it on text, on a vector layer, or on a cutout.
 

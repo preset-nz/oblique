@@ -20,7 +20,7 @@ Tint the image with a single ink, keeping the source luminance.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Throws away the picture's own hues and paints it in one colour, with the lights and darks of the original. Think of printing a photograph in a single ink.
 

@@ -18,7 +18,7 @@ Grow the layer's shape outward, carrying its edge colour with it.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Grows the layer's shape outward by Radius, measured in document pixels. It works on alpha, the shape's coverage, so it needs transparency to act on: on a fully opaque layer there is no edge and nothing happens. Use it on text, on a vector layer, or on a cutout.
 

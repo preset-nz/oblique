@@ -20,7 +20,7 @@ Classic black/white/gamma tonal remap via a single LUT.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Remaps brightness on all three colour channels at once, using the same curve for each, so colours keep their balance.
 

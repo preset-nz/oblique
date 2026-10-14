@@ -17,7 +17,7 @@ Photographic negative of the RGB channels; alpha untouched.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Every red, green and blue value is flipped: black becomes white, white becomes black, a colour becomes its opposite. The result looks like a film negative. Alpha stays as it was, so a cutout keeps its outline.
 

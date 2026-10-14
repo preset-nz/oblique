@@ -18,7 +18,7 @@ Even, soft blur across the RGB channels — alpha stays untouched.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A soft, even blur of the colour. Radius is in document pixels and the preview scales it, so a draft and a full-size render show the same softness. At 0 nothing happens.
 

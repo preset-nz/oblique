@@ -24,7 +24,7 @@ Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone workhors
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Maps brightness onto a ramp of two to four colours. The darkest pixels take Stop 1, the lightest take the last stop in use, and everything between is blended along the ramp. The original hues are discarded: only how bright each pixel is decides its colour.
 

@@ -19,7 +19,7 @@ Hard (or smoothstepped) luminance cut to pure black and white.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Every pixel becomes black or white depending on its brightness. Pixels at or above Level turn white and the rest black, so raising Level gives more black. The result is flat two-tone shapes with no greys.
 

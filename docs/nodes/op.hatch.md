@@ -34,7 +34,7 @@ Redraw tone as pen marks — hatched lines, dashes, crosses or stipple dots whos
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Redraws the picture as pen marks. Light areas get few or thin marks, dark areas get dense or thick ones, and the original colours are gone: you see ink on paper. It is the look of pen-and-ink drawing and engraving, built from the picture's own tones.
 

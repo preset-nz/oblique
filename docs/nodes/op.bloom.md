@@ -22,7 +22,7 @@ Bright areas bleed light into their surroundings.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Bright parts of the picture bleed light into what is around them, like the glow around a lamp. Dark parts and mid-tones do not glow.
 

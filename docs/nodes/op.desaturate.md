@@ -18,7 +18,7 @@ Blend the image toward Rec. 709 greyscale by a chosen amount.
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Pulls each pixel's colour toward its grey. At Amount 1 the picture is greyscale; at 0 nothing changes; in between it is a faded version of the original. Grey here is Rec. 709 luma, so green counts most and blue least: a pure green looks light, a pure blue looks dark.
 

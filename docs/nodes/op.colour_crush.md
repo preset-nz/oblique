@@ -22,7 +22,7 @@ Per-channel bit-depth reduction — posterise's meaner sibling, with optional Ba
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Reduces each colour channel to a few evenly spaced levels. With fewer bits there are fewer values per channel, so smooth gradients break into flat bands and colours snap to a small set.
 

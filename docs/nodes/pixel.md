@@ -27,7 +27,7 @@ A picture, such as a photo you've opened.
 References: `cameraId`, `source`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 A pixel layer holds a picture: a photo or scan you opened, or an image dropped onto the window. It is the usual starting point for a document. The first one you open sets the size of the document.
 

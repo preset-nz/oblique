@@ -22,7 +22,7 @@ Grades the picture like a named film stock: tone curves with lifted blacks, a co
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Grades the picture the way a particular photographic film would have rendered it. Each stock is a set of tone curves, a colour mix, a tint in the shadows and a tint in the highlights, plus its own vignette and its own grain. One op, five stocks.
 

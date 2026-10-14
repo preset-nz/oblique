@@ -21,7 +21,7 @@ The canvas everything is built on: its size, background and notes.
 References: `defaultCameraId`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 The document is the page the layers sit on. It has a size, a background and a note, and it decides what Export writes.
 

@@ -26,7 +26,7 @@ The film stalls in the gate: a blister bubbles up, the emulsion chars, the image
 Slots: `mask`.
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Plays one frame of film burning in a projector gate. A blister swells up, the emulsion chars, and a hole opens that grows until the whole frame is gone. It is built to be scrubbed: **Progress** is the time axis.
 
