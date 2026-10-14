@@ -3,6 +3,7 @@ title: Ink Starved
 node: op.ink_starved
 group: modifier
 summary: "The printer running dry: ink coverage fades along one axis, with worn-roller banding."
+thumbnail: img/ink_starved-thumb.webp
 ---
 
 # Ink Starved

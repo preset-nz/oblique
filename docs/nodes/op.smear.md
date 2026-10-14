@@ -3,6 +3,7 @@ title: Smear
 node: op.smear
 group: modifier
 summary: "The scanner head stalled: sample one row or column and repeat it across the frame."
+thumbnail: img/smear-thumb.webp
 ---
 
 # Smear

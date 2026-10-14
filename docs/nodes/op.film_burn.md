@@ -3,6 +3,7 @@ title: Film Burn
 node: op.film_burn
 group: modifier
 summary: "The film stalls in the gate: a blister bubbles up, the emulsion chars, the image burns through."
+thumbnail: img/film_burn-thumb.webp
 ---
 
 # Film Burn

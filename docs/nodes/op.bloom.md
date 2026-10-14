@@ -3,6 +3,7 @@ title: Bloom
 node: op.bloom
 group: modifier
 summary: Bright areas bleed light into their surroundings.
+thumbnail: img/bloom-thumb.webp
 ---
 
 # Bloom

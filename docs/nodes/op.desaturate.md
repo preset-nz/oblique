@@ -3,6 +3,7 @@ title: Desaturate
 node: op.desaturate
 group: modifier
 summary: Blend the image toward Rec. 709 greyscale by a chosen amount.
+thumbnail: img/desaturate-thumb.webp
 ---
 
 # Desaturate

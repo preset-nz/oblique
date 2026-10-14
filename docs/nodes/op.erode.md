@@ -3,6 +3,7 @@ title: Erode
 node: op.erode
 group: modifier
 summary: Eat the layer's shape inward from its edge.
+thumbnail: img/erode-thumb.webp
 ---
 
 # Erode

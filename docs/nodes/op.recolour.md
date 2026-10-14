@@ -3,6 +3,7 @@ title: Recolour
 node: op.recolour
 group: modifier
 summary: Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone workhorse.
+thumbnail: img/recolour-thumb.webp
 ---
 
 # Recolour

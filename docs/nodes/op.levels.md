@@ -3,6 +3,7 @@ title: Levels
 node: op.levels
 group: modifier
 summary: Classic black/white/gamma tonal remap via a single LUT.
+thumbnail: img/levels-thumb.webp
 ---
 
 # Levels

@@ -3,6 +3,7 @@ title: Film stock
 node: op.film_stock
 group: modifier
 summary: "Grades the picture like a named film stock: tone curves with lifted blacks, a colour cross-mix, split-toned shadows and highlights, a vignette and grain."
+thumbnail: img/film_stock-thumb.webp
 ---
 
 # Film stock

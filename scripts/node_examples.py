@@ -6,7 +6,9 @@ colours, a grey wedge and pure inks down its right edge, cuts the stack out
 with Oblique's own MobileSAM, then runs every op on it twice: at its
 defaults and with one recipe from its page. The images land in
 docs/nodes/img/, and each op page gets an Examples block between markers,
-rewritten on every run like the generator's block.
+rewritten on every run like the generator's block. A crop of the recipe
+image, halved, is the op's thumbnail in the index: the page names it under
+`thumbnail:` and `just docs` puts it in the table.
 
 The ops are called directly, at full size, so a spatial value here is the
 value in the inspector at baked resolution.
@@ -40,6 +42,12 @@ STACK_BOX = {"x0": 170, "y0": 172, "x1": 620, "y1": 590}
 
 # Ops that act on a shape's outline run on the cut-out, not the whole frame.
 OUTLINE_OPS = {"dilate", "erode", "edge_noise"}
+
+# The thumbnail: a crop of the recipe image at the stack's top right corner,
+# so it holds layers, the crack and an outline against the backdrop, halved.
+# A crop rather than the whole frame shrunk, so screens and grain still read.
+THUMB_BOX = (372, 168, 628, 424)
+THUMB_SIZE = 128
 
 # Ops whose defaults change nothing get no defaults image.
 NO_OP_DEFAULTS = {"film_burn", "levels"}
@@ -325,6 +333,14 @@ def save(img: np.ndarray, name: str) -> str:
     return name
 
 
+def save_thumb(img: np.ndarray, name: str) -> str:
+    crop = Image.fromarray(img, "RGBA").crop(THUMB_BOX)
+    crop.resize((THUMB_SIZE, THUMB_SIZE), Image.Resampling.LANCZOS).save(
+        IMG / name, "WEBP", quality=85, method=6
+    )
+    return name
+
+
 def settings(chain: Chain) -> str:
     def value(v: Any) -> str:
         if isinstance(v, bool):
@@ -357,6 +373,17 @@ def write_block(page: Path, lines: list[str]) -> None:
     page.write_text(f"{text}\n\n{block}\n")
 
 
+THUMB_KEY = re.compile(r"^thumbnail:.*\n", re.MULTILINE)
+
+
+def write_thumbnail(page: Path, file: str) -> None:
+    """Names the thumbnail in the page's front matter, after the generator's keys."""
+    text = page.read_text()
+    end = text.index("\n---\n", 4) + 1
+    front = THUMB_KEY.sub("", text[:end])
+    page.write_text(f"{front}thumbnail: img/{file}\n{text[end:]}")
+
+
 def main() -> None:
     sample = with_strip(Image.open(SOURCE))
     sample.save(IMG / "sample.png")
@@ -376,9 +403,11 @@ def main() -> None:
                 "*Defaults.*",
                 "",
             ]
-        file = save(run(base, chain), f"{name}-recipe.webp")
+        recipe = run(base, chain)
+        file = save(recipe, f"{name}-recipe.webp")
         lines += [f"![{title}](img/{file})", "", f"*{title}: {settings(chain)}.*"]
         write_block(page, lines)
+        write_thumbnail(page, save_thumb(recipe, f"{name}-thumb.webp"))
         print(f"examples: {name}")
 
 

@@ -3,6 +3,7 @@ title: CMYK Halftone
 node: op.cmyk_halftone
 group: modifier
 summary: Prints the picture as the four dot screens of CMYK, at the classic angles, with optional misregistration and inks you can swap for spot-colour and riso looks.
+thumbnail: img/cmyk_halftone-thumb.webp
 ---
 
 # CMYK Halftone

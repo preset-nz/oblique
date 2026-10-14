@@ -3,6 +3,7 @@ title: Technicolor
 node: op.technicolor
 group: modifier
 summary: "Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register."
+thumbnail: img/technicolor-thumb.webp
 ---
 
 # Technicolor

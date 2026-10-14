@@ -3,6 +3,7 @@ title: Colourise
 node: op.colourise
 group: modifier
 summary: Tint the image with a single ink, keeping the source luminance.
+thumbnail: img/colourise-thumb.webp
 ---
 
 # Colourise

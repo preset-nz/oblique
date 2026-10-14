@@ -42,10 +42,12 @@ docs-check:
 
 # Example images for the op pages (docs/nodes/img/) from the sample render: a
 # colour strip, a cut-out by MobileSAM, then each op at its defaults and with
-# one recipe. Rewrites each page's Examples block.
+# one recipe, and a thumbnail for the index. Rewrites each page's Examples block,
+# then the index.
 [group('docs')]
 examples:
     cd sidecar && uv run python ../scripts/node_examples.py
+    just docs
 
 [group('quality')]
 check:
