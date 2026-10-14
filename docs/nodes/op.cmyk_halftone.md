@@ -7,7 +7,7 @@ summary: Prints the picture as the four dot screens of CMYK, at the classic angl
 
 # CMYK Halftone
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Prints the picture as the four dot screens of CMYK, at the classic angles, with optional misregistration and inks you can swap for spot-colour and riso looks.
 
 | Control | Range | Default | What it does |

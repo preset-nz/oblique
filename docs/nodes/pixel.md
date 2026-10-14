@@ -7,7 +7,7 @@ summary: A picture, such as a photo you've opened.
 
 # Pixel layer
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A picture, such as a photo you've opened.
 
 | Control | Range | Default | What it does |

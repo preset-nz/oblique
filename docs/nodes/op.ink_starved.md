@@ -7,7 +7,7 @@ summary: "The printer running dry: ink coverage fades along one axis, with worn-
 
 # Ink Starved
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The printer running dry: ink coverage fades along one axis, with worn-roller banding.
 
 | Control | Range | Default | What it does |

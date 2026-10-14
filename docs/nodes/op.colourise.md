@@ -7,7 +7,7 @@ summary: Tint the image with a single ink, keeping the source luminance.
 
 # Colourise
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Tint the image with a single ink, keeping the source luminance.
 
 | Control | Range | Default | What it does |

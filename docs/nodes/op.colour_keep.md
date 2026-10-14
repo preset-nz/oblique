@@ -7,7 +7,7 @@ summary: Turn everything greyscale except the chosen colours.
 
 # Colour keep
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Turn everything greyscale except the chosen colours.
 
 | Control | Range | Default | What it does |

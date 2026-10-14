@@ -7,7 +7,7 @@ summary: Hard (or smoothstepped) luminance cut to pure black and white.
 
 # Threshold
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Hard (or smoothstepped) luminance cut to pure black and white.
 
 | Control | Range | Default | What it does |

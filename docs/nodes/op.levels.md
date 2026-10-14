@@ -7,7 +7,7 @@ summary: Classic black/white/gamma tonal remap via a single LUT.
 
 # Levels
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Classic black/white/gamma tonal remap via a single LUT.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: "The film stalls in the gate: a blister bubbles up, the emulsion chars,
 
 # Film Burn
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The film stalls in the gate: a blister bubbles up, the emulsion chars, the image burns through.
 
 | Control | Range | Default | What it does |

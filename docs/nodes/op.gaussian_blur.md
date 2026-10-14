@@ -7,7 +7,7 @@ summary: Even, soft blur across the RGB channels — alpha stays untouched.
 
 # Gaussian Blur
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Even, soft blur across the RGB channels — alpha stays untouched.
 
 | Control | Range | Default | What it does |

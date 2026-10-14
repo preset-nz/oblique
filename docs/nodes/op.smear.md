@@ -7,7 +7,7 @@ summary: "The scanner head stalled: sample one row or column and repeat it acros
 
 # Smear
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The scanner head stalled: sample one row or column and repeat it across the frame.
 
 | Control | Range | Default | What it does |

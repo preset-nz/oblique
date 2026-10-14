@@ -7,7 +7,7 @@ summary: Grow the layer's shape outward, carrying its edge colour with it.
 
 # Dilate
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Grow the layer's shape outward, carrying its edge colour with it.
 
 | Control | Range | Default | What it does |

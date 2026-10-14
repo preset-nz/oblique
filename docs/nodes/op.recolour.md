@@ -7,7 +7,7 @@ summary: Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone
 
 # Recolour
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone workhorse.
 
 | Control | Range | Default | What it does |

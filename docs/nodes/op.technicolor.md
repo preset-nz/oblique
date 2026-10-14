@@ -7,7 +7,7 @@ summary: "Dye-transfer colour from old three-strip and two-strip film: saturated
 
 # Technicolor
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Dye-transfer colour from old three-strip and two-strip film: saturated reds, teal-cyans and slightly unreal skin, with the colour records printed a touch out of register.
 
 | Control | Range | Default | What it does |

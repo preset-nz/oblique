@@ -7,7 +7,7 @@ summary: Per-channel bit-depth reduction — posterise's meaner sibling, with op
 
 # Colour Crush
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Per-channel bit-depth reduction — posterise's meaner sibling, with optional Bayer dither.
 
 | Control | Range | Default | What it does |

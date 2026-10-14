@@ -7,7 +7,7 @@ summary: Photographic negative of the RGB channels; alpha untouched.
 
 # Invert
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Photographic negative of the RGB channels; alpha untouched.
 
 | Control | Range | Default | What it does |

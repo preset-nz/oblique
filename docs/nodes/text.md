@@ -7,7 +7,7 @@ summary: Typed words in any installed font, which can also mask other layers.
 
 # Text layer
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Typed words in any installed font, which can also mask other layers.
 
 | Control | Range | Default | What it does |

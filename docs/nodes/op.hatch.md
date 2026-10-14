@@ -7,7 +7,7 @@ summary: Redraw tone as pen marks — hatched lines, dashes, crosses or stipple 
 
 # Hatch
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Redraw tone as pen marks — hatched lines, dashes, crosses or stipple dots whose density follows the image's darkness. Layers stack crosshatch; one layer engraves.
 
 | Control | Range | Default | What it does |

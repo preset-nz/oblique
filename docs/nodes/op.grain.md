@@ -7,7 +7,7 @@ summary: Seeded, chunky film-grain noise added to the RGB channels.
 
 # Grain
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Seeded, chunky film-grain noise added to the RGB channels.
 
 | Control | Range | Default | What it does |

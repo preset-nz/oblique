@@ -7,7 +7,7 @@ summary: Bright areas bleed light into their surroundings.
 
 # Bloom
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Bright areas bleed light into their surroundings.
 
 | Control | Range | Default | What it does |

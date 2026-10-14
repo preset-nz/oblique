@@ -7,7 +7,7 @@ summary: Blend the image toward Rec. 709 greyscale by a chosen amount.
 
 # Desaturate
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Blend the image toward Rec. 709 greyscale by a chosen amount.
 
 | Control | Range | Default | What it does |

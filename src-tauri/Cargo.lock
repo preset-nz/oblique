@@ -2397,8 +2397,8 @@ version = "0.2.1"
 dependencies = [
  "fontdb",
  "preset-app-kit",
+ "preset-docs",
  "rhizome-core",
- "rhizome-docs",
  "rhizome-pom",
  "rhizome-pom-tauri",
  "rustybuzz",
@@ -2695,6 +2695,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "preset-docs"
+version = "0.1.0"
+dependencies = [
+ "rhizome-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2955,14 +2964,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "ulid",
-]
-
-[[package]]
-name = "rhizome-docs"
-version = "0.1.5"
-dependencies = [
- "rhizome-core",
- "serde_json",
 ]
 
 [[package]]

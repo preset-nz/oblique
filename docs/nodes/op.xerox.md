@@ -7,7 +7,7 @@ summary: "Copy-of-a-copy generation loss: contrast blowout, threshold drift, ske
 
 # Xerox
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle.
 
 | Control | Range | Default | What it does |

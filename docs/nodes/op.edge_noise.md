@@ -7,7 +7,7 @@ summary: Tear and crumble the layer's edge — the interior stays solid.
 
 # Edge Noise
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Tear and crumble the layer's edge — the interior stays solid.
 
 | Control | Range | Default | What it does |

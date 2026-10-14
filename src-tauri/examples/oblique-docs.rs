@@ -37,10 +37,12 @@ fn main() -> ExitCode {
     // list (src/panels/stack/AddModifier.tsx), so they get no page either.
     schema.types.retain(|t| !t.name.starts_with("op.debug_"));
 
+    let schema = preset_docs::Catalogue::from(&schema);
+
     let app = Oblique::NAME;
     let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/nodes"));
     if !check {
-        match rhizome_docs::write(&dir, &schema, app) {
+        match preset_docs::write(&dir, &schema, app) {
             Ok(files) => {
                 for f in files {
                     println!("wrote {f}");
@@ -52,7 +54,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let findings = match rhizome_docs::check(&dir, &schema, app) {
+    let findings = match preset_docs::check(&dir, &schema, app) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("oblique-docs: {e}");

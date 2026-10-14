@@ -7,7 +7,7 @@ summary: "The canvas everything is built on: its size, background and notes."
 
 # Document
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The canvas everything is built on: its size, background and notes.
 
 | Control | Range | Default | What it does |

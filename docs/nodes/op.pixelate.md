@@ -7,7 +7,7 @@ summary: Flat-mean square-cell mosaic — each cell renders as one solid colour.
 
 # Pixelate
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Flat-mean square-cell mosaic — each cell renders as one solid colour.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: Eat the layer's shape inward from its edge.
 
 # Erode
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Eat the layer's shape inward from its edge.
 
 | Control | Range | Default | What it does |

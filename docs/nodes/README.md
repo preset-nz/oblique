@@ -4,7 +4,7 @@ title: Oblique nodes
 
 # Oblique nodes
 
-<!-- generated whole by rhizome-docs; write in the node pages, not here -->
+<!-- generated whole by preset-docs; write in the node pages, not here -->
 
 ## Document
 

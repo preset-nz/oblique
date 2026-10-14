@@ -7,7 +7,7 @@ summary: Drawn shapes with smooth edges, which can also mask other layers.
 
 # Vector layer
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Drawn shapes with smooth edges, which can also mask other layers.
 
 | Control | Range | Default | What it does |

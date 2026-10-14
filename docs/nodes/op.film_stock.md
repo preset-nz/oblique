@@ -7,7 +7,7 @@ summary: "Grades the picture like a named film stock: tone curves with lifted bl
 
 # Film stock
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Grades the picture like a named film stock: tone curves with lifted blacks, a colour cross-mix, split-toned shadows and highlights, a vignette and grain.
 
 | Control | Range | Default | What it does |

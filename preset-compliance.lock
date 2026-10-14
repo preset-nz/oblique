@@ -25,11 +25,11 @@ sha256 = "8b31c5fc682e313e526892411cf6fc343f1d9d48ced1c8d657f2b014058517e7"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "32ebc71322e77a625ecd7d1cc78f3b780f40170c5730fa43c750e5091796cc4f"
+sha256 = "e26b0aaa8aa71697f070dd3cc382300d8b909a86f50e4593ec0547d10e6ad13c"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "8b2fb8458a2b569d514cf4bc1f1c254cad774bfe72b1e788dc3d5046ca4f9c73"
+sha256 = "f26a50c04579cda58b36172ac0c07418047bca774f24110c8180dcd0bd33d979"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2217,6 +2217,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "preset-docs"
+version = "0.1.0"
+source = "path"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "cargo"
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry"
@@ -2486,14 +2494,6 @@ version = "0.1.5"
 source = "path"
 declared = "MIT"
 scope = "shipped"
-
-[[packages]]
-ecosystem = "cargo"
-name = "rhizome-docs"
-version = "0.1.5"
-source = "path"
-declared = "MIT"
-scope = "dev"
 
 [[packages]]
 ecosystem = "cargo"
