@@ -5,8 +5,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier } from '@/scene/types';
-import type { OpDescriptor } from '@/sidecar/opsCache';
+import type { OpCategory, OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
+import { groupOpsByCategory } from './groupOps';
 import { useRowCollapseStore } from './rowCollapse';
 
 function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
@@ -25,10 +26,14 @@ function defaultParamsFor(descriptor: OpDescriptor): Modifier['params'] {
 export function AddModifier({
   nodeId,
   ops,
+  categories = [],
   disabled = false,
 }: {
   nodeId: string;
   ops: OpDescriptor[];
+  /** The sidecar's category list, in picker order. Empty when it sent none:
+   * the picker then lists every op flat, without headings. */
+  categories?: OpCategory[];
   /** Locked target (lock-ui.md) — disables the add action, no popover. */
   disabled?: boolean;
 }) {
@@ -46,6 +51,12 @@ export function AddModifier({
       (op) => op.name.toLowerCase().includes(q) || opLabel(op).toLowerCase().includes(q),
     );
   }, [ops, query]);
+
+  // Grouped in the sidecar's category order, "Other" last. What Enter picks
+  // and what the list shows first are the same op.
+  const groups = useMemo(() => groupOpsByCategory(filtered, categories), [filtered, categories]);
+  const firstMatch = groups[0]?.ops[0];
+  const showHeadings = groups.some((g) => g.id !== null);
 
   function pick(descriptor: OpDescriptor) {
     const modId = addModifier(nodeId, descriptor.name, defaultParamsFor(descriptor));
@@ -93,9 +104,9 @@ export function AddModifier({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && filtered[0]) {
+            if (e.key === 'Enter' && firstMatch) {
               e.preventDefault();
-              pick(filtered[0]);
+              pick(firstMatch);
             }
           }}
         />
@@ -108,18 +119,27 @@ export function AddModifier({
           {ops.length > 0 && filtered.length === 0 && (
             <div className="px-2 py-1 text-xs text-neutral-500">No ops match "{query}".</div>
           )}
-          {filtered.map((op) => (
-            <button
-              key={op.name}
-              type="button"
-              className="flex flex-col rounded px-2 py-1 text-left hover:bg-neutral-800"
-              onClick={() => pick(op)}
-            >
-              <span className="text-xs">{opLabel(op)}</span>
-              {op.description && (
-                <span className="truncate text-[10px] text-neutral-500">{op.description}</span>
+          {groups.map((group) => (
+            <div key={group.id ?? 'other'} className="flex flex-col gap-0.5">
+              {showHeadings && (
+                <div className="px-2 pt-1.5 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+                  {group.label}
+                </div>
               )}
-            </button>
+              {group.ops.map((op) => (
+                <button
+                  key={op.name}
+                  type="button"
+                  className="flex flex-col rounded px-2 py-1 text-left hover:bg-neutral-800"
+                  onClick={() => pick(op)}
+                >
+                  <span className="text-xs">{opLabel(op)}</span>
+                  {op.description && (
+                    <span className="truncate text-[10px] text-neutral-500">{op.description}</span>
+                  )}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       </PopoverContent>

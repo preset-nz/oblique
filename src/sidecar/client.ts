@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { encodeFrame, FrameReassembler } from './frame';
-import { type OpDescriptor, useOpsCacheStore } from './opsCache';
+import { type OpCategory, type OpDescriptor, useOpsCacheStore } from './opsCache';
 import type { SidecarStatusEvent, SidecarTransport } from './transport';
 
 export type SidecarConnStatus = 'up' | 'down';
@@ -113,7 +113,10 @@ export class SidecarClient {
     try {
       const { header } = await this.request({ op: 'list_ops' });
       const ops = Array.isArray(header.ops) ? (header.ops as OpDescriptor[]) : [];
-      useOpsCacheStore.getState().setOps(ops);
+      const categories = Array.isArray(header.categories)
+        ? (header.categories as OpCategory[])
+        : [];
+      useOpsCacheStore.getState().setOps(ops, categories);
     } catch {
       // Sidecar may have flapped again before list_ops landed; the next
       // 'up' event retries.

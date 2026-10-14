@@ -30,6 +30,7 @@ fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f6
         default,
         min,
         max,
+        choice_labels: Default::default(),
         choices: if kind == "enum" {
             vec!["soft".into(), "hard".into()]
         } else {
@@ -44,6 +45,7 @@ fn catalogue() -> Arc<Catalogue> {
         name: "blur".into(),
         label: None,
         description: None,
+        category: None,
         params: vec![
             param("radius", "float", json!(5.0), Some(0.0), Some(100.0)),
             param("steps", "int", json!(3), Some(1.0), Some(10.0)),
@@ -610,6 +612,7 @@ fn an_op_param_named_enabled_cannot_clash_with_the_modifiers_switch() {
             name: "odd".into(),
             label: None,
             description: None,
+            category: None,
             params: vec![param("enabled", "bool", json!(false), None, None)],
         }])),
         MemoryStore::default(),
@@ -1907,6 +1910,7 @@ fn labelled() -> Document<Oblique> {
             name: "gaussian_blur".into(),
             label: Some("Gaussian blur".into()),
             description: None,
+            category: None,
             params: vec![radius],
         }])),
         MemoryStore::default(),
@@ -3547,6 +3551,7 @@ fn a_param_with_only_a_min_keeps_it_and_is_unbounded_above() {
         name: "one_sided".into(),
         label: None,
         description: None,
+        category: None,
         params: vec![
             param("floor", "float", json!(2.0), Some(1.0), None),
             param("ceiling", "float", json!(2.0), None, Some(10.0)),
@@ -4081,6 +4086,11 @@ fn described() -> Document<Oblique> {
     let mut radius = param("radius", "float", json!(5.0), Some(0.0), Some(100.0));
     radius.label = Some("Blur radius".into());
     radius.description = Some("How far each pixel is smeared into its neighbours.".into());
+    let mut edge = param("edge", "enum", json!("soft"), None, None);
+    // "gone" is no choice of this param: the kind must not panic on it
+    edge.choice_labels = [("soft", "Gentle"), ("gone", "Missing")]
+        .map(|(c, l)| (c.to_string(), l.to_string()))
+        .into();
     let bare = param("amount", "float", json!(1.0), Some(0.0), Some(1.0));
     Document::new_in(
         Arc::new(Catalogue(vec![
@@ -4088,12 +4098,14 @@ fn described() -> Document<Oblique> {
                 name: "gaussian_blur".into(),
                 label: Some("Gaussian blur".into()),
                 description: Some("Softens the picture evenly.".into()),
-                params: vec![radius],
+                category: Some("distort".into()),
+                params: vec![radius, edge],
             },
             Op {
                 name: "plain".into(),
                 label: None,
                 description: None,
+                category: None,
                 params: vec![bare],
             },
         ])),
@@ -4111,6 +4123,7 @@ fn an_ops_words_reach_its_kind_and_its_params_reach_their_values() {
     assert_eq!(blur.label.as_deref(), Some("Gaussian blur"));
     assert_eq!(blur.summary.as_deref(), Some("Softens the picture evenly."));
     assert_eq!(blur.group.as_deref(), Some("modifier"));
+    assert_eq!(blur.category.as_deref(), Some("distort"));
     let radius = blur
         .values
         .iter()
@@ -4122,6 +4135,14 @@ fn an_ops_words_reach_its_kind_and_its_params_reach_their_values() {
         Some("How far each pixel is smeared into its neighbours.")
     );
     assert_eq!(radius.unit, None, "the sidecar has no units to carry");
+    assert!(radius.choice_labels.is_empty());
+    let edge = blur.values.iter().find(|v| v.key == "params.edge").unwrap();
+    assert_eq!(edge.choices, ["soft", "hard"]);
+    assert_eq!(
+        edge.choice_labels,
+        [("soft".to_string(), "Gentle".to_string())].into(),
+        "a label for a choice the param has comes across, and one for a choice it lacks is dropped"
+    );
 }
 
 #[test]
@@ -4133,6 +4154,7 @@ fn missing_words_stay_unset() {
         (None, None)
     );
     assert_eq!(plain.group.as_deref(), Some("modifier"));
+    assert_eq!(plain.category, None);
     let amount = plain
         .values
         .iter()

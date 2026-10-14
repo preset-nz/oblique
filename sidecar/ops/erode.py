@@ -15,6 +15,7 @@ from ops._morphology import apply_morphology
 
 @op(
     "erode",
+    category="edges",
     label="Erode",
     description="Eat the layer's shape inward from its edge.",
     writes_alpha=True,

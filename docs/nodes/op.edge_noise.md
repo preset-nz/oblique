@@ -2,6 +2,7 @@
 title: Edge Noise
 node: op.edge_noise
 group: modifier
+category: edges
 summary: Tear and crumble the layer's edge — the interior stays solid.
 thumbnail: img/edge_noise-thumb.webp
 ---

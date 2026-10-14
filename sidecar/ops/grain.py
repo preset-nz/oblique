@@ -18,6 +18,7 @@ _MAX_STD = 128.0
 
 @op(
     "grain",
+    category="film",
     label="Grain",
     description="Seeded, chunky film-grain noise added to the RGB channels.",
     params=[

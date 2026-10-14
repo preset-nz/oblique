@@ -15,6 +15,7 @@ from ops._morphology import apply_morphology
 
 @op(
     "dilate",
+    category="edges",
     label="Dilate",
     description="Grow the layer's shape outward, carrying its edge colour with it.",
     writes_alpha=True,

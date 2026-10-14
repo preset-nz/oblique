@@ -108,6 +108,7 @@ def _cross_talk_matrix(cross_talk: float) -> np.ndarray:
 
 @op(
     "technicolor",
+    category="film",
     label="Dye Transfer",
     description=(
         "Dye-transfer colour from old three-strip and two-strip film: "

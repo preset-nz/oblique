@@ -81,11 +81,12 @@ def test_registered_with_labelled_params():
         assert params[name]["scale"] == "none"
         assert params[name]["label"]
         assert params[name]["description"]
-    # Each stock's character is described on the enum, under its display name
-    # (the picker shows the raw value; the description names the look).
-    shown = {"polaroid_600": "Instant", "sx70": "Instant, Faded"}
+    # Each stock's character is described on the enum under the name the
+    # picker shows, its choice label.
+    labels = params["stock"]["choice_labels"]
+    assert set(labels) == set(STOCKS)
     for stock in STOCKS:
-        assert shown.get(stock, stock) in params["stock"]["description"]
+        assert f"{labels[stock]}:" in params["stock"]["description"]
     assert "polaroid" not in params["stock"]["description"].lower()
     assert "sx70" not in params["stock"]["description"]
 

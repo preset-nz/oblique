@@ -17,6 +17,7 @@ from ops import P, op
 
 @op(
     "gaussian_blur",
+    category="distort",
     label="Gaussian Blur",
     description="Even, soft blur across the RGB channels — alpha stays untouched.",
     params=[

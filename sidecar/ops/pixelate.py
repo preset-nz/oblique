@@ -43,6 +43,7 @@ from ops import P, op
 
 @op(
     "pixelate",
+    category="distort",
     label="Pixelate",
     description="Flat-mean square-cell mosaic — each cell renders as one solid colour.",
     params=[

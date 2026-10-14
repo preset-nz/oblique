@@ -2,6 +2,7 @@
 title: Pixelate
 node: op.pixelate
 group: modifier
+category: distort
 summary: Flat-mean square-cell mosaic — each cell renders as one solid colour.
 thumbnail: img/pixelate-thumb.webp
 ---

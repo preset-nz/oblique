@@ -2,6 +2,7 @@
 title: Invert
 node: op.invert
 group: modifier
+category: colour
 summary: Photographic negative of the RGB channels; alpha untouched.
 thumbnail: img/invert-thumb.webp
 ---

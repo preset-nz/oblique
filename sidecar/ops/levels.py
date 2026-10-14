@@ -11,6 +11,7 @@ from ops import P, op
 
 @op(
     "levels",
+    category="colour",
     label="Levels",
     description="Classic black/white/gamma tonal remap via a single LUT.",
     params=[

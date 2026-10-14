@@ -129,7 +129,7 @@ describe('SidecarClient status handling', () => {
     client = new SidecarClient(transport);
     client.start();
     useSidecarStatusStore.setState({ status: 'down', lastError: undefined });
-    useOpsCacheStore.setState({ ops: [] });
+    useOpsCacheStore.setState({ ops: [], categories: [] });
   });
 
   afterEach(() => {
@@ -158,5 +158,21 @@ describe('SidecarClient status handling', () => {
     await Promise.resolve();
 
     expect(useOpsCacheStore.getState().ops).toEqual(ops);
+  });
+
+  it("caches the sidecar's category list, in its order, beside the ops", async () => {
+    transport.emitStatus({ up: true });
+
+    const id = transport.lastSentId();
+    const ops = [{ name: 'invert', backend: 'python', params: [], category: 'colour' }];
+    const categories = [
+      { id: 'colour', label: 'Colour' },
+      { id: 'film', label: 'Film' },
+    ];
+    transport.emitFrame(encodeFrame({ id, ok: true, ops, categories }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useOpsCacheStore.getState().categories).toEqual(categories);
   });
 });

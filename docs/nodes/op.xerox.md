@@ -2,6 +2,7 @@
 title: Copy of a Copy
 node: op.xerox
 group: modifier
+category: print
 summary: "Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle."
 thumbnail: img/xerox-thumb.webp
 ---

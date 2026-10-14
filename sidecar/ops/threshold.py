@@ -16,6 +16,7 @@ _LUMA_R, _LUMA_G, _LUMA_B = 0.2126, 0.7152, 0.0722
 
 @op(
     "threshold",
+    category="print",
     label="Threshold",
     description="Hard (or smoothstepped) luminance cut to pure black and white.",
     params=[

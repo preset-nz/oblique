@@ -21,6 +21,7 @@ _DEFAULT_COLOUR_RGB01 = hex_to_rgb01(_DEFAULT_COLOUR, (0.0, 0.0, 0.0))
 
 @op(
     "colourise",
+    category="colour",
     label="Colourise",
     description="Tint the image with a single ink, keeping the source luminance.",
     params=[

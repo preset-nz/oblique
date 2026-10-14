@@ -2,6 +2,7 @@
 title: Gaussian Blur
 node: op.gaussian_blur
 group: modifier
+category: distort
 summary: Even, soft blur across the RGB channels — alpha stays untouched.
 thumbnail: img/gaussian_blur-thumb.webp
 ---

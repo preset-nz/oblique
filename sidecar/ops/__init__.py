@@ -61,6 +61,11 @@ class ParamSpec:
     # optional on the wire: the UI falls back to `name` when absent.
     label: str | None = None
     description: str | None = None
+    # Display labels for some of an enum param's choices, `{choice: label}`.
+    # The stored value stays the choice; only the picker's text changes
+    # (`polaroid_600` shown as "Instant"). A choice without a label shows as
+    # itself. Validated at registration — see `_validate_choice_labels`.
+    choice_labels: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -83,6 +88,8 @@ class ParamSpec:
             d["label"] = self.label
         if self.description is not None:
             d["description"] = self.description
+        if self.choice_labels:
+            d["choice_labels"] = dict(self.choice_labels)
         if self.disabled_when is not None:
             # Fresh dict, not a reference to `self.disabled_when` — a caller
             # holding the wire payload must not be able to mutate the spec
@@ -161,6 +168,35 @@ def default_label(name: str) -> str:
 
 
 @dataclass(frozen=True)
+class Category:
+    """One op category: the stable `id` an op names, and the `label` the
+    Add modifier picker shows as a heading."""
+
+    id: str
+    label: str
+
+
+# The one list of op categories, in the order the picker shows them. An op
+# names one by `id` at registration (`@op(..., category="colour")`); an
+# unknown id fails at import. `list_ops` reports this list beside the ops so
+# the UI takes both the order and the headings from here. What an op *is* to
+# someone browsing — separate from the rhizome lane `modifier` every op shares.
+CATEGORIES: tuple[Category, ...] = (
+    Category("colour", "Colour"),
+    Category("print", "Print"),
+    Category("film", "Film"),
+    Category("distort", "Distort"),
+    Category("edges", "Edges"),
+)
+CATEGORY_IDS: frozenset[str] = frozenset(c.id for c in CATEGORIES)
+
+
+def categories_to_list() -> list[dict[str, str]]:
+    """`CATEGORIES` as the wire list `list_ops` reports, in declared order."""
+    return [{"id": c.id, "label": c.label} for c in CATEGORIES]
+
+
+@dataclass(frozen=True)
 class Op:
     name: str
     backend: Literal["python"]
@@ -169,6 +205,9 @@ class Op:
     label: str = ""
     description: str = ""
     writes_alpha: bool = False
+    # An id from `CATEGORIES`; None only for the `debug_` canaries, which no
+    # picker shows (a test holds every other op to having one).
+    category: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -180,6 +219,8 @@ class Op:
         }
         if self.description:
             d["description"] = self.description
+        if self.category:
+            d["category"] = self.category
         return d
 
 
@@ -241,6 +282,26 @@ def _validate_disabled_when(
             )
 
 
+def _validate_choice_labels(op_name: str, spec: ParamSpec) -> None:
+    """Validates one param's `choice_labels` at registration time: only enum
+    params carry them, and every key must be one of the param's choices."""
+    labels = spec.choice_labels
+    if not labels:
+        return
+
+    if spec.type != "enum" or spec.choices is None:
+        raise ValueError(
+            f"{op_name}.{spec.name}: choice_labels only applies to an enum param"
+        )
+
+    unknown = [choice for choice in labels if choice not in spec.choices]
+    if unknown:
+        raise ValueError(
+            f"{op_name}.{spec.name}: choice_labels names {unknown}, which are "
+            f"not in its choices {spec.choices}"
+        )
+
+
 def op(
     name: str,
     params: list[ParamSpec] | None = None,
@@ -248,13 +309,16 @@ def op(
     label: str = "",
     description: str = "",
     writes_alpha: bool = False,
+    category: str | None = None,
 ) -> Callable[[OpFn], OpFn]:
     """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray.
 
     `label`/`description` are presentation-only metadata surfaced through
     `list_ops` — the stable identifier for scene files, scope keys and
     dispatch stays `name`, always. When `label` is omitted, one is derived
-    from `name` at serialisation time (see `default_label`).
+    from `name` at serialisation time (see `default_label`). `category` is an
+    id from `CATEGORIES`, which groups the op in the Add modifier picker; an
+    unknown id raises at registration.
 
     Ops are pure, deterministic (seeded randomness only), same-size RGBA8
     in and out, and never mutate their input. By default they also leave
@@ -263,11 +327,17 @@ def op(
     unchanged.
     """
 
+    if category is not None and category not in CATEGORY_IDS:
+        raise ValueError(
+            f"{name}: unknown category {category!r}; known: {[c.id for c in CATEGORIES]}"
+        )
+
     def decorator(fn: OpFn) -> OpFn:
         param_list = params or []
         params_by_name = {p.name: p for p in param_list}
         for spec in param_list:
             _validate_disabled_when(name, spec, params_by_name)
+            _validate_choice_labels(name, spec)
 
         OPS[name] = Op(
             name=name,
@@ -277,6 +347,7 @@ def op(
             label=label,
             description=description,
             writes_alpha=writes_alpha,
+            category=category,
         )
         return fn
 

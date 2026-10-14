@@ -2,6 +2,7 @@
 title: Colour keep
 node: op.colour_keep
 group: modifier
+category: colour
 summary: Turn everything greyscale except the chosen colours.
 thumbnail: img/colour_keep-thumb.webp
 ---

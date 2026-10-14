@@ -29,6 +29,7 @@ import { useOpsCacheStore } from '@/sidecar/opsCache';
 export function StackPanel() {
   const nodes = useSceneStore((s) => s.scene.nodes);
   const ops = useOpsCacheStore((s) => s.ops);
+  const categories = useOpsCacheStore((s) => s.categories);
   const selection = useSelectionStore((s) => s.selection);
   const selectNode = useSelectionStore((s) => s.selectNode);
   const reorderModifier = useSceneStore((s) => s.reorderModifier);
@@ -110,7 +111,7 @@ export function StackPanel() {
         {isPixelNode(node) && <ImageInspector node={node} />}
         {isTextNode(node) && <TextInspector node={node} />}
 
-        <AddModifier nodeId={node.id} ops={ops} disabled={locked} />
+        <AddModifier nodeId={node.id} ops={ops} categories={categories} disabled={locked} />
 
         {displayModifiers.length === 0 && (
           <div className="px-1 py-2 text-xs text-neutral-500">No modifiers yet.</div>

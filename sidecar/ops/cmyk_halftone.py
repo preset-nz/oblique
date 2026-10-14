@@ -105,6 +105,7 @@ def _screen_channel(
 
 @op(
     "cmyk_halftone",
+    category="print",
     label="CMYK Halftone",
     description=(
         "Prints the picture as the four dot screens of CMYK, at the classic "

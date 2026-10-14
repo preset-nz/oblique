@@ -2,6 +2,7 @@
 title: Dilate
 node: op.dilate
 group: modifier
+category: edges
 summary: Grow the layer's shape outward, carrying its edge colour with it.
 thumbnail: img/dilate-thumb.webp
 ---

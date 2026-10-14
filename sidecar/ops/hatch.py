@@ -1106,6 +1106,7 @@ def _coverage(
 
 @op(
     "hatch",
+    category="print",
     label="Hatch",
     description=(
         "Redraw tone as pen marks — hatched lines, dashes, crosses or "

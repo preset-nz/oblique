@@ -71,6 +71,7 @@ from ops._blur import soften
 
 @op(
     "bloom",
+    category="film",
     label="Bloom",
     description="Bright areas bleed light into their surroundings.",
     writes_alpha=True,

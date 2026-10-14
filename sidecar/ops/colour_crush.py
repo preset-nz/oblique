@@ -64,6 +64,7 @@ def _tiled_bayer(h: int, w: int) -> np.ndarray:
 
 @op(
     "colour_crush",
+    category="colour",
     label="Colour Crush",
     description="Per-channel bit-depth reduction — posterise's meaner sibling, with optional Bayer dither.",
     params=[

@@ -152,6 +152,31 @@ describe('opParamsToSchema', () => {
     });
   });
 
+  it('shows a choice by its label when the sidecar sent one, and by its value otherwise', () => {
+    const descriptor: OpDescriptor = {
+      name: 'labelled_choice_op',
+      backend: 'python',
+      params: [
+        {
+          name: 'stock',
+          type: 'enum',
+          default: 'polaroid_600',
+          scale: 'none',
+          choices: ['polaroid_600', 'expired'],
+          choice_labels: { polaroid_600: 'Instant' },
+        },
+      ],
+    };
+    const field = opParamsToSchema(descriptor).groups[0].rows[0];
+    expect(field).toMatchObject({
+      kind: 'select',
+      options: [
+        { value: 'polaroid_600', label: 'Instant' },
+        { value: 'expired', label: 'expired' },
+      ],
+    });
+  });
+
   it('maps a color param to the color kind, no per-op TypeScript needed', () => {
     const field = schema.groups[0].rows[6];
     expect(field).toMatchObject({ kind: 'color', id: 'ink' });

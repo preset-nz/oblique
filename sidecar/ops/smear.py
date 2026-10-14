@@ -54,6 +54,7 @@ from ops import P, op
 
 @op(
     "smear",
+    category="distort",
     label="Smear",
     description="The scanner head stalled: sample one row or column and repeat it across the frame.",
     writes_alpha=True,

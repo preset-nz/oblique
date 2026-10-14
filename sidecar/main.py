@@ -16,7 +16,7 @@ from typing import Any
 from handlers.cook import handle_cook
 from handlers.segment import handle_segment
 from handlers.select_colour import handle_select_colour
-from ops import OPS
+from ops import OPS, categories_to_list
 from protocol import read_frame, stdin_buffer, stdout_buffer, write_frame
 
 VERSION = "0.1.0"
@@ -30,7 +30,12 @@ def handle_list_ops(
     header: dict[str, Any], payload: bytes
 ) -> tuple[dict[str, Any], bytes]:
     ops = [op.to_dict() for op in OPS.values()]
-    return {"id": header["id"], "ok": True, "ops": ops}, b""
+    return {
+        "id": header["id"],
+        "ok": True,
+        "ops": ops,
+        "categories": categories_to_list(),
+    }, b""
 
 
 def dispatch(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any], bytes]:

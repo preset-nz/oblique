@@ -2,6 +2,7 @@
 title: Film stock
 node: op.film_stock
 group: modifier
+category: film
 summary: "Grades the picture like a named film stock: tone curves with lifted blacks, a colour cross-mix, split-toned shadows and highlights, a vignette and grain."
 thumbnail: img/film_stock-thumb.webp
 ---
@@ -14,7 +15,7 @@ Grades the picture like a named film stock: tone curves with lifted blacks, a co
 | Control | Range | Default | What it does |
 |---|---|---|---|
 | Enabled | on or off | on | Turns the effect on or off without losing its settings. |
-| Stock | polaroid_600, sx70, cross_process, bleach_bypass, expired | polaroid_600 | Instant: milky lifted blacks, cyan-green shadows, warm creamy highlights, low contrast. Instant, Faded: warmer and more faded, with amber highlights and brown shadows. cross_process: slide film in the wrong chemistry, with hard contrast, blue shadows and yellow-green highlights. bleach_bypass: silver left in, so the colour is mostly gone and the contrast is hard and metallic. expired: faded old stock with a seeded colour shift and a magenta or cyan cast. |
+| Stock | Instant (`polaroid_600`), Instant, Faded (`sx70`), Cross Process (`cross_process`), Bleach Bypass (`bleach_bypass`), Expired (`expired`) | Instant (`polaroid_600`) | Instant: milky lifted blacks, cyan-green shadows, warm creamy highlights, low contrast. Instant, Faded: warmer and more faded, with amber highlights and brown shadows. Cross Process: slide film in the wrong chemistry, with hard contrast, blue shadows and yellow-green highlights. Bleach Bypass: silver left in, so the colour is mostly gone and the contrast is hard and metallic. Expired: faded old stock with a seeded colour shift and a magenta or cyan cast. |
 | Amount | 0 to 1, or more | 1 | How much of the stock's colour grade is mixed in. 0 leaves the colours as they were; 1 is the full stock. Vignette and grain have their own sliders. |
 | Grain | 0 to 1, or more | 0.5 | Film grain, as a share of the stock's own. 1 is the stock's full grain; 0 is none. The specks keep the same size relative to the picture at any resolution. |
 | Vignette | 0 to 1, or more | 0.5 | Edge darkening, as a share of the stock's own. 1 is the stock's full vignette; 0 is none. It follows the frame, so it looks the same at any resolution. |
@@ -29,8 +30,8 @@ Grades the picture the way a particular photographic film would have rendered it
 
 **The stocks.**
 
-- **Instant** (picker value `polaroid_600`): milky lifted blacks that lean cyan-green, creamy highlights, low contrast. The instant-film snapshot.
-- **Instant, Faded** (picker value `sx70`): warmer and more faded than Instant, with brown shadows and amber highlights. The look of the folding instant cameras of the 1970s.
+- **Instant**: milky lifted blacks that lean cyan-green, creamy highlights, low contrast. The instant-film snapshot.
+- **Instant, Faded**: warmer and more faded than Instant, with brown shadows and amber highlights. The look of the folding instant cameras of the 1970s.
 - **cross_process**: slide film developed in the chemistry meant for colour negative film, which was done on purpose for its look. Hard contrast, blue shadows, yellow-green highlights, saturated colour.
 - **bleach_bypass**: a lab step that leaves the silver in the print, which strips colour and hardens contrast. Mostly grey, hard and metallic, with grain that carries no colour.
 - **expired**: old film with a faded base. Its colour shift and its cast, magenta or cyan, are picked by Seed, so each seed is a different roll.

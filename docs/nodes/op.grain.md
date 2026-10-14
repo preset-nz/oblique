@@ -2,6 +2,7 @@
 title: Grain
 node: op.grain
 group: modifier
+category: film
 summary: Seeded, chunky film-grain noise added to the RGB channels.
 thumbnail: img/grain-thumb.webp
 ---

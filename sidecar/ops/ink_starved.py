@@ -35,6 +35,7 @@ def _separate(rgb: np.ndarray) -> dict[str, np.ndarray]:
 
 @op(
     "ink_starved",
+    category="print",
     label="Ink Starved",
     description="The printer running dry: ink coverage fades along one axis, with worn-roller banding.",
     params=[

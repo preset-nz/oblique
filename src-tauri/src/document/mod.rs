@@ -92,6 +92,10 @@ pub struct Op {
     /// One sentence on what the op does to the picture. Optional on the wire.
     #[serde(default)]
     pub description: Option<String>,
+    /// What the op is to someone browsing (`colour`, `film`): an id from the sidecar's
+    /// category list. Optional on the wire.
+    #[serde(default)]
+    pub category: Option<String>,
     pub params: Vec<OpParam>,
 }
 
@@ -112,6 +116,9 @@ pub struct OpParam {
     pub max: Option<f64>,
     #[serde(default)]
     pub choices: Vec<String>,
+    /// Display labels for some of the choices, by choice. Optional on the wire.
+    #[serde(default)]
+    pub choice_labels: std::collections::BTreeMap<String, String>,
 }
 
 /// The op catalogue: what modifier kinds exist (rhizome decision 52).
@@ -175,6 +182,16 @@ fn param_spec(p: &OpParam) -> Option<ValueSpec> {
     }
     if let Some(description) = &p.description {
         spec = spec.description(description);
+    }
+    if !p.choice_labels.is_empty() {
+        let labels: Vec<(&str, &str)> = p
+            .choice_labels
+            .iter()
+            // a label for a choice the param lacks is dropped, not a panic on a bad catalogue
+            .filter(|(choice, _)| p.choices.contains(choice))
+            .map(|(choice, label)| (choice.as_str(), label.as_str()))
+            .collect();
+        spec = spec.choice_labels(&labels);
     }
     Some(spec)
 }
@@ -462,6 +479,9 @@ impl ObjectModel for Oblique {
             }
             if let Some(description) = &op.description {
                 t = t.summary(description);
+            }
+            if let Some(category) = &op.category {
+                t = t.category(category);
             }
             t = t
                 .bool("enabled", true)

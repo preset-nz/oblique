@@ -289,6 +289,7 @@ def _grain_noise(h: int, w: int, seed: int, colour: float) -> np.ndarray:
 
 @op(
     "film_stock",
+    category="film",
     label="Film stock",
     description=(
         "Grades the picture like a named film stock: tone curves with lifted "
@@ -301,13 +302,20 @@ def _grain_noise(h: int, w: int, seed: int, colour: float) -> np.ndarray:
             "enum",
             default="polaroid_600",
             choices=tuple(_STOCKS),
+            choice_labels={
+                "polaroid_600": "Instant",
+                "sx70": "Instant, Faded",
+                "cross_process": "Cross Process",
+                "bleach_bypass": "Bleach Bypass",
+                "expired": "Expired",
+            },
             label="Stock",
             description=(
                 "Instant: milky lifted blacks, cyan-green shadows, warm creamy highlights, low contrast. "
                 "Instant, Faded: warmer and more faded, with amber highlights and brown shadows. "
-                "cross_process: slide film in the wrong chemistry, with hard contrast, blue shadows and yellow-green highlights. "
-                "bleach_bypass: silver left in, so the colour is mostly gone and the contrast is hard and metallic. "
-                "expired: faded old stock with a seeded colour shift and a magenta or cyan cast."
+                "Cross Process: slide film in the wrong chemistry, with hard contrast, blue shadows and yellow-green highlights. "
+                "Bleach Bypass: silver left in, so the colour is mostly gone and the contrast is hard and metallic. "
+                "Expired: faded old stock with a seeded colour shift and a magenta or cyan cast."
             ),
         ),
         P(

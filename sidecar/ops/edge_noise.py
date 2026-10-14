@@ -58,6 +58,7 @@ from ops._warp import bilinear_sample as _bilinear_sample
 
 @op(
     "edge_noise",
+    category="edges",
     label="Edge Noise",
     description="Tear and crumble the layer's edge — the interior stays solid.",
     writes_alpha=True,

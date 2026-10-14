@@ -2,6 +2,7 @@
 title: Threshold
 node: op.threshold
 group: modifier
+category: print
 summary: Hard (or smoothstepped) luminance cut to pure black and white.
 thumbnail: img/threshold-thumb.webp
 ---

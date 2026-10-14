@@ -19,6 +19,7 @@ from ops import LUMA_B709, LUMA_G709, LUMA_R709, P, op
 
 @op(
     "desaturate",
+    category="colour",
     label="Desaturate",
     description="Blend the image toward Rec. 709 greyscale by a chosen amount.",
     params=[

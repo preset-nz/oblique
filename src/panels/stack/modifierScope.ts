@@ -73,7 +73,10 @@ function paramToField(spec: OpParamSpec): FieldDef {
         ...base,
         ...described,
         kind: 'select',
-        options: (spec.choices ?? []).map((choice) => ({ value: choice, label: choice })),
+        options: (spec.choices ?? []).map((choice) => ({
+          value: choice,
+          label: spec.choice_labels?.[choice] ?? choice,
+        })),
       } satisfies ModifierSelectFieldDef;
 
     case 'int':

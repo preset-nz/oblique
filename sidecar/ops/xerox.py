@@ -55,6 +55,7 @@ def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
 
 @op(
     "xerox",
+    category="print",
     label="Copy of a Copy",
     description="Copy-of-a-copy generation loss: contrast blowout, threshold drift, skew, toner speckle.",
     params=[

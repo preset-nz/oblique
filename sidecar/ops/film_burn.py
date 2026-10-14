@@ -142,6 +142,7 @@ def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
 
 @op(
     "film_burn",
+    category="film",
     label="Film Burn",
     description="The film stalls in the gate: a blister bubbles up, the emulsion chars, the image burns through.",
     writes_alpha=True,

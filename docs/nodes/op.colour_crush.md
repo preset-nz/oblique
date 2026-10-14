@@ -2,6 +2,7 @@
 title: Colour Crush
 node: op.colour_crush
 group: modifier
+category: colour
 summary: Per-channel bit-depth reduction — posterise's meaner sibling, with optional Bayer dither.
 thumbnail: img/colour_crush-thumb.webp
 ---

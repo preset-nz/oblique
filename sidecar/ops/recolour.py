@@ -34,6 +34,7 @@ _STOP_DEFAULTS_RGB01 = tuple(
 
 @op(
     "recolour",
+    category="colour",
     label="Recolour",
     description="Remap luminance onto an ordered 2-4 colour ramp — the duotone/tritone workhorse.",
     params=[

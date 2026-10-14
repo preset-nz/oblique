@@ -84,6 +84,7 @@ def _band_weight(
 
 @op(
     "colour_keep",
+    category="colour",
     label="Colour keep",
     description="Turn everything greyscale except the chosen colours.",
     params=[

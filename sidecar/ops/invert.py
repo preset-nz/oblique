@@ -11,6 +11,7 @@ from ops import op
 
 @op(
     "invert",
+    category="colour",
     label="Invert",
     description="Photographic negative of the RGB channels; alpha untouched.",
 )
