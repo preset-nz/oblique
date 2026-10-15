@@ -5,7 +5,7 @@ Local-first image editor built around a modifier stack. Tauri 2 + React 19 + Typ
 ## Where the truth lives
 
 - **Design & plans:** `~/rhizomatic-preset/guidance/projects/oblique/` — NOT in this repo.
-  - `design/architecture.md` — locked decisions (Canvas 2D compositor, sidecar frame protocol, backend-tagged ops, dirty rules, no DB). Read it before implementing anything; do not re-litigate locked decisions in code.
+  - `design/architecture.md` — locked decisions (Canvas 2D compositor, sidecar frame protocol, backend-tagged ops, dirty rules, no DB). Read it before implementing anything; follow them, and raise one that looks wrong rather than working around it (leans, not law: `~/.claude/CLAUDE.md`).
   - `features/NN-*/` — epics and feature stories. Work is story-driven: implement exactly one story's scope against its acceptance criteria.
 
 ## Workflow
