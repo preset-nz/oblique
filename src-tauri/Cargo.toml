@@ -29,9 +29,7 @@ fontdb = "0.24"
 ttf-parser = "0.25"
 
 rustybuzz = "0.20"
-# The document lives in rhizome (Epic 21). The [patch.crates-io] below points it at the sibling
-# checkout in packages/ until the next publish (family rule: path dependencies are allowed,
-# 2026-10-12); the patch wins over these versions.
+# The document lives in rhizome (Epic 21), taken from crates.io.
 rhizome-core = "0.1.6"
 rhizome-pom = "0.1.6"
 rhizome-pom-tauri = "0.1.6"
