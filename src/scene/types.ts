@@ -196,7 +196,7 @@ export function isTextNode(node: SceneNode): node is TextNode {
   return node.type === 'text';
 }
 
-// Epic 08 will replace this with the real Camera type from the source spec;
+// Epic 08 will replace this with the real Camera type (guidance: design/scene-data-model.md, Camera);
 // `never` keeps `cameras` strictly empty (and tsc-clean) until then.
 export type Camera = never;
 
