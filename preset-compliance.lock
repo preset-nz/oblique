@@ -6,11 +6,11 @@ version = 1
 [[inputs]]
 path = "docs/gen/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "4c17c5e6306b7c3cab29fae61eddf8643a1c6f67a2ec85e53320e2c166293715"
+sha256 = "fad59706499a3930fda6e8bdb0a89274a1b9d538ca600d36d9c2fee7aef00666"
 
 [[inputs]]
 path = "docs/gen/Cargo.toml"
-sha256 = "b309595dc76768426d7266528f70f8838bf09c39886fca12e59c66c826941a8f"
+sha256 = "68589d7965d32ecfb6f5d9bad2651c7214281805a67f8c3746ada2a66d113348"
 
 [[inputs]]
 path = "pnpm-lock.yaml"
@@ -38,7 +38,7 @@ sha256 = "216a752618626bd5aef85c132cd8b2ee9507953dc049273965d5867f1fde7e25"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "64026e6b48b7b3d40164fb1d024ddb179b175f854e5bd33a9b22e9136461e14e"
+sha256 = "cc6f8d8a5295f8738a5a002d0091d0e919aec2a5ed3d5e23b6df986861b86377"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2243,8 +2243,8 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "preset-docs"
-version = "0.1.0"
-source = "path"
+version = "0.1.1"
+source = "registry"
 declared = "MIT"
 scope = "shipped"
 

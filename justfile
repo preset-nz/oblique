@@ -31,7 +31,7 @@ run:
 # Node pages (docs/nodes/) from the words the kinds carry; the op kinds are read from
 # the sidecar through uv. Rewrites each page's generated block and leaves the prose
 # around it. The generator is its own crate (docs/gen) and the only thing that needs
-# preset-docs, checked out at ../../packages/preset-docs (family-alignment: "preset-docs is optional").
+# preset-docs, from crates.io (family-alignment: "preset-docs is optional").
 [group('docs')]
 docs:
     cargo run -q --manifest-path docs/gen/Cargo.toml

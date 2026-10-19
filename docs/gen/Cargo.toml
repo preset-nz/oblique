@@ -13,6 +13,5 @@ publish = false
 oblique = { path = "../../src-tauri" }
 rhizome-core = "0.1.6"
 rhizome-pom = "0.1.6"
-# By path until preset-docs is first published (runbooks/pending-releases.md).
-preset-docs = { path = "../../../../packages/preset-docs", features = ["rhizome"] }
+preset-docs = { version = "0.1", features = ["rhizome"] }
 
