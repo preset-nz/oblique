@@ -10,7 +10,7 @@ sha256 = "fad59706499a3930fda6e8bdb0a89274a1b9d538ca600d36d9c2fee7aef00666"
 
 [[inputs]]
 path = "docs/gen/Cargo.toml"
-sha256 = "68589d7965d32ecfb6f5d9bad2651c7214281805a67f8c3746ada2a66d113348"
+sha256 = "f317741be46eb0cf9f65141e463656ac7fb4a30d3425bbe2ab19f79a9c446aa2"
 
 [[inputs]]
 path = "pnpm-lock.yaml"

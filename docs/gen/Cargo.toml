@@ -1,6 +1,6 @@
 # `just docs`: the node pages in docs/nodes/. Its own crate, outside the src-tauri package and
 # not a workspace member, so the app builds and tests without preset-docs (family requirement
-# "preset-docs is optional", 2026-10-14). Nothing in src-tauri names this crate.
+# "preset-docs comes from crates.io and stays out of the app's build graph", 2026-10-20). Nothing in src-tauri names this crate.
 [package]
 name = "oblique-docs"
 version = "0.0.0"
