@@ -62,8 +62,7 @@ check:
     # output isn't there, and checking doesn't need it. An existing build is left alone.
     mkdir -p sidecar/dist/oblique-sidecar
     cargo test --manifest-path src-tauri/Cargo.toml --lib
-    # preset-docs is optional: a clone without it skips the node-page check.
-    if [ -d ../../packages/preset-docs ]; then just docs-check; else echo "docs-check: skipped (../../packages/preset-docs not present)"; fi
+    just docs-check
     ./node_modules/.bin/depcruise src
     just licences
 
