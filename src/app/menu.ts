@@ -1,6 +1,7 @@
 import { type Binding, useCommands } from '@preset.nz/app-kit/core';
 import { useMemo } from 'react';
 import { usePanelStore } from '@/app/panelState';
+import { useSelectionFillStore } from '@/canvas/selectionFillState';
 import { useSnapStore } from '@/canvas/snapState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
@@ -26,8 +27,8 @@ import { isPixelNode } from '@/scene/types';
  * `command` event carrying the id; `useCommands` finds the binding here and runs it when it is
  * enabled, and pushes the enabled and ticked state back to the menu. So this module is only
  * `id -> what it does`, plus the two items whose state follows the app: Replace Image… (enabled
- * while an unlocked image layer is selected) and the View ticks: Snap to Layers (the snap store's)
- * and the two side panels (`app/panelState.ts`).
+ * while an unlocked image layer is selected) and the View ticks: Snap to Layers (the snap store's),
+ * Show Selection Fill (the selection fill store's) and the two side panels (`app/panelState.ts`).
  *
  * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
  * history in Rust; the host tells the webview with `history-stepped` and `rhizome/rhizome.ts`
@@ -95,6 +96,8 @@ export interface MenuState {
   replaceableImage: boolean;
   /** Snap to Layers is on: its tick. */
   snapToLayers: boolean;
+  /** Show Selection Fill is on: its tick. */
+  selectionFill: boolean;
   /** The left panel (tool rail) is showing: its tick. */
   leftPanel: boolean;
   /** The right panel (tabbed side panel) is showing: its tick. */
@@ -147,6 +150,13 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
       pressed: state.snapToLayers,
       run: () => useSnapStore.getState().setEnabled(!useSnapStore.getState().enabled),
     },
+    // View → Show Selection Fill (selection-fill-overlay.md): the same shape as Snap to Layers.
+    // View state, so not an undo step and it doesn't dirty the document.
+    'view-selection-fill': {
+      pressed: state.selectionFill,
+      run: () =>
+        useSelectionFillStore.getState().setEnabled(!useSelectionFillStore.getState().enabled),
+    },
     // Layer menu (drag-reorder.md)
     'layer-forward': run(() => moveSelectedLayer('forward')),
     'layer-backward': run(() => moveSelectedLayer('backward')),
@@ -176,7 +186,7 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
 
 /**
  * Binds the menu to the app: call once, from `App`. Follows the selection (Replace Image…), the
- * snap store and the panel store (the ticks), and keeps text-field undo routed.
+ * snap, selection fill and panel stores (the ticks), and keeps text-field undo routed.
  */
 export function useMenuCommands(): void {
   const selectedId = useSelectionStore((s) =>
@@ -187,11 +197,12 @@ export function useMenuCommands(): void {
     return node !== undefined && isPixelNode(node) && node.state !== 'locked';
   });
   const snapToLayers = useSnapStore((s) => s.enabled);
+  const selectionFill = useSelectionFillStore((s) => s.enabled);
   const leftPanel = usePanelStore((s) => s.left);
   const rightPanel = usePanelStore((s) => s.right);
   const bindings = useMemo(
-    () => menuBindings({ replaceableImage, snapToLayers, leftPanel, rightPanel }),
-    [replaceableImage, snapToLayers, leftPanel, rightPanel],
+    () => menuBindings({ replaceableImage, snapToLayers, selectionFill, leftPanel, rightPanel }),
+    [replaceableImage, snapToLayers, selectionFill, leftPanel, rightPanel],
   );
   useCommands(bindings);
 }

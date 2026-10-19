@@ -46,6 +46,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("view-fit", "CmdOrCtrl+0"),
     ("view-actual", "CmdOrCtrl+Alt+0"),
     ("view-snap-layers", "CmdOrCtrl+;"),
+    // Selection fill (selection-fill-overlay.md): unbound in the menu standard and in Oblique.
+    ("view-selection-fill", "CmdOrCtrl+Shift+H"),
     // Layer order (drag-reorder.md): Opt+Up and Opt+Down everywhere, Shift with them for the
     // ends of the stack (menu standard decision 3). Forward is earlier in the stack, where
     // index 0 is the top, so these are app-kit's `MOVE_EARLIER` and `MOVE_LATER`. Cmd+[ and
@@ -67,7 +69,8 @@ fn item(id: &str, label: &str) -> Command {
     }
 }
 
-/// A check item, ticked to start with: View > Snap to Layers (snapping.md) and the two panels.
+/// A check item, ticked to start with: View > Snap to Layers (snapping.md), Show Selection Fill
+/// and the two panels.
 /// The webview's store owns the state, and the menu is told it back (`useCommands`).
 fn toggle(id: &str, label: &str) -> Command {
     let c = Command::toggle(id, label);
@@ -106,6 +109,9 @@ pub fn commands() -> Vec<Command> {
         view("view-fit", "Fit in Window", 2),
         view("view-actual", "Actual Size", 2),
         toggle("view-snap-layers", "Snap to Layers")
+            .menu(MenuName::View)
+            .section(3),
+        toggle("view-selection-fill", "Show Selection Fill")
             .menu(MenuName::View)
             .section(3),
         layer("layer-forward", "Bring Forward", 0),
@@ -272,6 +278,7 @@ mod tests {
             "view-fit",
             "view-actual",
             "view-snap-layers",
+            "view-selection-fill",
             "view-left-panel",
             "view-right-panel",
             "layer-forward",

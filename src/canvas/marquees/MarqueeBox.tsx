@@ -1,7 +1,10 @@
 import { useRef } from 'react';
 import { useMarqueeStateStore } from '@/scene/marquee';
 import { CURSOR_FOR_HANDLE, type HandleId, SCALE_HANDLES } from '../boxHandles';
+import { SelectionFill } from '../SelectionFill';
 import {
+  closedPolylinePath,
+  ellipsePath,
   moveRect,
   type Point,
   type Rect,
@@ -86,6 +89,7 @@ export function MarqueeBox({ kind, rect, viewScale, toDoc }: MarqueeBoxProps) {
 
   return (
     <g data-testid={`${kind}-marquee`}>
+      <SelectionFill d={kind === 'rect' ? closedPolylinePath(corners) : ellipsePath(rect)} />
       {kind === 'rect' ? (
         <polygon
           points={outlinePoints}

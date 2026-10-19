@@ -20,7 +20,13 @@ const APP_KITS = ['app.settings', 'edit.undo', 'edit.redo'];
 /** File's own commands, which app-kit runs in Rust against the document host. */
 const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 
-const state = { replaceableImage: false, snapToLayers: true, leftPanel: true, rightPanel: true };
+const state = {
+  replaceableImage: false,
+  snapToLayers: true,
+  selectionFill: true,
+  leftPanel: true,
+  rightPanel: true,
+};
 
 describe('the menu bindings against the command table', () => {
   it('reads the table out of menu.rs', () => {
@@ -74,6 +80,21 @@ describe('the state the menu shows', () => {
     expect(useSnapStore.getState().enabled).toBe(false);
     menuBindings(state)['view-snap-layers'].run?.();
     expect(useSnapStore.getState().enabled).toBe(true);
+  });
+
+  it('ticks Show Selection Fill from its store, and a click flips the store', async () => {
+    const { useSelectionFillStore } = await import('@/canvas/selectionFillState');
+    expect(menuBindings({ ...state, selectionFill: true })['view-selection-fill'].pressed).toBe(
+      true,
+    );
+    expect(menuBindings({ ...state, selectionFill: false })['view-selection-fill'].pressed).toBe(
+      false,
+    );
+    useSelectionFillStore.getState().setEnabled(true);
+    menuBindings(state)['view-selection-fill'].run?.();
+    expect(useSelectionFillStore.getState().enabled).toBe(false);
+    menuBindings(state)['view-selection-fill'].run?.();
+    expect(useSelectionFillStore.getState().enabled).toBe(true);
   });
 });
 

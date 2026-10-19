@@ -126,6 +126,20 @@ export function rectCorners(rect: Rect): Point[] {
   return boxCornersFor(toWorld, { w: rect.w, h: rect.h });
 }
 
+/** SVG path data for a closed polygon: `M x,y L x,y … Z`. Empty for no points. */
+export function closedPolylinePath(points: Point[]): string {
+  if (points.length === 0) return '';
+  return `${points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')} Z`;
+}
+
+/** SVG path data for the ellipse inscribed in `rect`: two half-turn arcs, for the selection fill. */
+export function ellipsePath(rect: Rect): string {
+  const rx = rect.w / 2;
+  const ry = rect.h / 2;
+  const cy = rect.y + ry;
+  return `M${rect.x},${cy} A${rx},${ry} 0 1 0 ${rect.x + rect.w},${cy} A${rx},${ry} 0 1 0 ${rect.x},${cy} Z`;
+}
+
 /** True if `point` falls within `rect` — used to tell a click-to-move from a click-to-deselect. */
 export function rectContains(rect: Rect, point: Point): boolean {
   return (

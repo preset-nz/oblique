@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendLassoPoint,
+  closedPolylinePath,
+  ellipsePath,
   isDrawnLasso,
   isDrawnRect,
   isNearStart,
@@ -227,5 +229,24 @@ describe('marquee geometry survives pan/zoom (document-space, no view transform 
     expect(rect).toEqual({ x: 20, y: 20, w: 100, h: 50 });
     expect(corners[2]).toEqual({ x: 120, y: 70 });
     expect(handles.se).toEqual({ x: 120, y: 70 });
+  });
+});
+
+describe('closedPolylinePath / ellipsePath (selection fill)', () => {
+  it('closes a polygon, and is empty for no points', () => {
+    expect(
+      closedPolylinePath([
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 4, y: 2 },
+      ]),
+    ).toBe('M0,0 L4,0 L4,2 Z');
+    expect(closedPolylinePath([])).toBe('');
+  });
+
+  it('draws the inscribed ellipse as two half-turn arcs', () => {
+    expect(ellipsePath({ x: 10, y: 20, w: 100, h: 50 })).toBe(
+      'M10,45 A50,25 0 1 0 110,45 A50,25 0 1 0 10,45 Z',
+    );
   });
 });

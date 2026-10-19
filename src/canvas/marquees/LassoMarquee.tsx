@@ -1,7 +1,8 @@
 import { useRef } from 'react';
 import { useMarqueeStateStore } from '@/scene/marquee';
+import { SelectionFill } from '../SelectionFill';
 import { DASH_SCREEN_PX } from './MarqueeBox';
-import { type Point, translatePoints } from './marqueeGeometry';
+import { closedPolylinePath, type Point, translatePoints } from './marqueeGeometry';
 
 /**
  * Lasso marquee overlay (features/05-selection/marquees.md). Freehand path,
@@ -61,15 +62,19 @@ export function LassoMarquee({ points, closed, viewScale, toDoc }: LassoMarqueeP
   }
 
   return (
-    <path
-      data-testid="lasso-marquee"
-      d={d}
-      fill="transparent"
-      stroke="#38bdf8"
-      strokeWidth={strokeWidth}
-      strokeDasharray={`${DASH_SCREEN_PX * strokeWidth} ${DASH_SCREEN_PX * strokeWidth}`}
-      style={{ pointerEvents: closed ? 'auto' : 'none', cursor: closed ? 'move' : 'default' }}
-      onPointerDown={startMove}
-    />
+    <g>
+      {/* Closed even mid-draw: the implied last segment back to the start. */}
+      <SelectionFill d={closedPolylinePath(points)} />
+      <path
+        data-testid="lasso-marquee"
+        d={d}
+        fill="transparent"
+        stroke="#38bdf8"
+        strokeWidth={strokeWidth}
+        strokeDasharray={`${DASH_SCREEN_PX * strokeWidth} ${DASH_SCREEN_PX * strokeWidth}`}
+        style={{ pointerEvents: closed ? 'auto' : 'none', cursor: closed ? 'move' : 'default' }}
+        onPointerDown={startMove}
+      />
+    </g>
   );
 }
