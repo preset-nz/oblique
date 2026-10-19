@@ -18,7 +18,7 @@ module.exports = {
       comment:
         'Modules nothing imports yet — expected noise early in a layer\'s life (e.g. src/scene ' +
         'before anything consumes it); warn, not error.',
-      from: { orphan: true, pathNot: '\\.(test|spec)\\.[jt]sx?$' },
+      from: { orphan: true, pathNot: ['\\.(test|spec)\\.[jt]sx?$', '\\.d\\.ts$'] },
       to: {},
     },
     {
@@ -82,6 +82,9 @@ module.exports = {
     // A package taken by path (`link:../../packages/…`) resolves outside node_modules; it is
     // checked in its own repo, not cruised here.
     doNotFollow: { path: ['node_modules', '^\\.\\./\\.\\./packages/'] },
+    // typescript 7 is outside dependency-cruiser's supported range, so it parses with swc
+    // (a cruise with the tsc parser silently sees 0 modules).
+    parser: 'swc',
     tsPreCompilationDeps: true,
     tsConfig: { fileName: 'tsconfig.json' },
     enhancedResolveOptions: {
