@@ -1,20 +1,20 @@
 """`segment` handler tests. CI has no weights and no network, so every test
-here monkeypatches `ensure_weights` and `run_segment` at the handler's own
-import site — the ONNX session and the model files are never touched.
-`test_fetch.py`-style checksum-mismatch coverage for `ml.fetch` lives at
-the bottom of this file too (it needs a fake downloader for the same
-network-free reason).
+here stands in a model folder (a `manifest.json` and stub files) and monkeypatches
+`run_segment` at the handler's own import site — the ONNX session and the real
+model files are never touched. Downloads are app-kit's (Rust); the sidecar only
+reads the folder, which the last test pins.
 """
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import handlers.segment as segment_module
 import numpy as np
 import pytest
 from handlers.segment import COARSE_MASK_BYTES, handle_segment
-from ml import fetch
+from ml.session import DECODER_FILENAME, ENCODER_FILENAME, MANIFEST_FILENAME
 from ml.trace import trace_mask
 
 
@@ -23,15 +23,13 @@ def _rgba_payload(h: int, w: int, seed: int = 0) -> bytes:
     return rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8).tobytes()
 
 
-def _fake_weights(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        segment_module,
-        "ensure_weights",
-        lambda model_dir: (
-            Path(model_dir) / "encoder.onnx",
-            Path(model_dir) / "decoder.onnx",
-        ),
-    )
+def _install_model(model_dir: Path) -> str:
+    """A model folder as app-kit leaves it: the two files, then the manifest (written last)."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / ENCODER_FILENAME).write_bytes(b"encoder")
+    (model_dir / DECODER_FILENAME).write_bytes(b"decoder")
+    (model_dir / MANIFEST_FILENAME).write_text('{"id": "mobile_sam"}')
+    return str(model_dir)
 
 
 def _fake_mask(h: int, w: int) -> np.ndarray:
@@ -40,9 +38,11 @@ def _fake_mask(h: int, w: int) -> np.ndarray:
     return mask
 
 
-def test_segment_success_returns_mask_and_polygons(monkeypatch: pytest.MonkeyPatch):
+def test_segment_success_returns_mask_and_polygons(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     w, h = 40, 32
-    _fake_weights(monkeypatch)
+    model_dir = _install_model(tmp_path)
     known_mask = _fake_mask(h, w)
     monkeypatch.setattr(segment_module, "run_segment", lambda **kwargs: known_mask)
 
@@ -51,7 +51,7 @@ def test_segment_success_returns_mask_and_polygons(monkeypatch: pytest.MonkeyPat
         "op": "segment",
         "width": w,
         "height": h,
-        "model_dir": "/fake/models",
+        "model_dir": model_dir,
         "prompt": {
             "points": [{"x": 10, "y": 10, "label": 1}],
             "box": None,
@@ -74,9 +74,11 @@ def test_segment_success_returns_mask_and_polygons(monkeypatch: pytest.MonkeyPat
     assert response_payload == (known_mask.astype(np.uint8) * 255).tobytes()
 
 
-def test_segment_passes_prompt_through_to_run_segment(monkeypatch: pytest.MonkeyPatch):
+def test_segment_passes_prompt_through_to_run_segment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     w, h = 20, 16
-    _fake_weights(monkeypatch)
+    model_dir = _install_model(tmp_path)
     captured: dict = {}
 
     def fake_run_segment(**kwargs):
@@ -94,7 +96,7 @@ def test_segment_passes_prompt_through_to_run_segment(monkeypatch: pytest.Monkey
         "op": "segment",
         "width": w,
         "height": h,
-        "model_dir": "/fake/models",
+        "model_dir": model_dir,
         "prompt": prompt,
     }
     payload = _rgba_payload(h, w)
@@ -107,9 +109,11 @@ def test_segment_passes_prompt_through_to_run_segment(monkeypatch: pytest.Monkey
     assert captured["rgba"].shape == (h, w, 4)
 
 
-def test_segment_decodes_appended_coarse_mask(monkeypatch: pytest.MonkeyPatch):
+def test_segment_decodes_appended_coarse_mask(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     w, h = 20, 16
-    _fake_weights(monkeypatch)
+    model_dir = _install_model(tmp_path)
     captured: dict = {}
 
     def fake_run_segment(**kwargs):
@@ -123,7 +127,7 @@ def test_segment_decodes_appended_coarse_mask(monkeypatch: pytest.MonkeyPatch):
         "op": "segment",
         "width": w,
         "height": h,
-        "model_dir": "/fake/models",
+        "model_dir": model_dir,
         "prompt": {"points": [], "box": None, "mask": True},
     }
     image_payload = _rgba_payload(h, w)
@@ -138,8 +142,10 @@ def test_segment_decodes_appended_coarse_mask(monkeypatch: pytest.MonkeyPatch):
     np.testing.assert_array_equal(captured["coarse_mask"], coarse_mask)
 
 
-def test_segment_rejects_wrong_payload_size(monkeypatch: pytest.MonkeyPatch):
-    _fake_weights(monkeypatch)
+def test_segment_rejects_wrong_payload_size(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    model_dir = _install_model(tmp_path)
     called = False
 
     def fake_run_segment(**kwargs):
@@ -154,7 +160,7 @@ def test_segment_rejects_wrong_payload_size(monkeypatch: pytest.MonkeyPatch):
         "op": "segment",
         "width": 10,
         "height": 10,
-        "model_dir": "/fake/models",
+        "model_dir": model_dir,
         "prompt": {},
     }
 
@@ -166,7 +172,7 @@ def test_segment_rejects_wrong_payload_size(monkeypatch: pytest.MonkeyPatch):
     assert called is False
 
 
-def test_segment_requires_model_dir(monkeypatch: pytest.MonkeyPatch):
+def test_segment_requires_model_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     header = {
         "id": "seg-5",
         "op": "segment",
@@ -181,29 +187,74 @@ def test_segment_requires_model_dir(monkeypatch: pytest.MonkeyPatch):
     assert response_payload == b""
 
 
-def test_segment_surfaces_weight_fetch_failure(monkeypatch: pytest.MonkeyPatch):
-    def boom(model_dir):
-        raise RuntimeError("checksum mismatch")
+def test_segment_without_a_manifest_answers_model_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    # The folder exists with its files but no manifest.json: app-kit writes that last, so this
+    # is a model that was removed or is still downloading. Nothing may touch the network.
+    (tmp_path / ENCODER_FILENAME).write_bytes(b"encoder")
+    (tmp_path / DECODER_FILENAME).write_bytes(b"decoder")
 
-    monkeypatch.setattr(segment_module, "ensure_weights", boom)
+    def no_network(*args, **kwargs):
+        raise AssertionError("the sidecar must not open a connection")
+
+    monkeypatch.setattr(socket, "create_connection", no_network)
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+
+    def no_inference(**kwargs):
+        raise AssertionError("must not run without the model")
+
+    monkeypatch.setattr(segment_module, "run_segment", no_inference)
 
     header = {
         "id": "seg-6",
         "op": "segment",
         "width": 10,
         "height": 10,
-        "model_dir": "/fake/models",
+        "model_dir": str(tmp_path),
         "prompt": {},
     }
     response_header, response_payload = handle_segment(header, _rgba_payload(10, 10))
 
+    assert response_header["id"] == "seg-6"
     assert response_header["ok"] is False
-    assert "checksum mismatch" in response_header["error"]
+    assert response_header["code"] == "model_missing"
+    assert response_header["model"] == "mobile_sam"
+    assert "mobile_sam" in response_header["error"]
     assert response_payload == b""
 
 
-def test_segment_surfaces_inference_failure(monkeypatch: pytest.MonkeyPatch):
-    _fake_weights(monkeypatch)
+def test_segment_with_a_missing_model_dir_answers_model_missing(tmp_path: Path):
+    header = {
+        "id": "seg-8",
+        "op": "segment",
+        "width": 10,
+        "height": 10,
+        "model_dir": str(tmp_path / "not-there"),
+        "prompt": {},
+    }
+    response_header, _ = handle_segment(header, _rgba_payload(10, 10))
+
+    assert response_header["ok"] is False
+    assert response_header["code"] == "model_missing"
+
+
+def test_the_sidecar_opens_no_urls():
+    sidecar = Path(segment_module.__file__).resolve().parent.parent
+    clients = ("urllib", "requests", "http.client", "httpx", "import socket")
+    offenders = [
+        str(path.relative_to(sidecar))
+        for folder in ("handlers", "ml")
+        for path in (sidecar / folder).glob("*.py")
+        if any(client in path.read_text() for client in clients)
+    ]
+    assert offenders == []
+
+
+def test_segment_surfaces_inference_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    model_dir = _install_model(tmp_path)
 
     def boom(**kwargs):
         raise ValueError("bad prompt")
@@ -215,7 +266,7 @@ def test_segment_surfaces_inference_failure(monkeypatch: pytest.MonkeyPatch):
         "op": "segment",
         "width": 10,
         "height": 10,
-        "model_dir": "/fake/models",
+        "model_dir": model_dir,
         "prompt": {},
     }
     response_header, response_payload = handle_segment(header, _rgba_payload(10, 10))
@@ -223,101 +274,3 @@ def test_segment_surfaces_inference_failure(monkeypatch: pytest.MonkeyPatch):
     assert response_header["ok"] is False
     assert "bad prompt" in response_header["error"]
     assert response_payload == b""
-
-
-# --- ml.fetch: checksum verification, no network -----------------------
-
-
-def test_ensure_weights_downloads_missing_files_and_verifies(tmp_path: Path):
-    written: list[tuple[str, Path]] = []
-
-    def fake_downloader(url: str, dest: Path) -> None:
-        written.append((url, dest))
-        # Write bytes that hash to the pinned constants by monkeypatching
-        # the expected hashes instead — simpler and just as faithful to
-        # "verify what got downloaded", see next test for the real pins.
-        dest.write_bytes(b"encoder" if "encoder" in url else b"decoder")
-
-    # Patch the pinned hashes to match our fake payloads so this test
-    # doesn't depend on the real (large) model files.
-    import hashlib
-
-    encoder_sha = hashlib.sha256(b"encoder").hexdigest()
-    decoder_sha = hashlib.sha256(b"decoder").hexdigest()
-
-    orig_encoder_sha, orig_decoder_sha = fetch.ENCODER_SHA256, fetch.DECODER_SHA256
-    fetch.ENCODER_SHA256 = encoder_sha
-    fetch.DECODER_SHA256 = decoder_sha
-    try:
-        encoder_path, decoder_path = fetch.ensure_weights(
-            tmp_path, downloader=fake_downloader
-        )
-    finally:
-        fetch.ENCODER_SHA256 = orig_encoder_sha
-        fetch.DECODER_SHA256 = orig_decoder_sha
-
-    assert encoder_path.read_bytes() == b"encoder"
-    assert decoder_path.read_bytes() == b"decoder"
-    assert len(written) == 2
-
-    # Second call: files already present and valid, no download needed.
-    def fail_downloader(url: str, dest: Path) -> None:
-        raise AssertionError("should not re-download a valid file")
-
-    fetch.ENCODER_SHA256 = encoder_sha
-    fetch.DECODER_SHA256 = decoder_sha
-    try:
-        fetch.ensure_weights(tmp_path, downloader=fail_downloader)
-    finally:
-        fetch.ENCODER_SHA256 = orig_encoder_sha
-        fetch.DECODER_SHA256 = orig_decoder_sha
-
-
-def test_ensure_weights_refuses_and_deletes_a_checksum_mismatch(tmp_path: Path):
-    def fake_downloader(url: str, dest: Path) -> None:
-        dest.write_bytes(b"not the right bytes at all")
-
-    with pytest.raises(RuntimeError, match="checksum verification"):
-        fetch.ensure_weights(tmp_path, downloader=fake_downloader)
-
-    # The bad file must not be left behind for a future ensure_weights call
-    # to wrongly accept.
-    target = tmp_path / fetch.MODEL_SUBDIR / fetch.ENCODER_FILENAME
-    assert not target.exists()
-    part = target.with_name(target.name + ".part")
-    assert not part.exists()
-
-
-def test_ensure_weights_refuses_a_corrupted_existing_file_and_allows_retry(
-    tmp_path: Path,
-):
-    target_dir = tmp_path / fetch.MODEL_SUBDIR
-    target_dir.mkdir(parents=True)
-    encoder_path = target_dir / fetch.ENCODER_FILENAME
-    encoder_path.write_bytes(b"corrupted on disk")
-
-    calls: list[str] = []
-
-    def fake_downloader(url: str, dest: Path) -> None:
-        calls.append(url)
-        dest.write_bytes(b"encoder" if "encoder" in url else b"decoder")
-
-    import hashlib
-
-    orig_encoder_sha, orig_decoder_sha = fetch.ENCODER_SHA256, fetch.DECODER_SHA256
-    fetch.ENCODER_SHA256 = hashlib.sha256(b"encoder").hexdigest()
-    fetch.DECODER_SHA256 = hashlib.sha256(b"decoder").hexdigest()
-    try:
-        with pytest.raises(RuntimeError, match="checksum verification"):
-            fetch.ensure_weights(tmp_path, downloader=fake_downloader)
-        assert not encoder_path.exists()  # bad file deleted, not silently reused
-
-        # Retry: no corrupted file in the way now, download proceeds and succeeds.
-        encoder_path2, decoder_path2 = fetch.ensure_weights(
-            tmp_path, downloader=fake_downloader
-        )
-        assert encoder_path2.read_bytes() == b"encoder"
-        assert decoder_path2.read_bytes() == b"decoder"
-    finally:
-        fetch.ENCODER_SHA256 = orig_encoder_sha
-        fetch.DECODER_SHA256 = orig_decoder_sha

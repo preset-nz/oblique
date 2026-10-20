@@ -1,3 +1,4 @@
+import { ModelsSection } from '@preset.nz/app-kit/models';
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import type { HealthResult } from '@/ai/adapter';
@@ -17,9 +18,11 @@ import { cn } from '@/lib/utils';
 
 /**
  * Settings dialog (Epic 17 story 1 — the second tenant of the "Settings
- * dialog" roadmap gap, the first being cook-timing toggles). One section
- * today, "AI backends": the Draw Things endpoint and a Test connection
- * check. Opened from the native app menu (`Oblique → Settings…`, Cmd+,)
+ * dialog" roadmap gap, the first being cook-timing toggles). Two groups: "AI backends"
+ * (the Draw Things endpoint and a Test connection check) and "Models" (Epic 17 story 2c,
+ * model-downloads.md: app-kit's list of downloaded models, with Remove). Models moves into the
+ * preferences Settings window when Oblique takes preferences (app-kit's README, the
+ * `extraGroups` recipe). Opened from the native app menu (`Oblique → Settings…`, Cmd+,)
  * via `openSettingsDialog`, wired in `src/app/menu.ts` like every other command
  * of Oblique's that app-kit's table does not run itself.
  *
@@ -83,7 +86,8 @@ export function SettingsDialog() {
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            AI backends — where {PRODUCT_NAME} looks for an image server it doesn't run itself.
+            AI backends — where {PRODUCT_NAME} looks for an image server it doesn't run itself — and
+            the models it has downloaded.
           </DialogDescription>
         </DialogHeader>
 
@@ -129,6 +133,11 @@ export function SettingsDialog() {
                 </span>
               )}
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <div className="text-xs font-medium text-neutral-300">Models</div>
+            <ModelsSection />
           </div>
         </div>
       </DialogContent>

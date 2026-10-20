@@ -1,5 +1,5 @@
 import type { SegmentOptions, SegmentResult } from '@/ai/adapter';
-import { sidecarSegmentDriver } from '@/ai/sidecarSegment';
+import { ModelMissingError, sidecarSegmentDriver } from '@/ai/sidecarSegment';
 import type { MarqueeShape } from '@/scene/marquee';
 import { useMarqueeStateStore } from '@/scene/marquee';
 import { bufferPolygonsToDoc, docBoxToBufferBox, docPointsToBuffer } from '../selectShared/coords';
@@ -7,8 +7,6 @@ import { getTargetPayload, type TargetPayload } from '../selectShared/payload';
 import { hasPrompt, useSmartSelectStore } from './state';
 
 const DEBOUNCE_MS = 150;
-/** "pending longer than ~1s" -> the indeterminate downloading state (segment-to-vector.md's client contract). */
-const DOWNLOAD_THRESHOLD_MS = 1000;
 
 export interface SmartSelectControllerDeps {
   getPayload: (nodeId: string) => TargetPayload | undefined;
@@ -30,10 +28,9 @@ export const productionSmartSelectControllerDeps: SmartSelectControllerDeps = {
 /**
  * Debounces the `select-smart` tool's prompt into sidecar `segment`
  * requests (segment-to-vector.md): every points/box/outline-mask edit
- * re-arms a 150ms debounce; once fired, a request pending >= 1s flips the
- * store's status to `'downloading'` (the first-use weights fetch has no
- * progress frames — this is the client's own heuristic, not a real
- * progress signal). Out-of-order responses (a newer edit fired a second
+ * re-arms a 150ms debounce. Nothing downloads here: the model is app-kit's,
+ * asked for before the tool arms (model-downloads.md), and one that has gone
+ * since is a `ModelMissingError` (status `'model_missing'`). Out-of-order responses (a newer edit fired a second
  * request before the first answered) are dropped via a generation counter
  * — same "supersedes the pending one" idea `CookScheduler` uses for cooks.
  *
@@ -43,7 +40,6 @@ export const productionSmartSelectControllerDeps: SmartSelectControllerDeps = {
 export class SmartSelectController {
   private readonly deps: SmartSelectControllerDeps;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private downloadTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private unsubscribe?: () => void;
   private unsubscribeMarquee?: () => void;
@@ -109,9 +105,7 @@ export class SmartSelectController {
 
   private clearTimers(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    if (this.downloadTimer) clearTimeout(this.downloadTimer);
     this.debounceTimer = null;
-    this.downloadTimer = null;
   }
 
   private armDebounce(): void {
@@ -135,10 +129,6 @@ export class SmartSelectController {
 
     const generation = ++this.generation;
     useSmartSelectStore.getState().setStatus('pending');
-    if (this.downloadTimer) clearTimeout(this.downloadTimer);
-    this.downloadTimer = setTimeout(() => {
-      if (this.generation === generation) useSmartSelectStore.getState().setStatus('downloading');
-    }, DOWNLOAD_THRESHOLD_MS);
 
     const bufferPoints = docPointsToBuffer(points, payload.frame).map((p, i) => ({
       x: p.x,
@@ -158,10 +148,6 @@ export class SmartSelectController {
       });
       if (this.generation !== generation) return; // superseded by a newer edit
 
-      if (this.downloadTimer) {
-        clearTimeout(this.downloadTimer);
-        this.downloadTimer = null;
-      }
       useSmartSelectStore.getState().setStatus('idle');
       const docPolygons = bufferPolygonsToDoc(result.polygons, payload.frame);
       if (docPolygons.length > 0) {
@@ -192,9 +178,9 @@ export class SmartSelectController {
       }
     } catch (err) {
       if (this.generation !== generation) return;
-      if (this.downloadTimer) {
-        clearTimeout(this.downloadTimer);
-        this.downloadTimer = null;
+      if (err instanceof ModelMissingError) {
+        useSmartSelectStore.getState().setStatus('model_missing');
+        return;
       }
       useSmartSelectStore
         .getState()

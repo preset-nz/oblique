@@ -33,11 +33,14 @@ rustybuzz = "0.20"
 rhizome-core = "0.1.6"
 rhizome-pom = "0.1.6"
 rhizome-pom-tauri = "0.1.6"
-# The family's app behaviour (Epic 22): Undo/Redo titles, File commands, the close guard. Slice a
-# implements its History and Document on the document host; the menu and install come after.
-# By path until the next release (family requirements, 2026-10-12): 0.1.3's fresh Untitled at
-# launch. A clean clone needs ../packages/app-kit beside initiatives/.
-preset-app-kit = "0.1.3"
+# The family's app behaviour (Epic 22): Undo/Redo titles, File commands, the close guard, and
+# (feature `models`) the machine-wide models folder with its downloads (Epic 17 story 2c).
+preset-app-kit = { version = "0.1.3", features = ["models"] }
+
+# By path until app-kit's next release (models, unreleased; ledger: runbooks/pending-releases.md).
+# A clean clone needs ../packages beside initiatives/.
+[patch.crates-io]
+preset-app-kit = { path = "../../../packages/app-kit" }
 
 [dev-dependencies]
 # A mock app, so the host's emitted events can be heard in tests.

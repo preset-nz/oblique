@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SegmentOptions, SegmentResult } from '@/ai/adapter';
+import { ModelMissingError } from '@/ai/sidecarSegment';
 import { type MarqueeShape, useMarqueeStateStore } from '@/scene/marquee';
 import { frameFor } from '../selectShared/coords';
 import type { TargetPayload } from '../selectShared/payload';
@@ -115,7 +116,7 @@ describe('SmartSelectController', () => {
     controller.stop();
   });
 
-  it('status goes idle -> pending immediately, then downloading after 1s if still unresolved', async () => {
+  it('stays pending while a request is unresolved, however long (nothing downloads)', async () => {
     const { segment } = makeControlledSegment();
     const { deps } = makeDeps({ segment });
     const controller = new SmartSelectController(deps);
@@ -126,16 +127,13 @@ describe('SmartSelectController', () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(useSmartSelectStore.getState().status).toBe('pending');
 
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(useSmartSelectStore.getState().status).toBe('pending');
-
-    await vi.advanceTimersByTimeAsync(2);
-    expect(useSmartSelectStore.getState().status).toBe('downloading');
 
     controller.stop();
   });
 
-  it('a fast response never shows the downloading state', async () => {
+  it('a fast response returns the status to idle', async () => {
     const { segment, resolveNext } = makeControlledSegment();
     const { deps } = makeDeps({ segment });
     const controller = new SmartSelectController(deps);
@@ -149,8 +147,23 @@ describe('SmartSelectController', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(useSmartSelectStore.getState().status).toBe('idle');
 
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(useSmartSelectStore.getState().status).toBe('idle'); // the 1s timer must have been cancelled
+    controller.stop();
+  });
+
+  it('a ModelMissingError (the model was removed while armed) sets model_missing, not an error', async () => {
+    const segment = vi.fn(async () => {
+      throw new ModelMissingError();
+    });
+    const { deps, setMarqueeCalls } = makeDeps({ segment });
+    const controller = new SmartSelectController(deps);
+    controller.start();
+
+    useSmartSelectStore.getState().setTarget('node-a');
+    useSmartSelectStore.getState().addPoint({ x: 1, y: 1 }, 1);
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(useSmartSelectStore.getState()).toMatchObject({ status: 'model_missing', error: null });
+    expect(setMarqueeCalls).toEqual([]);
 
     controller.stop();
   });

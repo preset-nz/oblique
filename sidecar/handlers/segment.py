@@ -9,8 +9,12 @@ both. Response payload is a single-channel u8 mask (0/255) at the same
 size — kept for debugging and for story 3's alpha multiply; `polygons` are
 closed outer contours in the same pixel space, holes dropped (v1).
 
+The weights are not fetched here: `model_dir` is the model's folder in app-kit's models
+folder, and `segment` answers `ok: false` with `code: "model_missing"` (and the model id in
+`model`) when it has no `manifest.json`. Nothing in the sidecar opens a URL.
+
 This module owns all the header parsing and payload byte-slicing for
-`segment` — `ml/` (fetch, session, trace) stays protocol-free: it never
+`segment` — `ml/` (session, trace) stays protocol-free: it never
 sees a request header or raw payload bytes, only NumPy arrays, `Path`s,
 and the already-unpacked `prompt` dict, so it can move into a shared
 package later without carrying this wire format with it.
@@ -22,8 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from ml.fetch import ensure_weights
-from ml.session import run_segment
+from ml.session import MODEL_ID, ModelNotInstalled, run_segment, weight_paths
 from ml.trace import trace_mask
 
 COARSE_MASK_SIDE = 256
@@ -88,13 +91,15 @@ def handle_segment(
         )
 
     try:
-        encoder_path, decoder_path = ensure_weights(Path(model_dir))
-    except Exception as exc:  # noqa: BLE001 - surfaced to caller as ok:false
+        encoder_path, decoder_path = weight_paths(Path(model_dir))
+    except ModelNotInstalled:
         return (
             {
                 "id": request_id,
                 "ok": False,
-                "error": f"failed to fetch model weights: {exc}",
+                "error": f"model not installed: {MODEL_ID}",
+                "code": "model_missing",
+                "model": MODEL_ID,
             },
             b"",
         )

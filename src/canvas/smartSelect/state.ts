@@ -28,7 +28,11 @@ export interface SmartSelectBox {
   y1: number;
 }
 
-export type SmartSelectStatus = 'idle' | 'pending' | 'downloading' | 'error';
+/**
+ * `model_missing`: MobileSAM was removed while the tool was armed (model-downloads.md). Choosing
+ * the tool again asks to download it.
+ */
+export type SmartSelectStatus = 'idle' | 'pending' | 'model_missing' | 'error';
 
 interface SmartSelectState {
   /** The node being segmented — the tool's selected node at activation (must stay selected). */

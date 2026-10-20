@@ -62,8 +62,8 @@ describe('smartSelect state store', () => {
   });
 
   it('setStatus records status and an optional error, clearing error when absent', () => {
-    useSmartSelectStore.getState().setStatus('downloading');
-    expect(useSmartSelectStore.getState()).toMatchObject({ status: 'downloading', error: null });
+    useSmartSelectStore.getState().setStatus('model_missing');
+    expect(useSmartSelectStore.getState()).toMatchObject({ status: 'model_missing', error: null });
     useSmartSelectStore.getState().setStatus('error', 'sidecar not running');
     expect(useSmartSelectStore.getState()).toMatchObject({
       status: 'error',

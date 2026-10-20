@@ -64,8 +64,12 @@ module.exports = {
         '2026-10-01, Epic 20: `fonts/fontsIpc.ts` is the one other sanctioned `invoke` caller ' +
         '(font catalogue + outlines); it is not frame IPC. ' +
         '2026-10-07, Epic 21: `rhizome/transport.ts` is the third (the document host: ' +
-        'pom_* commands and the commit/status events); it is not frame IPC either.',
-      from: { pathNot: '^src/(sidecar/tauriTransport|fonts/fontsIpc|rhizome/transport)\\.ts$' },
+        'pom_* commands and the commit/status events); it is not frame IPC either. ' +
+        '2026-10-21, Epic 17 story 2c: `ai/sidecarSegment.ts` is the fourth (one `invoke` of ' +
+        'app-kit\'s `app_kit_models_path`, for the model folder it hands the sidecar); not frame IPC.',
+      from: {
+        pathNot: '^src/(sidecar/tauriTransport|fonts/fontsIpc|rhizome/transport|ai/sidecarSegment)\\.ts$',
+      },
       to: { path: 'node_modules/@tauri-apps/api/(core|event)' },
     },
     {

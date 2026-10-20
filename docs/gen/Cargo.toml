@@ -15,3 +15,9 @@ rhizome-core = "0.1.6"
 rhizome-pom = "0.1.6"
 preset-docs = { version = "0.1", features = ["rhizome"] }
 
+
+# The app (`oblique`, by path above) takes preset-app-kit from the packages checkout for its
+# unreleased `models` feature; this crate is its own workspace root, so it needs the same patch
+# (src-tauri/Cargo.toml). Goes with that one.
+[patch.crates-io]
+preset-app-kit = { path = "../../../../packages/app-kit" }

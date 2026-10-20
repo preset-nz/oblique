@@ -3,6 +3,7 @@ mod document;
 pub use document::{sidecar_catalogue, Catalogue, Oblique};
 mod fonts;
 mod menu;
+mod models;
 mod sidecar;
 mod text;
 mod text_cmd;
@@ -46,7 +47,12 @@ pub fn run() {
             preset_app_kit::app_kit_history,
             preset_app_kit::app_kit_undo,
             preset_app_kit::app_kit_redo,
-            preset_app_kit::app_kit_text_menu
+            preset_app_kit::app_kit_text_menu,
+            preset_app_kit::app_kit_models_list,
+            preset_app_kit::app_kit_models_download,
+            preset_app_kit::app_kit_models_cancel,
+            preset_app_kit::app_kit_models_remove,
+            preset_app_kit::app_kit_models_path
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -67,6 +73,9 @@ pub fn run() {
                 .file_type(&format!("{name} project"), document::EXTENSION)
                 .commands(menu::commands())
                 .install::<document::DocumentHost>(app.handle())?;
+            // The models folder, its downloads and the old-weights cleanup (Epic 17 story 2c).
+            // In `setup`, not async code: the downloader is reqwest's blocking client.
+            models::install(app.handle())?;
             Ok(())
         })
         .build(tauri::generate_context!())

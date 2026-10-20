@@ -1,5 +1,5 @@
-import { appDataDir, join } from '@tauri-apps/api/path';
-import { useSidecarStatusStore } from '@/sidecar/client';
+import { invoke } from '@tauri-apps/api/core';
+import { SidecarError, useSidecarStatusStore } from '@/sidecar/client';
 import type { AiAdapter, AiTask, HealthResult, SegmentOptions, SegmentResult } from './adapter';
 
 /**
@@ -15,46 +15,45 @@ import type { AiAdapter, AiTask, HealthResult, SegmentOptions, SegmentResult } f
  */
 const capabilities: ReadonlySet<AiTask> = new Set<AiTask>(['segment']);
 
-/**
- * The first `segment` request may download ~40 MB of weights synchronously
- * inside the sidecar (no progress frames — segment-to-vector.md's fixed
- * contract) before it can answer at all. The frame client's default 30s
- * timeout is sized for ordinary cooks, not a cold weights fetch, so this
- * request gets a much longer one; `src/canvas/smartSelect/` is what turns
- * "still pending after ~1s" into the visible downloading state, this is
- * just the ceiling that keeps a slow-but-real download from being killed.
- */
-const SEGMENT_TIMEOUT_MS = 180_000;
+/** The model's id in app-kit's registry (`src-tauri/src/models.rs`). */
+export const MOBILE_SAM_ID = 'mobile_sam';
 
-const MODELS_DIR_NAME = 'models';
+/**
+ * MobileSAM isn't on disk: it was removed while Smart Select was armed, or never downloaded.
+ * `src/canvas/smartSelect/` turns it into "MobileSAM isn't installed"; choosing the tool again
+ * asks (model-downloads.md).
+ */
+export class ModelMissingError extends Error {
+  constructor(readonly modelId: string = MOBILE_SAM_ID) {
+    super(`Model ${modelId} isn't installed`);
+    this.name = 'ModelMissingError';
+  }
+}
 
 /** Path/transport edges injected for tests, same pattern as `ai/settings.ts`'s `AiSettingsIoDeps`. */
 export interface SidecarSegmentDeps {
-  appDataDir: () => Promise<string>;
-  join: (...parts: string[]) => Promise<string>;
+  /** The folder app-kit installed the model in (`app_kit_models_path`); rejects when it isn't installed. */
+  modelDir: (id: string) => Promise<string>;
   request: (
     header: Record<string, unknown>,
     payload: Uint8Array,
-    timeoutMs: number,
   ) => Promise<{ header: Record<string, unknown>; payload: Uint8Array }>;
 }
 
 async function productionRequest(
   header: Record<string, unknown>,
   payload: Uint8Array,
-  timeoutMs: number,
 ): Promise<{ header: Record<string, unknown>; payload: Uint8Array }> {
   // Dynamic import: the singleton starts the real Tauri transport as a side
   // effect of being imported (see sidecar/singleton.ts) — deferred to
   // call-time so importing this module (with injected deps, as every test
   // does) never pulls in Tauri IPC. Mirrors cook.ts's `realRunPython`.
   const { sidecarClient } = await import('@/sidecar/singleton');
-  return sidecarClient.request(header, payload, timeoutMs);
+  return sidecarClient.request(header, payload);
 }
 
 export const productionSidecarSegmentDeps: SidecarSegmentDeps = {
-  appDataDir,
-  join: (...parts) => join(...parts),
+  modelDir: (id) => invoke<string>('app_kit_models_path', { id }),
   request: productionRequest,
 };
 
@@ -86,18 +85,30 @@ function parsePolygons(value: unknown): Array<Array<{ x: number; y: number }>> {
   return value.filter(isPointArray);
 }
 
+/** app-kit's `NotInstalled`, as it arrives over `invoke` (a plain string). */
+function isNotInstalled(err: unknown): boolean {
+  return /isn't installed/.test(err instanceof Error ? err.message : String(err));
+}
+
 /**
  * `segment` over the sidecar frame protocol (segment-to-vector.md's fixed
- * request/response header shape). `model_dir` is resolved here (app-data +
- * `models`) so the sidecar itself stays free of platform-path logic — the
- * epic's own framing for `fetch.py`'s `ensure_weights`.
+ * request/response header shape). `model_dir` is the model's folder in
+ * app-kit's models folder, asked of Rust here so the sidecar stays free of
+ * platform-path logic. Nothing downloads: a model that isn't there is a
+ * `ModelMissingError`, whether Rust says so or the sidecar's `model_missing`
+ * answer does (model-downloads.md).
  */
 export async function segment(
   options: SegmentOptions,
   deps: SidecarSegmentDeps = productionSidecarSegmentDeps,
 ): Promise<SegmentResult> {
-  const dir = await deps.appDataDir();
-  const modelDir = await deps.join(dir, MODELS_DIR_NAME);
+  let modelDir: string;
+  try {
+    modelDir = await deps.modelDir(MOBILE_SAM_ID);
+  } catch (err) {
+    if (isNotInstalled(err)) throw new ModelMissingError();
+    throw err;
+  }
 
   const header = {
     op: 'segment',
@@ -111,11 +122,14 @@ export async function segment(
     },
   };
 
-  const { header: responseHeader, payload } = await deps.request(
-    header,
-    packSegmentPayload(options.image, options.mask),
-    SEGMENT_TIMEOUT_MS,
-  );
+  let response: { header: Record<string, unknown>; payload: Uint8Array };
+  try {
+    response = await deps.request(header, packSegmentPayload(options.image, options.mask));
+  } catch (err) {
+    if (err instanceof SidecarError && err.code === 'model_missing') throw new ModelMissingError();
+    throw err;
+  }
+  const { header: responseHeader, payload } = response;
 
   return {
     mask: payload,

@@ -1,3 +1,4 @@
+import { ModelPromptHost } from '@preset.nz/app-kit/models';
 import { SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { useEffect, useState } from 'react';
 import { usePanelStore } from '@/app/panelState';
@@ -96,6 +97,8 @@ export function Layout() {
           <SnackbarViewport className="bottom-10" />
         </div>
         <SettingsDialog />
+        {/* The download prompt `ensure` opens (ToolbarRail's Smart Select); once, near the root. */}
+        <ModelPromptHost />
         <DocumentSettingsDialog />
         <ExportProofDialog />
         <MissingFontsDialog />

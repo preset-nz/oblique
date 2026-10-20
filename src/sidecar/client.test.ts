@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SidecarClient, useSidecarStatusStore } from './client';
+import { SidecarClient, SidecarError, useSidecarStatusStore } from './client';
 import { encodeFrame } from './frame';
 import { useOpsCacheStore } from './opsCache';
 import type { SidecarStatusEvent, SidecarTransport } from './transport';
@@ -97,6 +97,23 @@ describe('SidecarClient.request', () => {
     transport.emitFrame(encodeFrame({ id, ok: false, error: "unknown op 'frobnicate'" }));
 
     await expect(promise).rejects.toThrow("unknown op 'frobnicate'");
+  });
+
+  it('carries the header code on a SidecarError', async () => {
+    const promise = client.request({ op: 'segment' });
+    const id = transport.lastSentId();
+    transport.emitFrame(
+      encodeFrame({
+        id,
+        ok: false,
+        error: 'model not installed: mobile_sam',
+        code: 'model_missing',
+      }),
+    );
+    const err = await promise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SidecarError);
+    expect((err as SidecarError).code).toBe('model_missing');
+    expect((err as SidecarError).message).toBe('model not installed: mobile_sam');
   });
 
   it('rejects after the timeout elapses with no response', async () => {

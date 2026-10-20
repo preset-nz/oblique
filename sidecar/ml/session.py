@@ -32,6 +32,29 @@ from PIL import Image
 IMG_SIZE = 1024
 LOW_RES_SIZE = 256
 
+# The model's id in app-kit's registry (`src-tauri/src/models.rs`) and the file names it installs.
+# The sidecar never fetches: Rust downloads into the machine-wide models folder, and the client
+# passes that folder as `model_dir` (guidance: app-kit's models.md, Oblique's model-downloads.md).
+MODEL_ID = "mobile_sam"
+MANIFEST_FILENAME = "manifest.json"
+ENCODER_FILENAME = "mobile_sam_image_encoder.onnx"
+DECODER_FILENAME = "sam_mask_decoder_single.onnx"
+
+
+class ModelNotInstalled(Exception):
+    """`model_dir` has no `manifest.json`: app-kit writes it last, once every file has passed its
+    SHA-256, so its absence means the model is not installed (or is mid-download)."""
+
+
+def weight_paths(model_dir: Path) -> tuple[Path, Path]:
+    """(encoder, decoder) under `model_dir`. Raises `ModelNotInstalled` without a manifest. The
+    checksums are app-kit's job (it re-hashes on `verify`), so they are not re-read here."""
+    model_dir = Path(model_dir)
+    if not (model_dir / MANIFEST_FILENAME).is_file():
+        raise ModelNotInstalled(MODEL_ID)
+    return model_dir / ENCODER_FILENAME, model_dir / DECODER_FILENAME
+
+
 # SAM ONNX point-label convention: 1 = positive click, 0 = negative click,
 # 2 = box top-left corner, 3 = box bottom-right corner, -1 = padding
 # ("not a point" — used when there are no real points at all, since the

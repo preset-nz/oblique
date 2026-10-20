@@ -28,14 +28,15 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 import ops
-from ml.fetch import ensure_weights
-from ml.session import run_segment
+from ml.session import ModelNotInstalled, run_segment, weight_paths
 
 PAGES = ROOT / "docs" / "nodes"
 IMG = PAGES / "img"
 SOURCE = IMG / "sample-source.png"
 ICONS = ROOT.parent  # the sibling app repos
-MODELS = Path.home() / "Library/Application Support/nz.preset.oblique/models"
+# app-kit's machine-wide models folder (models.md). The weights get there from Smart Select's
+# download prompt in the app; this script never fetches.
+MOBILE_SAM = Path.home() / "Library/Application Support/rhizomatic/models/mobile_sam"
 
 # Where the stack sits in the source, for the segmentation prompt.
 STACK_BOX = {"x0": 170, "y0": 172, "x1": 620, "y1": 590}
@@ -300,7 +301,13 @@ def with_strip(source: Image.Image) -> Image.Image:
 
 
 def cut_out(rgba: np.ndarray) -> np.ndarray:
-    encoder, decoder = ensure_weights(MODELS)
+    try:
+        encoder, decoder = weight_paths(MOBILE_SAM)
+    except ModelNotInstalled:
+        sys.exit(
+            "MobileSAM isn't installed: choose Smart Select in Oblique once and download it "
+            f"(it lands in {MOBILE_SAM})."
+        )
     mask = run_segment(
         encoder_path=encoder,
         decoder_path=decoder,

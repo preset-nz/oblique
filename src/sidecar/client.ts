@@ -25,6 +25,21 @@ export interface SidecarResponse {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * An `ok: false` answer. `code` is the header's machine-readable `code` when the handler sets
+ * one (`segment`'s `model_missing`, Epic 17 story 2c); the message is its `error` string, as
+ * every caller saw before.
+ */
+export class SidecarError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'SidecarError';
+    this.code = code;
+  }
+}
+
 interface PendingRequest {
   resolve: (value: SidecarResponse) => void;
   reject: (reason: Error) => void;
@@ -96,7 +111,9 @@ export class SidecarClient {
 
     if (header.ok === false) {
       const message = typeof header.error === 'string' ? header.error : 'sidecar request failed';
-      pending.reject(new Error(message));
+      pending.reject(
+        new SidecarError(message, typeof header.code === 'string' ? header.code : undefined),
+      );
       return;
     }
     pending.resolve({ header, payload });
@@ -126,10 +143,7 @@ export class SidecarClient {
   /**
    * Send a request frame; resolves with the matching response frame.
    * `timeoutMs` defaults to `REQUEST_TIMEOUT_MS` — overridable per call for
-   * the rare request whose real work can honestly exceed it (Epic 17's
-   * `segment`: the first call downloads ~40 MB of weights synchronously
-   * inside the sidecar, no progress frames, so the client-side timeout has
-   * to cover that download, not just an ordinary cook).
+   * a request whose real work can honestly exceed it.
    */
   request(
     header: Record<string, unknown>,
