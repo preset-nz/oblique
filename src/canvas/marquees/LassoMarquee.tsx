@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useMarqueeStateStore } from '@/scene/marquee';
-import { SelectionFill } from '../SelectionFill';
+import { SelectionFill, useSelectionFillInputs } from '../SelectionFill';
 import { DASH_SCREEN_PX } from './MarqueeBox';
 import { closedPolylinePath, type Point, translatePoints } from './marqueeGeometry';
 
@@ -30,6 +30,7 @@ interface DragState {
 export function LassoMarquee({ points, closed, viewScale, toDoc }: LassoMarqueeProps) {
   const setMarquee = useMarqueeStateStore((s) => s.setMarquee);
   const dragRef = useRef<DragState | null>(null);
+  const fillInputs = useSelectionFillInputs();
   const strokeWidth = 1 / Math.max(viewScale, 0.0001);
 
   if (points.length === 0) return null;
@@ -64,7 +65,7 @@ export function LassoMarquee({ points, closed, viewScale, toDoc }: LassoMarqueeP
   return (
     <g>
       {/* Closed even mid-draw: the implied last segment back to the start. */}
-      <SelectionFill d={closedPolylinePath(points)} />
+      <SelectionFill d={closedPolylinePath(points)} {...fillInputs} />
       <path
         data-testid="lasso-marquee"
         d={d}

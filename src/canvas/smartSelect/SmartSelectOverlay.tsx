@@ -1,6 +1,6 @@
 import { DASH_SCREEN_PX } from '../marquees/MarqueeBox';
 import { closedPolylinePath } from '../marquees/marqueeGeometry';
-import { SelectionFill } from '../SelectionFill';
+import { SelectionFill, useSelectionFillInputs } from '../SelectionFill';
 import type { SmartSelectBox, SmartSelectPoint } from './state';
 
 /**
@@ -29,6 +29,7 @@ export interface SmartSelectOverlayProps {
 const POINT_SCREEN_RADIUS = 4;
 
 export function SmartSelectOverlay({ points, box, polygons, viewScale }: SmartSelectOverlayProps) {
+  const fillInputs = useSelectionFillInputs();
   const invScale = 1 / Math.max(viewScale, 0.0001);
   const strokeWidth = invScale;
   const dash = `${DASH_SCREEN_PX * invScale} ${DASH_SCREEN_PX * invScale}`;
@@ -39,7 +40,7 @@ export function SmartSelectOverlay({ points, box, polygons, viewScale }: SmartSe
 
   return (
     <g data-testid="smart-select-overlay">
-      {fillPath && <SelectionFill d={fillPath} fillRule="evenodd" />}
+      {fillPath && <SelectionFill d={fillPath} fillRule="evenodd" {...fillInputs} />}
       {polygons.map((polygon, i) => {
         if (polygon.length === 0) return null;
         const d = `${polygon.map((p, j) => `${j === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')} Z`;

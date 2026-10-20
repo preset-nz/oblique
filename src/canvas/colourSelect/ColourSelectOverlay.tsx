@@ -1,7 +1,7 @@
 import type { ColourSeed } from '@/ai/sidecarSelectColour';
 import { DASH_SCREEN_PX } from '../marquees/MarqueeBox';
 import { closedPolylinePath } from '../marquees/marqueeGeometry';
-import { SelectionFill } from '../SelectionFill';
+import { SelectionFill, useSelectionFillInputs } from '../SelectionFill';
 
 /**
  * `select-colour`'s document-space overlay (colour-range-select.md): the
@@ -21,6 +21,7 @@ export interface ColourSelectOverlayProps {
 const POINT_SCREEN_RADIUS = 4;
 
 export function ColourSelectOverlay({ seeds, polygons, viewScale }: ColourSelectOverlayProps) {
+  const fillInputs = useSelectionFillInputs();
   const invScale = 1 / Math.max(viewScale, 0.0001);
   const strokeWidth = invScale;
   const dash = `${DASH_SCREEN_PX * invScale} ${DASH_SCREEN_PX * invScale}`;
@@ -31,7 +32,7 @@ export function ColourSelectOverlay({ seeds, polygons, viewScale }: ColourSelect
 
   return (
     <g data-testid="colour-select-overlay">
-      {fillPath && <SelectionFill d={fillPath} fillRule="evenodd" />}
+      {fillPath && <SelectionFill d={fillPath} fillRule="evenodd" {...fillInputs} />}
       {polygons.map((polygon, i) => {
         if (polygon.length === 0) return null;
         const d = `${polygon.map((p, j) => `${j === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')} Z`;
