@@ -29,7 +29,7 @@ sha256 = "3f62a6c1e1d305d8fd2e9aa9a359db23fd0c40de581e778c53dd577e9c231073"
 [[inputs]]
 path = "sidecar/uv.lock"
 ecosystem = "uv"
-sha256 = "8b31c5fc682e313e526892411cf6fc343f1d9d48ced1c8d657f2b014058517e7"
+sha256 = "fbadd8aef949dbd19db7ded0b136f2a8ff4ea646e7ceaf1b26645af75441728d"
 
 [[inputs]]
 path = "src-tauri/Cargo.lock"
@@ -7714,26 +7714,10 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "uv"
-name = "pip-licenses"
-version = "5.5.5"
-source = "registry"
-declared = "MIT"
-scope = "dev"
-
-[[packages]]
-ecosystem = "uv"
 name = "pluggy"
 version = "1.6.0"
 source = "registry"
 declared = "MIT"
-scope = "dev"
-
-[[packages]]
-ecosystem = "uv"
-name = "prettytable"
-version = "3.18.0"
-source = "registry"
-declared = "BSD-3-Clause"
 scope = "dev"
 
 [[packages]]
@@ -7815,11 +7799,3 @@ version = "1.14.0"
 source = "registry"
 declared = "BSD-3-Clause"
 scope = "shipped"
-
-[[packages]]
-ecosystem = "uv"
-name = "wcwidth"
-version = "0.9.2"
-source = "registry"
-declared = "MIT"
-scope = "dev"

@@ -17,3 +17,7 @@ ecosystem = "uv"
 reason = "Apache-2.0 and GPL-2.0 hook definitions read by PyInstaller's analyser at build time; not embedded in the frozen output"
 date = "2026-07-10"
 by = "Georg"
+
+[notices]
+# The bootloader ships in the frozen sidecar; pyinstaller itself is dev scope.
+extras = ["packaging/notices/pyinstaller-bootloader.txt"]

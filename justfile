@@ -108,12 +108,11 @@ build:
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
     codesign --deep --force --sign - "src-tauri/target/release/bundle/macos/${product}.app"
 
-# Friends build (Epic 14): zipped .app + README + LICENSE + THIRD-PARTY-LICENSES. Unsigned — see epic doc.
+# Friends build (Epic 14): zipped .app + README + LICENSE + THIRD-PARTY-NOTICES.txt. Unsigned — see epic doc.
 [group('build')]
 package: build
     #!/usr/bin/env bash
     set -euo pipefail
-    node scripts/generate-third-party-licenses.mjs
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
     version=$(node -p "require('./package.json').version")
     outdir="dist-friends-build"
@@ -121,7 +120,10 @@ package: build
     mkdir -p "$outdir"
     cp -R "src-tauri/target/release/bundle/macos/${product}.app" "$outdir/"
     sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
-    cp LICENSE THIRD-PARTY-LICENSES "$outdir/"
+    cp LICENSE "$outdir/"
+    # Every shipped package's licence text, from the licence lock, with
+    # the PyInstaller bootloader added through [notices] extras.
+    preset-compliance notices --title "${product}: third-party notices" --out "$outdir/THIRD-PARTY-NOTICES.txt"
     # ditto, not zip, for the .app itself — plain `zip` doesn't reliably
     # preserve the resource-fork/xattr metadata a code signature depends
     # on and is the classic cause of "app is damaged" after unzip. The
@@ -129,7 +131,7 @@ package: build
     # after is fine for those.
     (cd "$outdir" && \
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
-        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES)
+        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-NOTICES.txt)
     echo "Packaged: $outdir/${product}-v${version}.zip"
 
 # Take every dependency update the version ranges allow into the lockfiles,
