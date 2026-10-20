@@ -1036,6 +1036,56 @@ describe('layer edits: remove (layer.remove)', () => {
     expect(sources.get('a')).toBeUndefined();
     expect(bitmap.close).toHaveBeenCalled();
   });
+
+  it('a delete answered while a restore runs still lands once the restore ends', async () => {
+    // Georg 2026-10-21: "delete layer does not delete". The update came back while Edit > Undo's
+    // rebuild was mid-restore: `applyEcho` stands down for a restore, the reconcile that
+    // followed was skipped for the same reason, and the restore then put back the layer it had
+    // read before the delete. Nothing looked again until some later edit.
+    const ticks: (() => void)[] = [];
+    const tick = async () => {
+      for (let i = 0; i < 5 && ticks.length > 0; i++) {
+        for (const f of ticks.splice(0)) f();
+        await settle();
+      }
+    };
+    let release: () => void = () => undefined;
+    let gate: Promise<void> | null = null;
+    const scene = emptyScene([pixel('a'), pixel('b')]);
+    useSceneStore.setState({ scene });
+    host = new FakeHost(scene);
+    rhizome = createRhizome({
+      backend: host,
+      store: useSceneStore,
+      notify,
+      restore: async (_current, target) => {
+        if (gate) await gate; // a slow restore: decoding the sources of a re-added layer
+        useSceneStore.getState().loadScene(target);
+      },
+      nextFrame: async () => undefined,
+      schedule: (f) => void ticks.push(f), // the 150 ms timer, fired by hand
+    });
+    uninstall = rhizome.install();
+    await rhizome.start([]);
+    await settle();
+    state().setNodeProp('a', { opacity: 0.5 });
+    await settle();
+    await tick();
+    gate = new Promise<void>((r) => {
+      release = r;
+    });
+    await undo(); // the rebuild starts and waits in `restore`
+    deleteNode('a');
+    await settle();
+    for (const f of ticks.splice(0)) f(); // the timer fires mid-restore: the reconcile is skipped
+    await settle();
+    gate = null;
+    release();
+    await settle();
+    await tick();
+    expect(state().scene.nodes.map((n) => n.id)).toEqual(['b']);
+    expect(notify).not.toHaveBeenCalled();
+  });
 });
 
 describe('layer edits: reorder (layer.reorder)', () => {

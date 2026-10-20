@@ -841,6 +841,11 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         await restore(scene(), target);
       } finally {
         restoringNow = false;
+        // An update that landed while this ran was not echoed (`applyEcho` stands down for a
+        // restore) and its reconcile was skipped, and `target` was read before it: the store
+        // may now be behind the mirror, a deleted layer back among them. Nothing else would
+        // look again, so compare once more.
+        scheduleReconcile();
       }
     };
     restoring = restoring.then(run, run);
