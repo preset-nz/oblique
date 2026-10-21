@@ -13,9 +13,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@preset.nz/app-kit": "link:../../packages/app-kit",
+    "@preset.nz/app-kit": "^0.1.4",
     "@preset.nz/facets": "^0.2.0",
-    "@preset.nz/ux-kit": "link:../../packages/ux-kit",
+    "@preset.nz/ux-kit": "^0.1.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
@@ -37,7 +37,6 @@
     "lefthook": "^2.1.9",
     "tailwindcss": "^4.3.2",
     "typescript": "~7.0.2",
-    "use-sync-external-store": "^1.7.0",
     "vite": "^7.0.4",
     "vitest": "^4.1.11"
   }

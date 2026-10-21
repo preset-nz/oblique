@@ -35,12 +35,7 @@ rhizome-pom = "0.1.6"
 rhizome-pom-tauri = "0.1.6"
 # The family's app behaviour (Epic 22): Undo/Redo titles, File commands, the close guard, and
 # (feature `models`) the machine-wide models folder with its downloads (Epic 17 story 2c).
-preset-app-kit = { version = "0.1.3", features = ["models"] }
-
-# By path until app-kit's next release (models, unreleased; ledger: runbooks/pending-releases.md).
-# A clean clone needs ../packages beside initiatives/.
-[patch.crates-io]
-preset-app-kit = { path = "../../../packages/app-kit" }
+preset-app-kit = { version = "0.1.4", features = ["models"] }
 
 [dev-dependencies]
 # A mock app, so the host's emitted events can be heard in tests.
