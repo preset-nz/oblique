@@ -29,7 +29,7 @@ sha256 = "3f62a6c1e1d305d8fd2e9aa9a359db23fd0c40de581e778c53dd577e9c231073"
 [[inputs]]
 path = "sidecar/uv.lock"
 ecosystem = "uv"
-sha256 = "fbadd8aef949dbd19db7ded0b136f2a8ff4ea646e7ceaf1b26645af75441728d"
+sha256 = "b23586040962cfb7a27267ced614c829def07f4efa4c0b9f50d286edcbbcee4a"
 
 [[inputs]]
 path = "src-tauri/Cargo.lock"
@@ -7827,7 +7827,7 @@ scope = "dev"
 [[packages]]
 ecosystem = "uv"
 name = "pillow"
-version = "12.3.0"
+version = "13.0.0"
 source = "registry"
 declared = "MIT-CMU"
 scope = "shipped"
