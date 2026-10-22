@@ -51,7 +51,7 @@ The ink fades to white, not to transparent. Alpha is untouched.
 
 *Defaults.*
 
-![Run dry](img/ink_starved-recipe.webp)
+![Ink Starved, "Run dry": Direction h, Starvation 1, Banding 0.7, Band spacing 36](img/ink_starved-recipe.webp)
 
 *Run dry: Ink Starved (Direction h, Starvation 1, Banding 0.7, Band spacing 36).*
 <!-- examples:end -->

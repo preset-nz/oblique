@@ -79,7 +79,7 @@ Redraws the picture as pen marks. Light areas get few or thin marks, dark areas 
 
 *Defaults.*
 
-![Pen drawing](img/hatch-recipe.webp)
+![Hatch, "Pen drawing": Gaussian Blur (Radius 3), then Hatch (Pattern lines, Layers 3, Spacing 12, Angle 30, Pen width 0.6, Jitter 0.4)](img/hatch-recipe.webp)
 
 *Pen drawing: Gaussian Blur (Radius 3), then Hatch (Pattern lines, Layers 3, Spacing 12, Angle 30, Pen width 0.6, Jitter 0.4).*
 <!-- examples:end -->

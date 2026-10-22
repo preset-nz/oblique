@@ -46,7 +46,7 @@ Alpha is untouched.
 
 *Defaults.*
 
-![One bit a channel](img/colour_crush-recipe.webp)
+![Colour Crush, "One bit a channel": Bits 1](img/colour_crush-recipe.webp)
 
 *One bit a channel: Colour Crush (Bits 1).*
 <!-- examples:end -->

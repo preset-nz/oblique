@@ -61,7 +61,7 @@ Alpha is changed only by Blister, which moves it with the picture, and by Burn-t
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->
-![Burnt through](img/film_burn-recipe.webp)
+![Film Burn, "Burnt through": Film Burn (Progress 0.3, Hot spots 2, Irregularity 0.1, Feature size 48), then Bloom (Threshold 0.9, Radius 40)](img/film_burn-recipe.webp)
 
 *Burnt through: Film Burn (Progress 0.3, Hot spots 2, Irregularity 0.1, Feature size 48), then Bloom (Threshold 0.9, Radius 40).*
 <!-- examples:end -->

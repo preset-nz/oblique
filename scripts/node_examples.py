@@ -348,21 +348,40 @@ def save_thumb(img: np.ndarray, name: str) -> str:
     return name
 
 
-def settings(chain: Chain) -> str:
-    def value(v: Any) -> str:
-        if isinstance(v, bool):
-            return "on" if v else "off"
-        if isinstance(v, float) and v.is_integer():
-            return str(int(v))
-        return str(v)
+def value(spec: Any, v: Any) -> str:
+    if spec.choice_labels and v in spec.choice_labels:
+        return spec.choice_labels[v]
+    if isinstance(v, bool):
+        return "on" if v else "off"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
 
+
+def shown(name: str, overrides: dict[str, Any]) -> str:
+    """The settings a step changes, by the labels in the inspector."""
+    specs = {p.name: p for p in ops.OPS[name].params}
+    return ", ".join(
+        f"{label(specs[k])} {value(specs[k], v)}" for k, v in overrides.items()
+    )
+
+
+def settings(chain: Chain) -> str:
     def step(name: str, overrides: dict[str, Any]) -> str:
-        op = ops.OPS[name]
-        labels = {p.name: label(p) for p in op.params}
-        shown = ", ".join(f"{labels[k]} {value(v)}" for k, v in overrides.items())
-        return f"{label(op)} ({shown})" if shown else label(op)
+        op_label = label(ops.OPS[name])
+        changed = shown(name, overrides)
+        return f"{op_label} ({changed})" if changed else op_label
 
     return ", then ".join(step(name, o) for name, o in chain)
+
+
+def alt(name: str, title: str, chain: Chain) -> str:
+    """The recipe image's alt: the node, the recipe and its settings."""
+    node = label(ops.OPS[name])
+    # The node alone needs its settings, not its name again.
+    alone = len(chain) == 1 and chain[0][0] == name
+    detail = shown(*chain[0]) if alone else settings(chain)
+    return f'{node}, "{title}": {detail}' if detail else f'{node}, "{title}"'
 
 
 BEGIN = (
@@ -412,7 +431,11 @@ def main() -> None:
             ]
         recipe = run(base, chain)
         file = save(recipe, f"{name}-recipe.webp")
-        lines += [f"![{title}](img/{file})", "", f"*{title}: {settings(chain)}.*"]
+        lines += [
+            f"![{alt(name, title, chain)}](img/{file})",
+            "",
+            f"*{title}: {settings(chain)}.*",
+        ]
         write_block(page, lines)
         write_thumbnail(page, save_thumb(recipe, f"{name}-thumb.webp"))
         print(f"examples: {name}")

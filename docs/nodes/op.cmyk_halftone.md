@@ -63,7 +63,7 @@ The separation is a simple one: black takes the darkest part of each pixel and t
 
 *Defaults.*
 
-![Big riso dots, out of register](img/cmyk_halftone-recipe.webp)
+![CMYK Halftone, "Big riso dots, out of register": Cyan ink #1f8a8a, Magenta ink #ff3d9a, Yellow ink #f5e9a0, Black ink #1b2440, Dot size 24, Misregistration 6](img/cmyk_halftone-recipe.webp)
 
 *Big riso dots, out of register: CMYK Halftone (Cyan ink #1f8a8a, Magenta ink #ff3d9a, Yellow ink #f5e9a0, Black ink #1b2440, Dot size 24, Misregistration 6).*
 <!-- examples:end -->

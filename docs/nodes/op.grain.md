@@ -44,7 +44,7 @@ Grain follows alpha. Fully transparent pixels stay as they are and soft edges ge
 
 *Defaults.*
 
-![Rough black and white](img/grain-recipe.webp)
+![Grain, "Rough black and white": Threshold (Level 127), then Gaussian Blur (Radius 2), then Grain (Amount 0.6, Grain size 5)](img/grain-recipe.webp)
 
 *Rough black and white: Threshold (Level 127), then Gaussian Blur (Radius 2), then Grain (Amount 0.6, Grain size 5).*
 <!-- examples:end -->

@@ -54,7 +54,7 @@ Alpha is untouched. On a cutout the colours shift but the outline does not.
 
 *Defaults.*
 
-![Heavy two-strip misprint](img/technicolor-recipe.webp)
+![Dye Transfer, "Heavy two-strip misprint": Process two_strip, Dye density 1.6, Cross-talk 0.3, Fringe 8, Amount 1](img/technicolor-recipe.webp)
 
 *Heavy two-strip misprint: Dye Transfer (Process two_strip, Dye density 1.6, Cross-talk 0.3, Fringe 8, Amount 1).*
 <!-- examples:end -->

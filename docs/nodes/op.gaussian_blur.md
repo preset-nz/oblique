@@ -38,7 +38,7 @@ A soft, even blur of the colour. Radius is in document pixels and the preview sc
 
 *Defaults.*
 
-![Out of focus](img/gaussian_blur-recipe.webp)
+![Gaussian Blur, "Out of focus": Radius 30](img/gaussian_blur-recipe.webp)
 
 *Out of focus: Gaussian Blur (Radius 30).*
 <!-- examples:end -->

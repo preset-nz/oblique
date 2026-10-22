@@ -41,7 +41,7 @@ Details thinner than twice the Radius disappear. Raising Radius on text first th
 
 *Defaults.*
 
-![Eaten away](img/erode-recipe.webp)
+![Erode, "Eaten away": Radius 16](img/erode-recipe.webp)
 
 *Eaten away: Erode (Radius 16).*
 <!-- examples:end -->
