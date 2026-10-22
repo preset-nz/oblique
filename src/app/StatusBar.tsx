@@ -57,6 +57,10 @@ function CookReadout() {
   );
 }
 
+function Separator() {
+  return <div className="h-4 w-px bg-neutral-800" />;
+}
+
 export function StatusBar() {
   const scale = useViewTransformStore((state) => state.view.scale);
   const cursorDoc = useViewTransformStore((state) => state.cursorDoc);
@@ -69,8 +73,6 @@ export function StatusBar() {
 
   const cursorText =
     cursorDoc === null ? '—' : `${Math.round(cursorDoc.x)}, ${Math.round(cursorDoc.y)}`;
-
-  const Separator = () => <div className="h-4 w-px bg-neutral-800" />;
 
   return (
     <div
