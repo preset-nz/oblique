@@ -37,7 +37,7 @@ There is no separate greyscale op. Desaturate at 1 is it.
 
 *Defaults.*
 
-![Faded to almost nothing](img/desaturate-recipe.webp)
+![Desaturate, "Faded to almost nothing": Desaturate (Amount 0.85), then Film stock (Stock Instant, Faded, Vignette 1, Grain 1)](img/desaturate-recipe.webp)
 
-*Faded to almost nothing: Desaturate (Amount 0.85), then Film stock (Stock sx70, Vignette 1, Grain 1).*
+*Faded to almost nothing: Desaturate (Amount 0.85), then Film stock (Stock Instant, Faded, Vignette 1, Grain 1).*
 <!-- examples:end -->

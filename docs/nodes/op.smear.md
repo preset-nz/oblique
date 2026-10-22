@@ -47,7 +47,7 @@ Where the picked line is transparent and Keep silhouette is on, nothing is writt
 
 *Defaults.*
 
-![Scanner stall](img/smear-recipe.webp)
+![Smear, "Scanner stall": Direction h, Mode both, Position 0.45](img/smear-recipe.webp)
 
 *Scanner stall: Smear (Direction h, Mode both, Position 0.45).*
 <!-- examples:end -->

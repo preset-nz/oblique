@@ -36,7 +36,7 @@ Inverting twice gives back the original. Put it after Threshold to swap which si
 
 *Defaults.*
 
-![Cut and flip](img/invert-recipe.webp)
+![Invert, "Cut and flip": Threshold (Level 127), then Invert](img/invert-recipe.webp)
 
 *Cut and flip: Threshold (Level 127), then Invert.*
 <!-- examples:end -->

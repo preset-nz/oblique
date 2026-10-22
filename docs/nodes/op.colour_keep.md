@@ -53,7 +53,7 @@ Alpha is untouched.
 
 *Defaults.*
 
-![Only Oblique's aqua and Shard's lavender](img/colour_keep-recipe.webp)
+![Colour keep, "Only Oblique's aqua and Shard's lavender": Keep colour #a2e2e3, Hue range 25, Softness 10, Minimum saturation 0.15, Second colour on, Keep colour 2 #bd9ee7, Hue range 2 25](img/colour_keep-recipe.webp)
 
 *Only Oblique's aqua and Shard's lavender: Colour keep (Keep colour #a2e2e3, Hue range 25, Softness 10, Minimum saturation 0.15, Second colour on, Keep colour 2 #bd9ee7, Hue range 2 25).*
 <!-- examples:end -->

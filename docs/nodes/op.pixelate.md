@@ -40,7 +40,7 @@ At the right and bottom, when the picture isn't a whole number of cells wide, th
 
 *Defaults.*
 
-![Low-res](img/pixelate-recipe.webp)
+![Pixelate, "Low-res": Pixelate (Cell size 32), then Colour Crush (Bits 2, Dither on)](img/pixelate-recipe.webp)
 
 *Low-res: Pixelate (Cell size 32), then Colour Crush (Bits 2, Dither on).*
 <!-- examples:end -->

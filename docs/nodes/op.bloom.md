@@ -49,7 +49,7 @@ The glow takes the colour of the bright pixels it comes from, so a red lamp glow
 
 *Defaults.*
 
-![Everything glows](img/bloom-recipe.webp)
+![Bloom, "Everything glows": Threshold 0.7, Radius 60, Intensity 1.5, Blend screen](img/bloom-recipe.webp)
 
 *Everything glows: Bloom (Threshold 0.7, Radius 60, Intensity 1.5, Blend screen).*
 <!-- examples:end -->

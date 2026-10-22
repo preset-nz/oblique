@@ -52,7 +52,7 @@ Colour is not changed, so the new edge is the same colour as the old one.
 
 *Defaults.*
 
-![Bitten](img/edge_noise-recipe.webp)
+![Edge Noise, "Bitten": Amount 1, Feature size 36, Profile saw](img/edge_noise-recipe.webp)
 
 *Bitten: Edge Noise (Amount 1, Feature size 36, Profile saw).*
 <!-- examples:end -->

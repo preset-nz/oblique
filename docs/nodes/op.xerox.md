@@ -54,7 +54,7 @@ It starts by turning the picture grey, since a photocopier prints one ink. **Kee
 
 *Defaults.*
 
-![Nine generations down](img/xerox-recipe.webp)
+![Copy of a Copy, "Nine generations down": Generations 9, Skew 1.2, Toner speckle 0.5, Edge glow 0.4, Edge glow radius 6](img/xerox-recipe.webp)
 
 *Nine generations down: Copy of a Copy (Generations 9, Skew 1.2, Toner speckle 0.5, Edge glow 0.4, Edge glow radius 6).*
 <!-- examples:end -->

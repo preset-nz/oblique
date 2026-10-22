@@ -41,7 +41,7 @@ Every pixel becomes black or white depending on its brightness. Pixels at or abo
 
 *Defaults.*
 
-![Clean shapes](img/threshold-recipe.webp)
+![Threshold, "Clean shapes": Gaussian Blur (Radius 3), then Threshold (Level 150)](img/threshold-recipe.webp)
 
 *Clean shapes: Gaussian Blur (Radius 3), then Threshold (Level 150).*
 <!-- examples:end -->

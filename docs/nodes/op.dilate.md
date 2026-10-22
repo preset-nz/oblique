@@ -41,7 +41,7 @@ Dilate is also how a mask is made bigger. On a layer set to output a mask, Dilat
 
 *Defaults.*
 
-![Swollen and torn](img/dilate-recipe.webp)
+![Dilate, "Swollen and torn": Dilate (Radius 14), then Edge Noise (Amount 0.8, Feature size 30)](img/dilate-recipe.webp)
 
 *Swollen and torn: Dilate (Radius 14), then Edge Noise (Amount 0.8, Feature size 30).*
 <!-- examples:end -->

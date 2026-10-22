@@ -47,7 +47,7 @@ Alpha is untouched.
 
 *Defaults.*
 
-![Cyanotype](img/colourise-recipe.webp)
+![Colourise, "Cyanotype": Levels (Black point 40, White point 215), then Colourise (Colour #1f3a8a, Keep brightness off)](img/colourise-recipe.webp)
 
 *Cyanotype: Levels (Black point 40, White point 215), then Colourise (Colour #1f3a8a, Keep brightness off).*
 <!-- examples:end -->

@@ -52,7 +52,7 @@ Alpha is untouched.
 
 *Defaults.*
 
-![Shard duotone](img/recolour-recipe.webp)
+![Recolour, "Shard duotone": Stops 2, Stop 1 #2a1f3d, Stop 2 #f1e094](img/recolour-recipe.webp)
 
 *Shard duotone: Recolour (Stops 2, Stop 1 #2a1f3d, Stop 2 #f1e094).*
 <!-- examples:end -->

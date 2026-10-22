@@ -61,7 +61,7 @@ Alpha is untouched.
 
 *Defaults.*
 
-![Expired roll](img/film_stock-recipe.webp)
+![Film stock, "Expired roll": Stock Expired, Vignette 1, Grain 1, Seed 3](img/film_stock-recipe.webp)
 
-*Expired roll: Film stock (Stock expired, Vignette 1, Grain 1, Seed 3).*
+*Expired roll: Film stock (Stock Expired, Vignette 1, Grain 1, Seed 3).*
 <!-- examples:end -->

@@ -42,7 +42,7 @@ Levels does not touch alpha.
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->
-![Crushed hard](img/levels-recipe.webp)
+![Levels, "Crushed hard": Black point 100, White point 175](img/levels-recipe.webp)
 
 *Crushed hard: Levels (Black point 100, White point 175).*
 <!-- examples:end -->
