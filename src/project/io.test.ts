@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import { firstDifference, normal } from '@/rhizome/adapter';
@@ -13,6 +15,10 @@ vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
   notify: vi.fn(),
   dismissNotification: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/path', () => ({
+  homeDir: vi.fn(async () => '/Users/georg/'),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -40,6 +46,7 @@ import {
   writeBakedSidecar,
 } from './io';
 import { bindProjectMeta } from './projectMeta';
+import { resetHomeDirCache } from './SavedToastPath';
 
 function sampleScene(): Scene {
   return {
@@ -516,7 +523,7 @@ describe('save, open and new over the document host', () => {
     const before = sceneNow();
 
     await saveProject('/art/piece.oblique', use(makeDeps()));
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1); // the saved toast, nothing else
     expect(host.disk.has('/art/piece.oblique')).toBe(true);
     expect(useProjectMetaStore.getState().path).toBe('/art/piece.oblique');
 
@@ -546,6 +553,33 @@ describe('save, open and new over the document host', () => {
     expect(deps.writeFile).toHaveBeenCalledTimes(2);
   });
 
+  it('a save is one toast naming the file, shown for 4 s, with the folder and copy button', async () => {
+    await arrange(sampleScene());
+    resetHomeDirCache();
+
+    await saveProject('/Users/georg/Documents/creatures/creature.oblique', use(makeDeps()));
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(notify).mock.calls[0][0];
+    expect(opts.message).toBe('Saved creature.oblique');
+    expect(opts.timeout).toBe(4000);
+    expect(opts.kind).toBeUndefined();
+    const html = renderToStaticMarkup(opts.description as ReactElement);
+    expect(html).toContain('~/Documents/creatures');
+    expect(html).toContain('aria-label="Copy path"');
+  });
+
+  it('Save As to a new name names the new file', async () => {
+    await arrange(sampleScene());
+    await saveProject('/art/a.oblique', use(makeDeps()));
+    await saveProject('/art/b.oblique', use(makeDeps()));
+
+    expect(vi.mocked(notify).mock.calls.map(([o]) => o.message)).toEqual([
+      'Saved a.oblique',
+      'Saved b.oblique',
+    ]);
+  });
+
   it('a baked bitmap that will not write is a snackbar, and the save itself stands', async () => {
     const scene = sampleScene();
     scene.nodes[0].state = 'locked';
@@ -559,6 +593,7 @@ describe('save, open and new over the document host', () => {
 
     await saveProject('/art/a.oblique', use(deps));
 
+    expect(notify).toHaveBeenCalledTimes(1); // only the error: no saved toast beside it
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'error', description: 'disk full' }),
     );
@@ -948,7 +983,7 @@ describe('relative source paths (image-source.md)', () => {
     );
     const node = sceneNow().nodes[0] as unknown as { sourcePath: string };
     expect(node.sourcePath).toBe('plates/a.png');
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1); // the saved toast, nothing else
     expect(useProjectMetaStore.getState().path).toBe('/x/proj.oblique');
     // a real undo step, so the document is unsaved straight after the save that caused it
     expect(host.unsaved).toBe(true);

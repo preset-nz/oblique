@@ -1,6 +1,7 @@
 import { notify } from '@preset.nz/ux-kit';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { mkdir, readDir, remove, writeFile } from '@tauri-apps/plugin-fs';
+import { createElement } from 'react';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import type { DocumentEvents } from '@/rhizome/rhizome';
 import * as backgroundSource from '@/scene/backgroundSource';
@@ -14,6 +15,7 @@ import { isPixelNode } from '@/scene/types';
 import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './import';
 import { useProjectMetaStore } from './projectMeta';
 import { isRelativeSourcePath, resolveSourcePath } from './resolvePath';
+import { homeDirOnce, SavedToastPath } from './SavedToastPath';
 
 export { useProjectMetaStore };
 
@@ -273,6 +275,12 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
       try {
         await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
         if (path !== previous) await recheckRelativeSources(previous, path, deps);
+        // one toast per save: this one, or the error below
+        notify({
+          message: `Saved ${filenameOf(path)}`,
+          description: createElement(SavedToastPath, { path, home: await homeDirOnce() }),
+          timeout: 4000,
+        });
       } catch (err) {
         // the document itself is saved; it is the baked images or the re-check that failed
         notify({
