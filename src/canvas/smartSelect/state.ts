@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { adoptSelectedTarget } from '@/canvas/selectShared/adoptSelectedTarget';
 import { clearWhenTargetGone } from '@/canvas/selectShared/clearWhenTargetGone';
+import { useToolStateStore } from '@/canvas/toolState';
 
 /**
  * The `select-smart` tool's in-progress prompt (Epic 17, segment-to-vector.md).
@@ -113,6 +115,13 @@ clearWhenTargetGone(
   () => useSmartSelectStore.getState().targetNodeId,
   () => useSmartSelectStore.getState().clear(),
 );
+
+adoptSelectedTarget({
+  getTargetNodeId: () => useSmartSelectStore.getState().targetNodeId,
+  setTarget: (nodeId) => useSmartSelectStore.getState().setTarget(nodeId),
+  setStatus: (status) => useSmartSelectStore.getState().setStatus(status),
+  isArmed: () => useToolStateStore.getState().tool === 'select-smart',
+});
 
 /**
  * True once there's enough of a prompt to fire a segment request: at least

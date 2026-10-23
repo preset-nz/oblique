@@ -48,6 +48,7 @@ import {
   viewChangeNeedsRecomposite,
 } from './paintScene';
 import { isInsideDocument, sampleBufferHex } from './sampleBuffer';
+import { isSegmentableNode } from './selectShared/isSegmentableNode';
 import { getTargetFrame } from './selectShared/payload';
 import { SmartSelectController } from './smartSelect/controller';
 import { resolveOutlineSeed } from './smartSelect/outlinePrompt';
@@ -223,10 +224,7 @@ export function Viewport() {
           selection.kind === 'node'
             ? useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId)
             : undefined;
-        const targetId =
-          node && (node.type === 'pixel' || node.type === 'vector' || node.type === 'text')
-            ? node.id
-            : null;
+        const targetId = node && isSegmentableNode(node) ? node.id : null;
         useSmartSelectStore.getState().setTarget(targetId);
 
         if (targetId) {
@@ -286,10 +284,7 @@ export function Viewport() {
           selection.kind === 'node'
             ? useSceneStore.getState().scene.nodes.find((n) => n.id === selection.nodeId)
             : undefined;
-        const targetId =
-          node && (node.type === 'pixel' || node.type === 'vector' || node.type === 'text')
-            ? node.id
-            : null;
+        const targetId = node && isSegmentableNode(node) ? node.id : null;
         useColourSelectStore.getState().setTarget(targetId);
         if (!targetId) {
           useColourSelectStore

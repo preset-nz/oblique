@@ -1,5 +1,6 @@
 import { notify } from '@preset.nz/ux-kit';
 import { readFile } from '@tauri-apps/plugin-fs';
+import { useSelectionStore } from '@/scene/selection';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 
@@ -82,12 +83,17 @@ export async function importFile(path: string, deps: ImportDeps): Promise<Import
  * design (story: "no decode races; decode serially, it's fine"). Each
  * successful import lands on top of the stack (addPixelNode's contract),
  * so the last file in `paths` ends up topmost — a deterministic function
- * of drop/selection order.
+ * of drop/selection order. Afterwards the last successful import is selected.
  */
 export async function importFiles(paths: string[], deps: ImportDeps): Promise<ImportOutcome[]> {
   const outcomes: ImportOutcome[] = [];
   for (const path of paths) {
     outcomes.push(await importFile(path, deps));
   }
+  // Select the topmost new layer (the last success) so the first tool the
+  // user reaches for has a target. All failed: leave the selection alone.
+  const succeeded = outcomes.filter((o) => o.nodeId);
+  const lastNodeId = succeeded[succeeded.length - 1]?.nodeId;
+  if (lastNodeId) useSelectionStore.getState().selectNode(lastNodeId);
   return outcomes;
 }

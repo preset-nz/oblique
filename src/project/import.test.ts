@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useSelectionStore } from '@/scene/selection';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { PixelNode } from '@/scene/types';
@@ -55,6 +56,7 @@ beforeEach(() => {
       documentSize: [0, 0],
     },
   });
+  useSelectionStore.getState().clear();
   sources.clearAll();
   vi.clearAllMocks();
 });
@@ -196,5 +198,63 @@ describe('importFiles', () => {
     expect(outcomes.map((o) => Boolean(o.error))).toEqual([false, true, false]);
     expect(useSceneStore.getState().scene.nodes).toHaveLength(2);
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects the last successful node (the topmost of the new layers)', async () => {
+    const deps = makeDepsForPaths({ '/a.png': [10, 10], '/b.png': [10, 10], '/c.png': [10, 10] });
+    const outcomes = await importFiles(['/a.png', '/b.png', '/c.png'], deps);
+
+    expect(useSelectionStore.getState().selection).toEqual({
+      kind: 'node',
+      nodeId: outcomes[2].nodeId,
+    });
+    expect(useSceneStore.getState().scene.nodes[0].id).toBe(outcomes[2].nodeId);
+  });
+
+  it('leaves the selection alone when every file fails', async () => {
+    const existing = useSceneStore
+      .getState()
+      .addPixelNode({ sourcePath: '/old.png', sourceSize: [4, 4] });
+    useSelectionStore.getState().selectNode(existing);
+    const deps: ImportDeps = {
+      readFile: vi.fn(async () => new Uint8Array([1])),
+      decode: vi.fn(async () => {
+        throw new Error('corrupt');
+      }),
+    };
+
+    await importFiles(['/x.png', '/y.png'], deps);
+
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'node', nodeId: existing });
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves an empty selection empty when every file fails', async () => {
+    const deps: ImportDeps = {
+      readFile: vi.fn(async () => new Uint8Array([1])),
+      decode: vi.fn(async () => {
+        throw new Error('corrupt');
+      }),
+    };
+    await importFiles(['/x.png'], deps);
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'none' });
+  });
+
+  it('partial failure selects the last success, not the trailing failure', async () => {
+    const deps: ImportDeps = {
+      readFile: vi.fn(async (path: string) => new TextEncoder().encode(path)),
+      decode: vi.fn(async (bytes: Uint8Array) => {
+        const path = new TextDecoder().decode(bytes);
+        if (path === '/broken.png') throw new Error('bad file');
+        return fakeBitmap(10, 10);
+      }),
+    };
+
+    const outcomes = await importFiles(['/a.png', '/b.png', '/broken.png'], deps);
+
+    expect(useSelectionStore.getState().selection).toEqual({
+      kind: 'node',
+      nodeId: outcomes[1].nodeId,
+    });
   });
 });
