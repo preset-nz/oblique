@@ -121,6 +121,25 @@ describe('the scene as a rhizome tree', () => {
     expect(back?.nodes.map((n) => n.id)).toEqual(['p1', 'v1', 't1']);
   });
 
+  it('round-trips the selection role, and reads an absent role as undefined', () => {
+    const marked: Scene = {
+      ...scene,
+      nodes: [{ ...vector, id: 'sel', role: 'selection' } as VectorNode, vector],
+      maskRefs: {},
+    };
+    const rows = rowsFromScene(marked);
+    const row = [...rows.values()].find((r) => r.path === layerPath('sel')) as Row;
+    expect(row.values?.role).toBe('selection');
+    const plain = [...rows.values()].find((r) => r.path === layerPath('v1')) as Row;
+    expect(plain.values?.role).toBeUndefined();
+    const back = sceneFromRows(rows) as Scene;
+    expect((back.nodes[0] as VectorNode).role).toBe('selection');
+    expect('role' in back.nodes[1]).toBe(false);
+    // the host stores the default as `layer`: that reads as no role at all
+    (plain.values as Record<string, unknown>).role = 'layer';
+    expect('role' in (sceneFromRows(rows) as Scene).nodes[1]).toBe(false);
+  });
+
   it('keeps an empty document empty', () => {
     const empty: Scene = {
       id: 'e',

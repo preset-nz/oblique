@@ -68,6 +68,19 @@ export function fillRuleForMarquee(marquee: MarqueeShape): 'nonzero' | 'evenodd'
 }
 
 /**
+ * The label a marquee's selection node is committed under: `Selection (rect)`, `(ellipse)`,
+ * `(lasso)`, or a `polygons` marquee's own label. A `polygons` marquee comes from more than one
+ * tool (Epic 17's `select-smart` and 2b's `select-colour`), so its kind can't tell them apart;
+ * each tool stamps `label` on the marquee it writes, and one with none falls back to
+ * `Selection (segment)` (pre-2b callers and tests).
+ */
+export function selectionLabel(marquee: MarqueeShape): string {
+  return marquee.kind === 'polygons'
+    ? (marquee.label ?? 'Selection (segment)')
+    : `Selection (${marquee.kind})`;
+}
+
+/**
  * True when the active marquee is a finished shape a mask can rasterise
  * from: a rect/ellipse with real area, a closed lasso with enough points,
  * or at least one traced polygon with enough points. Mirrors

@@ -3,8 +3,10 @@ import * as backgroundSource from './backgroundSource';
 import * as cache from './cache';
 import {
   fillRuleForMarquee,
+  isMaskableMarquee,
   type MarqueeShape,
   marqueeToVectorPaths,
+  selectionLabel,
   useMarqueeStateStore,
 } from './marquee';
 import { hasDocumentPinnedMask } from './maskInputs';
@@ -12,6 +14,7 @@ import {
   type BlendMode,
   IDENTITY_TRANSFORM_2D,
   isPixelNode,
+  isSelectionNode,
   isTextNode,
   isVectorNode,
   type Modifier,
@@ -310,7 +313,8 @@ interface SceneState {
    *
    * Replace rule: if the modifier already carried a selection-derived vector
    * mask, the PREVIOUS vector node is deleted in the same call iff (a) its
-   * label starts with `Selection (` and (b) no other `maskRefs` entry still
+   * is a selection node (`isSelectionNode`: the selection role, or the legacy
+   * `Selection (` label) and (b) no other `maskRefs` entry still
    * points at it after the swap — otherwise it's either user-authored or
    * shared, and neither is ours to remove.
    *
@@ -324,6 +328,15 @@ interface SceneState {
     marquee: MarqueeShape,
     params: { featherPx: number; expand: number; invert: boolean },
   ) => { vectorNodeId: string; maskId: string } | undefined;
+
+  /**
+   * "Save Selection" (save-selection.md): commits a marquee to a hidden selection `VectorNode`
+   * (`role: 'selection'`, `visible: false`, `output: 'image'`, labelled by `selectionLabel`) at
+   * the top of the stack, bound to nothing. Returns its id; `undefined` for a marquee that
+   * isn't maskable (nothing mutated). Clearing the marquee and selecting the node are the
+   * caller's (`saveActiveSelection`). One edit: `selection.save` on rhizome.
+   */
+  saveMarqueeAsSelection: (marquee: MarqueeShape) => string | undefined;
 
   markDirty: (nodeId: string, level: 'draft' | 'working') => void;
   clearDirty: (nodeId: string, level: 'draft' | 'working') => void;
@@ -592,6 +605,7 @@ export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
       dirty: dirtyBoth(),
       paths: partial.paths,
       fillRule: partial.fillRule,
+      ...(partial.role ? { role: partial.role } : {}),
     };
     set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
     return id;
@@ -1054,18 +1068,9 @@ export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
       ? get().scene.maskRefs?.[existingMaskId]?.nodeId
       : undefined;
 
-    // A `polygons` marquee is produced by more than one tool (Epic 17's
-    // `select-smart` and 2b's colour-range-select.md's `select-colour`
-    // share the shape) — the shape's own `kind` can't disambiguate their
-    // commit labels, so each tool stamps its own `label` on the marquee it
-    // writes (`select-smart`'s controller: 'Selection (segment)';
-    // `select-colour`'s controller: 'Selection (colour)'); this falls back
-    // to `'Selection (segment)'` only for a `polygons` marquee with no
-    // label at all (pre-2b callers/tests).
-    const label =
-      marquee.kind === 'polygons'
-        ? (marquee.label ?? 'Selection (segment)')
-        : `Selection (${marquee.kind})`;
+    // The label rule (a `polygons` marquee's own label, or `Selection (kind)`) is
+    // `selectionLabel`'s.
+    const label = selectionLabel(marquee);
     // The store's own actions, not whatever is installed over them: on rhizome the installed
     // `addVectorNode`, `setModifierVectorMask` and `removeNode` each send a command of their
     // own, and this is one edit that `rhizome.ts` sends as one `mask.from_marquee`.
@@ -1080,6 +1085,7 @@ export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
       label,
       visible: false,
       output: 'image',
+      role: 'selection',
     });
 
     // Node-pinned by default (mask-follows-node.md): a selection made on the
@@ -1099,12 +1105,27 @@ export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
       const stillReferenced = Object.values(s.scene.maskRefs ?? {}).some(
         (ref) => ref.nodeId === previousVectorNodeId,
       );
-      if (previousNode?.label.startsWith('Selection (') && !stillReferenced) {
+      if (previousNode && isSelectionNode(previousNode) && !stillReferenced) {
         own.removeNode(previousVectorNodeId);
       }
     }
 
     return { vectorNodeId, maskId };
+  },
+
+  saveMarqueeAsSelection: (marquee) => {
+    if (!isMaskableMarquee(marquee)) return undefined;
+    // The store's own addVectorNode, not the one installed over it: on rhizome that would
+    // send a `layer.add` of its own, and this is one edit that `rhizome.ts` sends as one
+    // `selection.save`.
+    return useSceneStore.getInitialState().addVectorNode({
+      paths: marqueeToVectorPaths(marquee),
+      fillRule: fillRuleForMarquee(marquee),
+      label: selectionLabel(marquee),
+      visible: false,
+      output: 'image',
+      role: 'selection',
+    });
   },
 
   markDirty: (nodeId, level) => {

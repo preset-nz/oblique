@@ -37,6 +37,7 @@ export const ON_RHIZOME = [
   'removeModifierMask',
   'setMaskSpace',
   'applyMarqueeAsVectorMask',
+  'saveMarqueeAsSelection',
   'setVectorPaths',
   'setVectorFillRule',
   'convertTextToOutlines',

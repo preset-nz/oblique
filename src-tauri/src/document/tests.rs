@@ -2558,6 +2558,133 @@ fn mask_from_marquee_makes_the_hidden_layer_and_the_binding_in_one_undo_step() {
 }
 
 #[test]
+fn mask_from_marquee_marks_the_layer_as_a_selection() {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    marquee(&mut d, "/layers/a/m1", "sel", "Selection (rect)").unwrap();
+    assert_eq!(
+        value(&d, "/layers/sel", "role"),
+        Some(Value::Choice("selection".into()))
+    );
+}
+
+fn save(d: &mut Document<Oblique>, id: &str, label: &str) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "selection.save",
+        json!({"vectorId": id, "label": label, "fillRule": "evenodd",
+               "paths": [{"anchors": [{"point": {"x": 1.0, "y": 2.0}}], "closed": true}]}),
+    )
+}
+
+#[test]
+fn selection_save_adds_a_hidden_selection_layer_on_top_in_one_undo_step() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, node("b", "pixel")).unwrap();
+    is_one_undo_step(&mut d, "Save Selection", |d| {
+        save(d, "sel", "Selection (segment)").unwrap();
+        assert_eq!(stack(d), ["sel", "b", "a"]);
+        assert_eq!(
+            value(d, "/layers/sel", "label"),
+            Some(Value::Text("Selection (segment)".into()))
+        );
+        assert_eq!(value(d, "/layers/sel", "visible"), Some(Value::Bool(false)));
+        assert_eq!(
+            value(d, "/layers/sel", "output"),
+            Some(Value::Choice("image".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/sel", "fillRule"),
+            Some(Value::Choice("evenodd".into()))
+        );
+        assert_eq!(
+            value(d, "/layers/sel", "role"),
+            Some(Value::Choice("selection".into()))
+        );
+        assert!(matches!(
+            value(d, "/layers/sel", "paths"),
+            Some(Value::Shaped(p)) if p[0]["closed"] == json!(true)
+        ));
+    });
+}
+
+#[test]
+fn selection_save_refuses_a_malformed_payload_and_a_taken_id_and_changes_nothing() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    for payload in [
+        json!({"vectorId": "s", "label": "x", "fillRule": "evenodd"}),
+        json!({"vectorId": "s", "label": "x", "fillRule": "evenodd", "paths": "no"}),
+        json!({"vectorId": "s", "label": 3, "fillRule": "evenodd", "paths": []}),
+        json!({"label": "x", "fillRule": "evenodd", "paths": []}),
+        json!({"vectorId": "s", "label": "x", "fillRule": "sideways", "paths": []}),
+    ] {
+        assert!(
+            run(&mut d, "selection.save", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+    assert!(save(&mut d, "a", "Selection (rect)").is_err()); // `a` is taken
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn a_duplicated_selection_keeps_its_role() {
+    let mut d = doc();
+    save(&mut d, "sel", "Selection (rect)").unwrap();
+    run(
+        &mut d,
+        "layer.duplicate",
+        json!({"at": "/layers/sel", "id": "copy", "modifierIds": [], "maskIds": []}),
+    )
+    .unwrap();
+    assert_eq!(
+        value(&d, "/layers/copy", "role"),
+        Some(Value::Choice("selection".into()))
+    );
+}
+
+#[test]
+fn the_replace_rule_removes_a_role_marked_node_and_a_legacy_labelled_one() {
+    // marked with the role, labelled however: Smart Select's own label would still match, so
+    // rename it to prove the role is what counts
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    save(&mut d, "s1", "Sky").unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/s1", 0.0).unwrap();
+    marquee(&mut d, "/layers/a/m1", "s2", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s2", "a"]);
+
+    // a document from before the role: the label alone marks it
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let mut old = node("old", "vector");
+    old["label"] = json!("Selection (lasso)");
+    add(&mut d, old).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/old", 0.0).unwrap();
+    assert_eq!(
+        value(&d, "/layers/old", "role"),
+        Some(Value::Choice("layer".into()))
+    );
+    marquee(&mut d, "/layers/a/m1", "s2", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s2", "a"]);
+
+    // a user vector with neither stays
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    let mut shape = node("shape", "vector");
+    shape["label"] = json!("My shape");
+    add(&mut d, shape).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/shape", 0.0).unwrap();
+    marquee(&mut d, "/layers/a/m1", "s2", "Selection (rect)").unwrap();
+    assert_eq!(stack(&d), ["s2", "shape", "a"]);
+}
+
+#[test]
 fn the_replace_rule_removes_an_orphaned_selection_layer_in_the_same_step() {
     let mut d = doc();
     with_modifiers(&mut d, &["m1"]);

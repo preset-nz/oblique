@@ -418,6 +418,8 @@ export class FakeHost implements RhizomeBackend {
       }
       case 'mask.from_marquee':
         return this.commit('Mask from Selection', () => this.maskFromMarquee(p));
+      case 'selection.save':
+        return this.commit('Save Selection', () => this.addSelectionLayer(p));
       case 'vector.set_paths':
         return this.commit('Edit Path', () => {
           this.setValue(this.vector(p.at as string), 'paths', p.paths);
@@ -738,13 +740,16 @@ export class FakeHost implements RhizomeBackend {
     ];
   }
 
-  /** `mask.from_marquee`: the hidden layer on top, the node-pinned binding, the replace rule. */
-  private maskFromMarquee(p: Record<string, unknown>): void {
-    const { row, layer } = this.modifier(p.at as string);
-    this.unlocked(layer);
-    const previous = row.bindings?.[0]?.source;
+  /** The hidden selection layer `mask.from_marquee` and `selection.save` both make, on top. */
+  private addSelectionLayer(p: Record<string, unknown>): Row {
     const id = p.vectorId as string;
     if (this.rows.has(`row:layer:${id}`)) throw new Error(`${id} already exists`);
+    if (typeof p.label !== 'string' || !Array.isArray(p.paths)) {
+      throw new Error('selection: a label and paths are needed');
+    }
+    if (!['nonzero', 'evenodd'].includes(p.fillRule as string)) {
+      throw new Error(`${p.fillRule} isn't a fill rule`);
+    }
     const node = {
       id,
       type: 'vector',
@@ -758,11 +763,21 @@ export class FakeHost implements RhizomeBackend {
       modifiers: [],
       paths: p.paths,
       fillRule: p.fillRule,
+      role: 'selection',
     } as unknown as SceneNode;
     const [vector] = layerRows(node, { maskRefs: {} } as Scene);
     this.rows.set(vector.id, vector);
     const layers = this.at('/layers');
     layers.orders = { stack: [vector.id, ...(layers.orders?.stack ?? [])] };
+    return vector;
+  }
+
+  /** `mask.from_marquee`: the hidden layer on top, the node-pinned binding, the replace rule. */
+  private maskFromMarquee(p: Record<string, unknown>): void {
+    const { row, layer } = this.modifier(p.at as string);
+    this.unlocked(layer);
+    const previous = row.bindings?.[0]?.source;
+    const vector = this.addSelectionLayer(p);
     this.bindMask(row, vector, [p.featherPx, p.expand, p.invert] as never, {
       space: 'node',
       attach: this.transformOf(layer),
@@ -770,7 +785,9 @@ export class FakeHost implements RhizomeBackend {
     const old = previous ? this.rows.get(previous) : undefined;
     if (!old || old.id === vector.id || old.id === layer.id) return;
     const used = [...this.rows.values()].some((r) => r.bindings?.some((b) => b.source === old.id));
-    if (!used && String(val(old, 'label')).startsWith('Selection (')) this.removeLayer(old.path);
+    const ours =
+      val(old, 'role') === 'selection' || String(val(old, 'label')).startsWith('Selection (');
+    if (!used && ours) this.removeLayer(old.path);
   }
 
   /** One commit: the edit, the undo snapshot (one per gesture), and the update. */

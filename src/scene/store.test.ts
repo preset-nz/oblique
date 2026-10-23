@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as backgroundSource from './backgroundSource';
+import { marqueeToVectorPaths } from './marquee';
 import { useSceneStore } from './store';
-import type { Modifier, PixelNode, Scene, SceneNode, VectorNode, VectorPath } from './types';
+import {
+  isSelectionNode,
+  type Modifier,
+  type PixelNode,
+  type Scene,
+  type SceneNode,
+  type VectorNode,
+  type VectorPath,
+} from './types';
 
 function pixelNode(id: string, overrides: Partial<PixelNode> = {}): PixelNode {
   return {
@@ -926,6 +935,7 @@ describe('applyMarqueeAsVectorMask (marquees-as-vectors.md)', () => {
       label: 'Selection (rect)',
       visible: false,
       output: 'image',
+      role: 'selection',
     });
     expect(scene.maskRefs?.[maskId]).toMatchObject({ nodeId: vectorNodeId, ...params });
     expect(scene.nodes.find((n) => n.id === 'a')?.modifiers[0].maskId).toBe(maskId);
@@ -1412,5 +1422,91 @@ describe('mask follows node (mask-follows-node.md)', () => {
       expect(ref?.space).toBe('node');
       expect(ref?.attachTransform).toEqual({ x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
     });
+  });
+});
+
+describe('saveMarqueeAsSelection (save-selection.md)', () => {
+  const rect = { kind: 'rect' as const, rect: { x: 5, y: 6, w: 10, h: 20 } };
+
+  beforeEach(() => {
+    useSceneStore.setState((s) => ({
+      scene: { ...s.scene, nodes: [pixelNode('a', { modifiers: [modifier('m1')] })] },
+    }));
+  });
+
+  it('adds a hidden selection vector at the top of the stack and returns its id', () => {
+    const id = useSceneStore.getState().saveMarqueeAsSelection(rect);
+    expect(id).toBeDefined();
+    const { nodes, maskRefs } = useSceneStore.getState().scene;
+    expect(nodes.map((n) => n.id)).toEqual([id, 'a']);
+    expect(nodes[0]).toMatchObject({
+      type: 'vector',
+      label: 'Selection (rect)',
+      visible: false,
+      output: 'image',
+      role: 'selection',
+      fillRule: 'nonzero',
+    });
+    expect((nodes[0] as VectorNode).paths).toEqual(marqueeToVectorPaths(rect));
+    // bound to nothing, and nothing else changed
+    expect(Object.keys(maskRefs ?? {})).toEqual([]);
+    expect(nodes[1].modifiers[0].maskId).toBeUndefined();
+  });
+
+  it("takes a polygons marquee's label and the even-odd rule", () => {
+    const id = useSceneStore.getState().saveMarqueeAsSelection({
+      kind: 'polygons',
+      polygons: [
+        [
+          { x: 0, y: 0 },
+          { x: 4, y: 0 },
+          { x: 2, y: 3 },
+        ],
+      ],
+      label: 'Selection (colour)',
+    });
+    const node = useSceneStore.getState().scene.nodes.find((n) => n.id === id);
+    expect(node).toMatchObject({ label: 'Selection (colour)', fillRule: 'evenodd' });
+  });
+
+  it('returns undefined and changes nothing for a marquee that is not maskable', () => {
+    const before = useSceneStore.getState().scene;
+    expect(
+      useSceneStore.getState().saveMarqueeAsSelection({ kind: 'lasso', points: [], closed: false }),
+    ).toBeUndefined();
+    expect(
+      useSceneStore
+        .getState()
+        .saveMarqueeAsSelection({ kind: 'rect', rect: { x: 0, y: 0, w: 0, h: 5 } }),
+    ).toBeUndefined();
+    expect(useSceneStore.getState().scene).toBe(before);
+  });
+
+  it('a saved selection is replaced by Mask from selection like a mask-made one, a legacy label too', () => {
+    const params = { featherPx: 0, expand: 0, invert: false };
+    const saved = useSceneStore.getState().saveMarqueeAsSelection(rect) as string;
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', saved, params);
+    useSceneStore.getState().applyMarqueeAsVectorMask('a', 'm1', rect, params);
+    expect(useSceneStore.getState().scene.nodes.some((n) => n.id === saved)).toBe(false);
+
+    // a node from before the role, recognised by its label alone
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [vectorNode('legacy', { label: 'Selection (lasso)' }), ...s.scene.nodes],
+      },
+    }));
+    useSceneStore.getState().setModifierVectorMask('a', 'm1', 'legacy', params);
+    useSceneStore.getState().applyMarqueeAsVectorMask('a', 'm1', rect, params);
+    expect(useSceneStore.getState().scene.nodes.some((n) => n.id === 'legacy')).toBe(false);
+  });
+});
+
+describe('isSelectionNode', () => {
+  it('is true for the selection role or the legacy Selection ( label, false for a drawn layer', () => {
+    expect(isSelectionNode(vectorNode('s', { role: 'selection', label: 'Sky' }))).toBe(true);
+    expect(isSelectionNode(vectorNode('s', { label: 'Selection (rect)' }))).toBe(true);
+    expect(isSelectionNode(vectorNode('s', { label: 'My shape' }))).toBe(false);
+    expect(isSelectionNode(pixelNode('p', { label: 'Selection (rect)' }))).toBe(false);
   });
 });

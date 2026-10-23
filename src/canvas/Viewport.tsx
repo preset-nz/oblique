@@ -15,6 +15,7 @@ import {
   useMarqueeStateStore,
 } from '@/scene/marquee';
 import { usePathEditStateStore } from '@/scene/pathEditState';
+import { saveActiveSelection } from '@/scene/saveSelection';
 import { onlyNoteChanged } from '@/scene/sceneDiff';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
@@ -404,6 +405,22 @@ export function Viewport() {
       if (e.key === 'Enter' && !isEditableTarget && tool === 'pen') {
         e.preventDefault();
         usePenStateStore.getState().finishOnEnter();
+        return;
+      }
+
+      // Return saves the active marquee as a selection node (save-selection.md), the key for
+      // Select > Save Selection. After the pen's Enter (the pen keeps it while drawing; marquees
+      // and pen paths never coexist) and before the text re-edit below, so Enter on a selected
+      // text node with no marquee still opens its field. Not from an editable field, and only
+      // with a finished marquee, so Enter elsewhere is untouched.
+      if (
+        e.key === 'Enter' &&
+        !e.repeat &&
+        !isEditableTarget &&
+        isMaskableMarquee(useMarqueeStateStore.getState().marquee)
+      ) {
+        e.preventDefault();
+        saveActiveSelection();
         return;
       }
 

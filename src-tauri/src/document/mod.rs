@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rhizome_core::{Edit, NodeId, NodeType, On, Origin, Ref, Shape, Value, ValueSpec};
+use rhizome_core::{Edit, Node, NodeId, NodeType, On, Origin, Ref, Shape, Value, ValueSpec};
 use rhizome_pom::{payload, Commands, Error, Kinds, ObjectModel, Pom};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
@@ -409,6 +409,11 @@ impl ObjectModel for Oblique {
                 .described(
                     "Fill rule",
                     "How overlapping outlines fill: non-zero fills them all, even-odd leaves holes where they cross.",
+                )
+                .choice("role", &["layer", "selection"], "layer")
+                .described(
+                    "Role",
+                    "Whether the vector is a drawn layer or a saved selection.",
                 )
                 .bindable(mask_values()),
         );
@@ -831,6 +836,24 @@ impl ObjectModel for Oblique {
                 Ok(commit.into())
             },
         );
+        // "Save Selection" (save-selection.md): the first half of Mask from Selection. A hidden
+        // vector layer with the selection role on top of the stack, bound to nothing. TypeScript
+        // picked the layer's id and built its paths.
+        c.add(
+            "selection.save",
+            |_| "Save Selection".into(),
+            |_, p| {
+                ["vectorId", "fillRule", "label"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+                    && p.get("paths").is_some_and(Json::is_array)
+            },
+            |d, p| {
+                let a: SelectionArgs = payload(p)?;
+                let (_, commit) = d.edit("Save Selection", |tx| save_selection(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
         // Replaces a vector layer's paths wholesale (path-editing.md): an anchor or handle drag,
         // an inserted or deleted anchor, a reordered path. One value, so inside a gesture the
         // webview's per-frame writes are latest-wins and the drag is one undo step. A locked
@@ -1141,6 +1164,15 @@ struct MarqueeArgs {
     feather_px: f64,
     expand: f64,
     invert: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionArgs {
+    vector_id: String,
+    paths: Json,
+    fill_rule: String,
+    label: String,
 }
 
 #[derive(Deserialize)]
@@ -1745,6 +1777,42 @@ fn set_mask_space(tx: &mut Edit<'_>, a: &SpaceArgs) -> rhizome_core::Result<()> 
     tx.bind(m, On::slot("mask"), source, values)
 }
 
+/// A selection node: marked with the selection role, or (a document from before the role)
+/// labelled the way `mask.from_marquee` labelled them. No upgrade on open: this is the one
+/// place the fallback lives. TypeScript's twin is `isSelectionNode` (src/scene/types.ts).
+fn is_selection(n: &Node<'_>) -> bool {
+    n.value("role") == Some(Value::Choice("selection".into()))
+        || matches!(n.value("label"), Some(Value::Text(l)) if l.starts_with("Selection ("))
+}
+
+/// The hidden selection layer both `mask.from_marquee` and `selection.save` make: a vector
+/// layer with the selection role, off, at the top of the stack.
+fn add_selection_layer(
+    tx: &mut Edit<'_>,
+    id: &str,
+    paths: &Json,
+    fill_rule: &str,
+    label: &str,
+) -> rhizome_core::Result<NodeId> {
+    let v = tx.add("/layers", "vector", id)?;
+    set(tx, v, "label", &json!(label))?;
+    set(tx, v, "visible", &json!(false))?;
+    set(tx, v, "paths", paths)?;
+    set(tx, v, "fillRule", &json!(fill_rule))?;
+    set(tx, v, "role", &json!("selection"))?;
+    let mut stack = stack_of(tx);
+    stack.retain(|x| *x != v);
+    stack.insert(0, v);
+    tx.set_order("/layers", "stack", stack)?;
+    Ok(v)
+}
+
+/// `selection.save`.
+fn save_selection(tx: &mut Edit<'_>, a: &SelectionArgs) -> rhizome_core::Result<()> {
+    add_selection_layer(tx, &a.vector_id, &a.paths, &a.fill_rule, &a.label)?;
+    Ok(())
+}
+
 /// `mask.from_marquee`.
 fn mask_from_marquee(tx: &mut Edit<'_>, a: &MarqueeArgs) -> rhizome_core::Result<()> {
     let (m, layer) = modifier_at(tx, &a.at)?;
@@ -1754,15 +1822,7 @@ fn mask_from_marquee(tx: &mut Edit<'_>, a: &MarqueeArgs) -> rhizome_core::Result
     let ref_id = mask_ref_id(tx, m);
     let consumer = placement_of(tx, layer);
 
-    let v = tx.add("/layers", "vector", &a.vector_id)?;
-    set(tx, v, "label", &json!(a.label))?;
-    set(tx, v, "visible", &json!(false))?;
-    set(tx, v, "paths", &a.paths)?;
-    set(tx, v, "fillRule", &json!(a.fill_rule))?;
-    let mut stack = stack_of(tx);
-    stack.retain(|id| *id != v);
-    stack.insert(0, v);
-    tx.set_order("/layers", "stack", stack)?;
+    let v = add_selection_layer(tx, &a.vector_id, &a.paths, &a.fill_rule, &a.label)?;
 
     // a selection made on the image belongs to the image (mask-follows-node.md)
     let values = mask_binding(
@@ -1778,8 +1838,7 @@ fn mask_from_marquee(tx: &mut Edit<'_>, a: &MarqueeArgs) -> rhizome_core::Result
     // layer the user made) and nothing else uses it.
     if let Some(prev) = previous.filter(|p| *p != v && *p != layer) {
         let n = tx.at(prev).expect("live");
-        let ours = matches!(n.value("label"), Some(Value::Text(l)) if l.starts_with("Selection ("));
-        if ours && n.bound_to().is_empty() {
+        if is_selection(&n) && n.bound_to().is_empty() {
             tx.remove(prev)?;
         }
     }
@@ -1936,6 +1995,9 @@ pub fn add_layer(tx: &mut Edit<'_>, n: &Json) -> rhizome_core::Result<NodeId> {
         "vector" => {
             set(tx, at, "paths", &n["paths"])?;
             set(tx, at, "fillRule", &n["fillRule"])?;
+            if n["role"] == "selection" {
+                set(tx, at, "role", &n["role"])?;
+            }
         }
         _ => {
             for key in TEXT_KEYS {

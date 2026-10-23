@@ -7,6 +7,7 @@ import {
   isMaskableMarquee,
   KAPPA,
   marqueeToVectorPaths,
+  selectionLabel,
   useMarqueeStateStore,
 } from './marquee';
 
@@ -240,6 +241,26 @@ describe('marqueeToVectorPaths', () => {
         expect(anchor.handleOut).toBeUndefined();
       }
     }
+  });
+});
+
+describe('selectionLabel (save-selection.md)', () => {
+  const rect = { x: 0, y: 0, w: 1, h: 1 };
+
+  it('is Selection (kind) for a rect, an ellipse and a lasso', () => {
+    expect(selectionLabel({ kind: 'rect', rect })).toBe('Selection (rect)');
+    expect(selectionLabel({ kind: 'ellipse', rect })).toBe('Selection (ellipse)');
+    expect(selectionLabel({ kind: 'lasso', points: [], closed: true })).toBe('Selection (lasso)');
+  });
+
+  it("is a polygons marquee's own label, so Colour Select stays Selection (colour)", () => {
+    expect(selectionLabel({ kind: 'polygons', polygons: [], label: 'Selection (colour)' })).toBe(
+      'Selection (colour)',
+    );
+  });
+
+  it('falls back to Selection (segment) for a polygons marquee with no label', () => {
+    expect(selectionLabel({ kind: 'polygons', polygons: [] })).toBe('Selection (segment)');
   });
 });
 

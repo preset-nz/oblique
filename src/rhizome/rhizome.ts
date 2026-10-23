@@ -19,8 +19,8 @@
  *   `setModifierEnabled`, `setModifierVectorMask`, `removeModifierMask` and `setMaskSpace` are
  *   commands-first (`modifier.*`, `mask.*`); a param or mask-number scrub inside a gesture is
  *   latest-wins, so one drag is one undo step. Their update changes the store through the
- *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier` and
- *   `applyMarqueeAsVectorMask` are local first: the caller uses the id, or the new layer, at once.
+ *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier`,
+ *   `applyMarqueeAsVectorMask` and `saveMarqueeAsSelection` are local first: the caller uses the id, or the new layer, at once.
  * - **Vectors and text** (story 5): `setVectorPaths`, `setVectorFillRule` and
  *   `convertTextToOutlines` are local first: the caller's overlay (a path drag's release, the
  *   pen's focus) and selection need the result at once, so the original runs, dirtying the layer
@@ -38,7 +38,7 @@
  *   empty `baked` slot: the scheduler's rehydrate cook (lock-state-machine.md) refills it.
  * - **Local first** (where a caller needs the result at once): `addPixelNode`,
  *   `addVectorNode`, `addTextNode`, `duplicateNode`, `addModifier`, `applyMarqueeAsVectorMask`,
- *   `setVectorPaths`, `setVectorFillRule`, `convertTextToOutlines` and `setTextProps` run the
+ *   `saveMarqueeAsSelection`, `setVectorPaths`, `setVectorFillRule`, `convertTextToOutlines` and `setTextProps` run the
  *   original action at once, then send the command.
  * - **Reconcile.** When nothing is queued and no gesture is open, the scene rebuilt from the
  *   mirror is compared with the store (cook state aside). A difference means rhizome refused
@@ -361,6 +361,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     removeModifierMask: stateNow().removeModifierMask,
     setMaskSpace: stateNow().setMaskSpace,
     applyMarqueeAsVectorMask: stateNow().applyMarqueeAsVectorMask,
+    saveMarqueeAsSelection: stateNow().saveMarqueeAsSelection,
     setVectorPaths: stateNow().setVectorPaths,
     setVectorFillRule: stateNow().setVectorFillRule,
     convertTextToOutlines: stateNow().convertTextToOutlines,
@@ -578,6 +579,19 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         invert: params.invert,
       });
       return made;
+    },
+    saveMarqueeAsSelection: (marquee) => {
+      // Local first, like the mask version: the caller selects the new layer at once.
+      const id = original.saveMarqueeAsSelection(marquee);
+      const vector = id ? nodeOf(id) : undefined;
+      if (!id || !vector || !isVectorNode(vector)) return id;
+      sendLocal([id], 'selection.save', {
+        vectorId: id,
+        paths: vector.paths,
+        fillRule: vector.fillRule,
+        label: vector.label,
+      });
+      return id;
     },
     setVectorPaths: (id, paths) => {
       if (!editableVector(id)) return;

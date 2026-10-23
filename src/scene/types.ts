@@ -165,10 +165,24 @@ export interface VectorNode extends SceneNode {
   type: 'vector';
   paths: VectorPath[];
   fillRule: 'nonzero' | 'evenodd';
+  /**
+   * `'selection'` for a saved selection (Epic 26, save-selection.md); absent means a drawn
+   * layer. Mirrors the Rust `role` choice, which has `layer` for the absent case.
+   */
+  role?: 'selection';
 }
 
 export function isVectorNode(node: SceneNode): node is VectorNode {
   return node.type === 'vector';
+}
+
+/**
+ * A saved selection: a vector node with the selection role or, in a document from before the
+ * role, one labelled the way `mask.from_marquee` labelled them (`Selection (…)`). No upgrade on
+ * open: this is the one fallback. Rust's twin is `is_selection` (document/mod.rs).
+ */
+export function isSelectionNode(node: SceneNode): node is VectorNode {
+  return isVectorNode(node) && (node.role === 'selection' || node.label.startsWith('Selection ('));
 }
 
 /**

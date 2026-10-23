@@ -24,6 +24,7 @@ Drawn shapes with smooth edges, which can also mask other layers.
 | Transform | 16 numbers | 16 numbers | A full transform handed on to other layers when the output is a transform. |
 | Paths | structured | empty | The outlines that make up the shape, point by point. |
 | Fill rule | nonzero, evenodd | nonzero | How overlapping outlines fill: non-zero fills them all, even-odd leaves holes where they cross. |
+| Role | layer, selection | layer | Whether the vector is a drawn layer or a saved selection. |
 
 References: `cameraId`.
 

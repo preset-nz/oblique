@@ -86,6 +86,7 @@ pub fn commands() -> Vec<Command> {
     let view = |id, label, section| item(id, label).menu(MenuName::View).section(section);
     let layer = |id, label, section| item(id, label).domain("Layer").section(section);
     let text = |id, label| item(id, label).domain("Type").section(0);
+    let select = |id, label| item(id, label).domain("Select").section(0);
     vec![
         file("file-import", "Import…", 4),
         file("file-export-png", "Export PNG…", 5),
@@ -124,6 +125,10 @@ pub fn commands() -> Vec<Command> {
         // Epic 20: Replace Font… (story 6) and Convert to Outlines (story 7).
         text("type-replace-font", "Replace Font…"),
         text("type-convert-outlines", "Convert to Outlines"),
+        // Epic 26 story 2: Return on the canvas is the key, so no accelerator here (a bare
+        // Return chord would swallow Return in text fields). Enabled only while a finished
+        // marquee is up; the webview says when (`useMenuCommands`).
+        select("select-save", "Save Selection").disabled(),
     ]
 }
 
@@ -220,6 +225,13 @@ mod tests {
     }
 
     #[test]
+    fn save_selection_has_no_accelerator() {
+        // Return is a canvas key (Viewport.tsx); a menu accelerator on it would take Return
+        // from text fields.
+        assert!(SHORTCUTS.iter().all(|(id, _)| *id != "select-save"));
+    }
+
+    #[test]
     fn import_is_shift_cmd_i_and_cmd_i_is_free() {
         let import = SHORTCUTS.iter().find(|(id, _)| *id == "file-import");
         assert_eq!(import.map(|(_, a)| *a), Some("CmdOrCtrl+Shift+I"));
@@ -288,6 +300,7 @@ mod tests {
             "layer-replace-image",
             "type-replace-font",
             "type-convert-outlines",
+            "select-save",
         ] {
             assert!(ids.contains(&id), "{id} is gone");
         }

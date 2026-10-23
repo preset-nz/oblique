@@ -10,9 +10,9 @@ import { menuBindings } from './menu';
 const rust = readFileSync(new URL('../../src-tauri/src/menu.rs', import.meta.url), 'utf8');
 
 /** The ids `commands()` declares: `file("file-new", …)`, `item("edit-duplicate", …)` and so on. */
-const declared = [...rust.matchAll(/\b(?:file|view|layer|text|item|toggle)\(\s*"([a-z.-]+)"/g)].map(
-  (m) => m[1],
-);
+const declared = [
+  ...rust.matchAll(/\b(?:file|view|layer|text|select|item|toggle)\(\s*"([a-z.-]+)"/g),
+].map((m) => m[1]);
 
 /** Items app-kit builds itself: Settings…, Undo and Redo (File's are below). */
 const APP_KITS = ['app.settings', 'edit.undo', 'edit.redo'];
@@ -22,6 +22,7 @@ const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 
 const state = {
   replaceableImage: false,
+  savableSelection: false,
   snapToLayers: true,
   selectionFill: true,
   leftPanel: true,
@@ -69,6 +70,22 @@ describe('the state the menu shows', () => {
     expect(menuBindings({ ...state, replaceableImage: true })['layer-replace-image'].enabled).toBe(
       true,
     );
+  });
+
+  it('enables Select > Save Selection only while a finished marquee is up, with no chord', () => {
+    expect(menuBindings({ ...state, savableSelection: false })['select-save'].enabled).toBe(false);
+    expect(menuBindings({ ...state, savableSelection: true })['select-save'].enabled).toBe(true);
+    expect(rust).not.toMatch(/"select-save",\s*"CmdOrCtrl/);
+  });
+
+  it('runs Save Selection through the shared entry point', async () => {
+    const { useMarqueeStateStore } = await import('@/scene/marquee');
+    const { useSceneStore } = await import('@/scene/store');
+    useSceneStore.getState().resetScene();
+    useMarqueeStateStore.getState().setMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 5, h: 5 } });
+    menuBindings({ ...state, savableSelection: true })['select-save'].run?.();
+    expect(useSceneStore.getState().scene.nodes).toHaveLength(1);
+    expect(useMarqueeStateStore.getState().marquee).toBeNull();
   });
 
   it('ticks Snap to Layers from the snap store, and a click flips the store', async () => {

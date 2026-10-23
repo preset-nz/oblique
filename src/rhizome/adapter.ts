@@ -143,6 +143,8 @@ export function layerNode(
   } else if (r.type === 'vector') {
     node.paths = val(r, 'paths');
     node.fillRule = val(r, 'fillRule');
+    // absent means a drawn layer: the key exists only on a saved selection
+    if (val(r, 'role') === 'selection') node.role = 'selection';
   } else {
     for (const k of TEXT_KEYS) node[k] = val(r, k);
   }
@@ -214,6 +216,7 @@ export function layerRows(node: SceneNode, scene: Scene): Row[] {
   } else if (node.type === 'vector') {
     valued(layer, 'paths', n.paths);
     valued(layer, 'fillRule', n.fillRule);
+    if (n.role === 'selection') valued(layer, 'role', 'selection');
   } else {
     for (const k of TEXT_KEYS) valued(layer, k, n[k]);
   }

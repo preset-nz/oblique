@@ -14,6 +14,8 @@ import { exportPng } from '@/project/export';
 import { tauriImportDeps } from '@/project/import';
 import { importImagesDialog, replaceImageDialog } from '@/project/io';
 import { duplicateNode } from '@/scene/duplicateNode';
+import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
+import { saveActiveSelection } from '@/scene/saveSelection';
 import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { commitActiveTextEdit } from '@/scene/textEditState';
@@ -26,8 +28,9 @@ import { isPixelNode } from '@/scene/types';
  * sits in the bar. app-kit builds the native menu from it and sends every activation as a
  * `command` event carrying the id; `useCommands` finds the binding here and runs it when it is
  * enabled, and pushes the enabled and ticked state back to the menu. So this module is only
- * `id -> what it does`, plus the two items whose state follows the app: Replace Image… (enabled
- * while an unlocked image layer is selected) and the View ticks: Snap to Layers (the snap store's),
+ * `id -> what it does`, plus the items whose state follows the app: Replace Image… (enabled
+ * while an unlocked image layer is selected), Save Selection (enabled while a finished marquee
+ * is up) and the View ticks: Snap to Layers (the snap store's),
  * Show Selection Fill (the selection fill store's) and the two side panels (`app/panelState.ts`).
  *
  * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
@@ -94,6 +97,8 @@ async function duplicateSelected(): Promise<void> {
 export interface MenuState {
   /** An unlocked image layer is selected: Replace Image… is enabled. */
   replaceableImage: boolean;
+  /** A finished marquee is up: Select > Save Selection is enabled. */
+  savableSelection: boolean;
   /** Snap to Layers is on: its tick. */
   snapToLayers: boolean;
   /** Show Selection Fill is on: its tick. */
@@ -181,6 +186,16 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
         void convertSelectedTextToOutlines();
       },
     },
+    // Select menu (Epic 26): Return on the canvas is the key (`Viewport.tsx`), so no chord here.
+    // Enabled only while a maskable marquee is active; an open text edit commits first, as its
+    // neighbours do, so the selection is its own undo step.
+    'select-save': {
+      enabled: state.savableSelection,
+      run: () => {
+        commitActiveTextEdit();
+        saveActiveSelection();
+      },
+    },
   };
 }
 
@@ -196,13 +211,22 @@ export function useMenuCommands(): void {
     const node = s.scene.nodes.find((n) => n.id === selectedId);
     return node !== undefined && isPixelNode(node) && node.state !== 'locked';
   });
+  const savableSelection = useMarqueeStateStore((s) => isMaskableMarquee(s.marquee));
   const snapToLayers = useSnapStore((s) => s.enabled);
   const selectionFill = useSelectionFillStore((s) => s.enabled);
   const leftPanel = usePanelStore((s) => s.left);
   const rightPanel = usePanelStore((s) => s.right);
   const bindings = useMemo(
-    () => menuBindings({ replaceableImage, snapToLayers, selectionFill, leftPanel, rightPanel }),
-    [replaceableImage, snapToLayers, selectionFill, leftPanel, rightPanel],
+    () =>
+      menuBindings({
+        replaceableImage,
+        savableSelection,
+        snapToLayers,
+        selectionFill,
+        leftPanel,
+        rightPanel,
+      }),
+    [replaceableImage, savableSelection, snapToLayers, selectionFill, leftPanel, rightPanel],
   );
   useCommands(bindings);
 }

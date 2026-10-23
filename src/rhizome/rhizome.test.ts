@@ -1797,6 +1797,72 @@ describe('modifiers and masks (modifier.*, mask.*)', () => {
       expect(state().scene.nodes).toHaveLength(1);
     });
   });
+  describe('Save Selection (selection.save)', () => {
+    const rect = { kind: 'rect', rect: { x: 10, y: 20, w: 30, h: 40 } } as const;
+
+    it('is one command and one undo step, and agrees', async () => {
+      await withOps([pixel('a'), pixel('b')]);
+      const id = state().saveMarqueeAsSelection(rect) as string;
+      // local first: the hidden selection layer is on top at once
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([id, 'a', 'b']);
+      expect(node(id)).toMatchObject({
+        visible: false,
+        label: 'Selection (rect)',
+        role: 'selection',
+      });
+      await settle();
+      expect(sent()).toEqual(['selection.save']);
+      expect(host.runs[0].payload).toMatchObject({
+        vectorId: id,
+        fillRule: 'nonzero',
+        label: 'Selection (rect)',
+      });
+      await agrees();
+      await undo();
+      expect(state().scene.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+      await agrees();
+      await redo();
+      expect(state().scene.nodes.map((n) => n.id)).toEqual([id, 'a', 'b']);
+      expect((node(id) as VectorNode).role).toBe('selection');
+      await agrees();
+    });
+
+    it('a duplicated selection keeps its role, and the store and the tree agree', async () => {
+      await withOps([pixel('a')]);
+      const id = state().saveMarqueeAsSelection(rect) as string;
+      await settle();
+      const copy = state().duplicateNode(id) as string;
+      expect((node(copy) as VectorNode).role).toBe('selection');
+      await settle();
+      expect(sent()).toEqual(['selection.save', 'layer.duplicate']);
+      await agrees();
+    });
+
+    it('sends nothing for a marquee that is not maskable', async () => {
+      await withOps([pixel('a')]);
+      expect(
+        state().saveMarqueeAsSelection({ kind: 'rect', rect: { x: 0, y: 0, w: 0, h: 0 } }),
+      ).toBe(undefined);
+      await settle();
+      expect(host.runs).toHaveLength(0);
+    });
+
+    it('Mask from selection keeps agreeing now that its layer carries the role', async () => {
+      await withOps([
+        pixel('a', {
+          modifiers: [{ id: 'mod1', type: 'blur', enabled: true, params: { radius: 5 } }],
+        }),
+      ]);
+      const made = state().applyMarqueeAsVectorMask('a', 'mod1', rect, {
+        featherPx: 0,
+        expand: 0,
+        invert: false,
+      });
+      expect((node(made?.vectorNodeId as string) as VectorNode).role).toBe('selection');
+      await settle();
+      await agrees();
+    });
+  });
 });
 
 // ---------------------------------------------------------------- vectors and text (story 5)
