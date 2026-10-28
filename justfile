@@ -1,6 +1,9 @@
 # Oblique — local-first image editor built around a modifier stack.
 # Standard verbs: prep, install, run, check, build.
 
+# Only the Windows `build` uses it: the build PC has no bash (guidance runbook windows-builds.md).
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
 default:
     @just --list
 
@@ -86,6 +89,7 @@ fmt:
     uv run --project sidecar ruff check --fix .
     uv run --project sidecar ruff format .
 
+[unix]
 [group('build')]
 build:
     #!/usr/bin/env bash
@@ -107,6 +111,18 @@ build:
     # unnotarized) signature. Found 2026-07-10, Epic 14.
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
     codesign --deep --force --sign - "src-tauri/target/release/bundle/macos/${product}.app"
+
+# Windows installer (NSIS), on the build PC. PyInstaller bundles the MSVC runtime from uv's
+# Python (14.29), and onnxruntime 1.23 needs 14.40 or later ("DLL initialization routine
+# failed"), so the system's current copies replace them before Tauri bundles the sidecar.
+# Found 2026-10-29.
+[windows]
+[group('build')]
+build:
+    Remove-Item -Recurse -Force sidecar/dist, sidecar/build -ErrorAction SilentlyContinue
+    cd sidecar; uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$env:SystemRoot\System32\$dll" sidecar/dist/oblique-sidecar/_internal/ -Force }
+    pnpm tauri build --bundles nsis
 
 # Friends build (Epic 14): zipped .app + README + LICENSE + THIRD-PARTY-NOTICES.txt. Unsigned — see epic doc.
 [group('build')]
