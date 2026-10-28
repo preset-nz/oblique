@@ -13,6 +13,7 @@ Local-first image editor built around a modifier stack. Tauri 2 + React 19 + Typ
 Family rules (one story per commit, `just check`, subagents don't commit) are in `../CLAUDE.md`.
 
 - Story docs' "Components touched" file paths are contractual.
+- `just run` (`pnpm tauri dev`): Vite HMR reloads the webview only, and the Python sidecar is spawned once at app start. Restart `just run` after Python sidecar changes; `src-tauri` changes are rebuilt by tauri dev.
 
 ## Hard rules
 
