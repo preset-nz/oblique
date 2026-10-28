@@ -70,21 +70,26 @@ fn sidecar_dir(app: &AppHandle) -> PathBuf {
 }
 
 fn spawn_child(dir: &PathBuf) -> std::io::Result<Child> {
-    if cfg!(debug_assertions) {
-        Command::new("uv")
-            .args(["run", "python", "main.py"])
-            .current_dir(dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+    let mut command = if cfg!(debug_assertions) {
+        let mut command = Command::new("uv");
+        command.args(["run", "python", "main.py"]).current_dir(dir);
+        command
     } else {
         Command::new(dir.join("oblique-sidecar"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+    };
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // The frozen sidecar is a console program; without this Windows opens a
+    // console window beside the app for it.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
+    command.spawn()
 }
 
 fn emit_status(app: &AppHandle, up: bool, error: Option<String>) {
