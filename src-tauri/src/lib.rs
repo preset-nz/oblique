@@ -29,6 +29,7 @@ pub fn run() {
             sidecar::sidecar_send,
             sidecar::sidecar_subscribe,
             document::document_init,
+            document::document_resave,
             document::document_log,
             rhizome_pom_tauri::commands::pom_status,
             rhizome_pom_tauri::commands::pom_view,

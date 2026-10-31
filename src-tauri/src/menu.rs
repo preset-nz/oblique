@@ -122,6 +122,11 @@ pub fn commands() -> Vec<Command> {
         // Image-source.md: an infrequent action, no accelerator. Enabled only while an
         // unlocked image layer is selected; the webview says when (`useMenuSync`).
         layer("layer-replace-image", "Replace Image…", 2).disabled(),
+        // Epic 17 story 5: a layer from the selected layer, so no accelerator. Enabled while a
+        // layer that cooks is selected and the sidecar is up; the webview says when
+        // (`useMenuCommands`). 8-bit only: the 16-bit writer waits in the sidecar for the `data`
+        // layer type (architecture.md, reserved), the first thing that could use the extra bits.
+        layer("layer-create-depth-map", "Create Depth Map", 3).disabled(),
         // Epic 20: Replace Font… (story 6) and Convert to Outlines (story 7).
         text("type-replace-font", "Replace Font…"),
         text("type-convert-outlines", "Convert to Outlines"),
@@ -307,6 +312,7 @@ mod tests {
             "layer-front",
             "layer-back",
             "layer-replace-image",
+            "layer-create-depth-map",
             "type-replace-font",
             "type-convert-outlines",
             "select-save",

@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDepthMap } from '@/ai/createDepthMap';
 import { useMissingFontsStore } from '@/fonts/missingFonts';
 import { firstDifference, normal } from '@/rhizome/adapter';
 import { adoptRhizome, createRhizome, type Rhizome } from '@/rhizome/rhizome';
@@ -45,6 +46,7 @@ import {
   useProjectMetaStore,
   writeBakedSidecar,
 } from './io';
+import { clearPending, getPending, setPending } from './pendingFiles';
 import { bindProjectMeta } from './projectMeta';
 import { resetHomeDirCache } from './SavedToastPath';
 
@@ -1028,5 +1030,170 @@ describe('relative source paths (image-source.md)', () => {
     const readFile = vi.fn(async () => new Uint8Array([1]));
     await saveProject('/x/proj.oblique', use(makeDeps({ readFile })));
     expect(readFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('depth maps and the document they belong to (Epic 17 story 5)', () => {
+  const PNG = new Uint8Array([137, 80, 78, 71, 9]);
+
+  /** Create Depth Map over `n1`, with the model, sidecar and disk faked. */
+  const makeDepthLayer = async (projectPath: string | null): Promise<string> => {
+    const id = await createDepthMap('n1', 8, {
+      ensure: async () => undefined,
+      readRaster: async () => ({ image: new Uint8Array(200 * 100 * 4), width: 200, height: 100 }),
+      depth: async () => ({ png: PNG, width: 200, height: 100, bits: 8 as const }),
+      projectPath: () => projectPath,
+      mkdir: async () => undefined,
+      writeFile: async () => undefined,
+      keepPending: setPending,
+      decode: async () => ({ width: 200, height: 100, close: vi.fn() }),
+      notify: vi.fn() as never,
+      newId: () => 'f1',
+    });
+    await settle();
+    return id as string;
+  };
+  const sourcePathOf = (id: string) =>
+    (sceneNow().nodes.find((n) => n.id === id) as unknown as { sourcePath: string }).sourcePath;
+
+  beforeEach(() => clearPending());
+
+  it('in an Untitled document the PNG is held, not written, and the layer shows it', async () => {
+    await arrange(sampleScene());
+    const writeFile = vi.fn(async () => {});
+    use(makeDeps({ writeFile }));
+
+    const id = await makeDepthLayer(null);
+
+    expect(sourcePathOf(id)).toBe('pending://depth/f1.png');
+    expect(getPending('pending://depth/f1.png')).toBe(PNG);
+    expect(sources.get(id)).toBeDefined();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('the first Save writes the held PNG beside the project and points the layer at it', async () => {
+    await arrange(sampleScene());
+    const id = await makeDepthLayer(null);
+    const writeFile = vi.fn(async () => {});
+    const mkdir = vi.fn(async () => {});
+
+    await saveProject('/x/proj.oblique', use(makeDeps({ writeFile, mkdir })));
+    await vi.waitFor(() => expect(sourcePathOf(id)).toBe('proj.oblique.depth/f1.png'));
+
+    expect(mkdir).toHaveBeenCalledWith('/x/proj.oblique.depth', { recursive: true });
+    expect(writeFile).toHaveBeenCalledWith('/x/proj.oblique.depth/f1.png', PNG);
+    expect(host.runs.find((r) => r.id === 'layer.set_source')?.payload).toEqual({
+      at: `/layers/${id}`,
+      sourcePath: 'proj.oblique.depth/f1.png',
+    });
+    expect(notify).toHaveBeenCalledTimes(1); // the saved toast, no error beside it
+  });
+
+  it('the saved file never ends a save naming a placeholder: it is written again once the layer is repointed', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+
+    const file = host.disk.get('/x/proj.oblique') as string;
+    expect(file).not.toContain('pending://');
+    expect(file).toContain('proj.oblique.depth/f1.png');
+    // written twice: the save itself, then once more behind the repoint
+    expect(host.trace.filter((t) => t === 'save:/x/proj.oblique')).toHaveLength(2);
+    expect(host.unsaved).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(1); // one "Saved" for the pair
+  });
+
+  it('a save with nothing to repoint is written once', async () => {
+    await arrange(sampleScene());
+    await saveProject('/x/plain.oblique', use(makeDeps()));
+    await settle();
+    expect(host.trace.filter((t) => t.startsWith('save:'))).toHaveLength(1);
+  });
+
+  it('Save As of a saved document with depth maps ends with no placeholder, and the baked images and re-check still run once', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+    vi.mocked(notify).mockClear();
+
+    const readFile = vi.fn(async () => PNG);
+    await saveProject('/y/copy.oblique', use(makeDeps({ readFile })));
+    await settle();
+
+    expect(host.disk.get('/y/copy.oblique')).toContain('copy.oblique.depth/f1.png');
+    expect(host.disk.get('/y/copy.oblique')).not.toContain('pending://');
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('if writing again fails the baked images and the toast still happen, with the error', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+    vi.spyOn(host, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', description: 'disk full' }),
+    );
+  });
+
+  it('undo and redo before the first Save keep the bytes: redo shows the layer again', async () => {
+    await arrange(sampleScene());
+    const id = await makeDepthLayer(null);
+
+    await host.step(true); // undo: the layer goes, and with it its decoded bitmap
+    await settle();
+    expect(sceneNow().nodes.map((n) => n.id)).toEqual(['n1']);
+    expect(sources.get(id)).toBeUndefined();
+    expect(getPending('pending://depth/f1.png')).toBe(PNG);
+
+    const decode = vi.fn(async () => ({ width: 200, height: 100, close: vi.fn() }));
+    use(makeDeps({ decode }));
+    await host.step(false); // redo
+    await settle();
+    expect(sceneNow().nodes.map((n) => n.id)).toContain(id);
+    expect(decode).toHaveBeenCalledWith(PNG);
+    expect(sources.get(id)).toBeDefined();
+    expect(sources.isSourceMissing(id)).toBe(false);
+  });
+
+  it('a Save As into another folder copies the depth maps and points the layers at the copies', async () => {
+    putFile('/a/old.oblique', {
+      ...sampleScene(),
+      nodes: sampleScene().nodes.map((n) => ({ ...n, sourcePath: 'old.oblique.depth/f1.png' })),
+    });
+    await loadProject('/a/old.oblique', use(makeDeps()));
+    const bytes = new Uint8Array([5, 6, 7]);
+    const readFile = vi.fn(async () => bytes);
+    const writeFile = vi.fn(async () => {});
+
+    await saveProject('/b/new.oblique', use(makeDeps({ readFile, writeFile })));
+    await vi.waitFor(() => expect(sourcePathOf('n1')).toBe('new.oblique.depth/f1.png'));
+
+    expect(readFile).toHaveBeenCalledWith('/a/old.oblique.depth/f1.png');
+    expect(writeFile).toHaveBeenCalledWith('/b/new.oblique.depth/f1.png', bytes);
+  });
+
+  it('a plain Save copies nothing', async () => {
+    putFile('/a/old.oblique', {
+      ...sampleScene(),
+      nodes: sampleScene().nodes.map((n) => ({ ...n, sourcePath: 'old.oblique.depth/f1.png' })),
+    });
+    await loadProject('/a/old.oblique', use(makeDeps()));
+    const writeFile = vi.fn(async () => {});
+    await saveProject('/a/old.oblique', use(makeDeps({ writeFile })));
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('opening a document drops the held bytes of the last one', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+    putFile('/x/other.oblique', sampleScene());
+    await loadProject('/x/other.oblique', use(makeDeps()));
+    expect(getPending('pending://depth/f1.png')).toBeUndefined();
   });
 });

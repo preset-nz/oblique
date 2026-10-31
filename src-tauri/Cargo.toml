@@ -42,4 +42,7 @@ preset-app-kit = { version = "0.1.4", features = ["models"] }
 tauri = { version = "2", features = ["test"] }
 # Golden-render test rasteriser only (text/raster_tests.rs); nothing ships. BSD-3-Clause.
 tiny-skia = "0.11"
+# Writes the window-check fixtures' picture files (document/fixtures.rs), the 16-bit one included.
+# Nothing ships. MIT or Apache-2.0.
+png = "0.17"
 

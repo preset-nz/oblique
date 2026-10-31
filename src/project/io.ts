@@ -12,7 +12,9 @@ import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
+import { settleDepthFiles } from './depthFiles';
 import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './import';
+import { clearPending } from './pendingFiles';
 import { useProjectMetaStore } from './projectMeta';
 import { isRelativeSourcePath, resolveSourcePath } from './resolvePath';
 import { homeDirOnce, SavedToastPath } from './SavedToastPath';
@@ -240,6 +242,12 @@ async function rehydrateBaked(path: string, target: Scene, deps: ProjectIoDeps):
  * relative sources are re-checked, since they resolve against the project's folder. Without that
  * re-check a Save As would silently stop flagging images that no longer resolve.
  */
+/**
+ * Set while a handler waits for the save it asked for (`saved`): that save's event is the
+ * follow-up and does the baked images, the re-check and the toast for both.
+ */
+let followUp: { previous: string | null } | null = null;
+
 export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps): DocumentEvents {
   return {
     async opened({ issues, path }, adopt) {
@@ -247,6 +255,7 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
         cache.clearAll();
         prefixStore.clearAll();
         sources.clearAll();
+        clearPending(); // a new or opened document owns none of the last one's unsaved files
         backgroundSource.clear(); // like sources: a load always re-decodes
         if (path) await rehydrateBaked(path, target, deps);
       });
@@ -271,10 +280,41 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
       else useMissingFontsStore.getState().documentCleared();
     },
 
-    async saved({ previous, path }) {
+    async saved(event, saveAgain) {
+      const { path } = event;
+      let previous = event.previous;
+      let failure: unknown;
       try {
+        if (followUp) {
+          // The save this handler asked for below: the first one's `previous` is the one that
+          // matters for the relative-source re-check.
+          previous = followUp.previous;
+          followUp = null;
+        } else {
+          const settled = await settleDepthFiles(previous, path, deps);
+          failure = settled.error;
+          if (settled.repointed) {
+            // The file Rust just wrote still names `pending://` for a depth map made in an
+            // Untitled document. The repoints are edits, so the document is unsaved again: write
+            // it once more, behind them, through the save File > Save and the close guard use.
+            // Everything else (baked images, re-check, toast) is left to that save's own event.
+            followUp = { previous };
+            let wrote = false;
+            try {
+              wrote = await saveAgain();
+            } catch (err) {
+              failure ??= err;
+            }
+            if (wrote) {
+              if (failure !== undefined) throw failure;
+              return;
+            }
+            followUp = null;
+          }
+        }
         await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
         if (path !== previous) await recheckRelativeSources(previous, path, deps);
+        if (failure !== undefined) throw failure;
         // one toast per save: this one, or the error below
         notify({
           message: `Saved ${filenameOf(path)}`,

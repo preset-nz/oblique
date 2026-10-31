@@ -1,5 +1,11 @@
 import { type Binding, useCommands } from '@preset.nz/app-kit/core';
+import { useModelGate } from '@preset.nz/app-kit/models';
 import { useMemo } from 'react';
+import {
+  canCreateDepthMap,
+  createDepthMap,
+  productionCreateDepthMapDeps,
+} from '@/ai/createDepthMap';
 import { usePanelStore } from '@/app/panelState';
 import { useColourSelectStore } from '@/canvas/colourSelect/state';
 import { useSelectionFillStore } from '@/canvas/selectionFillState';
@@ -24,6 +30,7 @@ import { useSelectionStore } from '@/scene/selection';
 import { useSceneStore } from '@/scene/store';
 import { commitActiveTextEdit } from '@/scene/textEditState';
 import { isPixelNode } from '@/scene/types';
+import { useSidecarStatusStore } from '@/sidecar/client';
 
 /**
  * What each menu command does: the webview half of app-kit's command table (Epic 22, slice b).
@@ -111,8 +118,28 @@ export function deselect(): void {
   if (tool === 'select-colour') useColourSelectStore.getState().clearPrompt();
 }
 
+/** Layer → Create Depth Map (Epic 17 story 5): the selected layer, through the ask-first gate. */
+function createDepthMapOfSelection(ensure: MenuDeps['ensure']): void {
+  commitActiveTextEdit();
+  const selection = useSelectionStore.getState().selection;
+  if (selection.kind !== 'node') return;
+  void createDepthMap(selection.nodeId, 8, productionCreateDepthMapDeps(ensure));
+}
+
+/** What the bindings need that isn't plain state: the model gate, which is a hook (`useModelGate`). */
+export interface MenuDeps {
+  ensure: (id: string, options?: { for?: string }) => Promise<void>;
+}
+
+/** Without the hook's gate (the bindings' own tests), a command that needs a model fails loudly. */
+const NO_MODEL_GATE: MenuDeps = {
+  ensure: () => Promise.reject(new Error('the model gate is not mounted')),
+};
+
 /** The state the menu shows besides what the table says. */
 export interface MenuState {
+  /** A layer that cooks is selected and the sidecar is up: Create Depth Map is enabled. */
+  depthSource: boolean;
   /** An unlocked image layer is selected: Replace Image… is enabled. */
   replaceableImage: boolean;
   /** A finished marquee is up: Select > Save Selection is enabled. */
@@ -134,7 +161,10 @@ export interface MenuState {
  * ignored by app-kit, and a command with no binding stays a dead menu item, which
  * `menu.test.ts` guards against.
  */
-export function menuBindings(state: MenuState): Record<string, Binding> {
+export function menuBindings(
+  state: MenuState,
+  deps: MenuDeps = NO_MODEL_GATE,
+): Record<string, Binding> {
   const run = (f: () => unknown): Pick<Binding, 'run'> => ({ run: () => void f() });
   return {
     // App → Settings… (`app.settings`, app-kit's own item, Epic 17 story 1)
@@ -192,6 +222,12 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
       enabled: state.replaceableImage,
       run: () => void replaceSelectedImage(),
     },
+    // Layer → Create Depth Map (Epic 17 story 5): a new layer above the selected one, one undo
+    // step, 8-bit. 16-bit waits for the `data` layer type (see `createDepthMap`).
+    'layer-create-depth-map': {
+      enabled: state.depthSource,
+      run: () => createDepthMapOfSelection(deps.ensure),
+    },
     // Type menu (Epic 20): a Replace Font undo step must not swallow a half-finished text edit,
     // and the outline conversion is its own undo step, so an open edit commits first in both.
     'type-replace-font': {
@@ -238,6 +274,11 @@ export function useMenuCommands(): void {
     const node = s.scene.nodes.find((n) => n.id === selectedId);
     return node !== undefined && isPixelNode(node) && node.state !== 'locked';
   });
+  const sidecarUp = useSidecarStatusStore((s) => s.status === 'up');
+  const depthSource = useSceneStore(
+    (s) => sidecarUp && canCreateDepthMap(s.scene.nodes.find((n) => n.id === selectedId)),
+  );
+  const { ensure } = useModelGate();
   const savableSelection = useMarqueeStateStore((s) => isMaskableMarquee(s.marquee));
   const deselectable = useMarqueeStateStore((s) => s.marquee !== null);
   const hasActiveSelection = useActiveSelectionStore((s) => s.id !== null);
@@ -247,16 +288,22 @@ export function useMenuCommands(): void {
   const rightPanel = usePanelStore((s) => s.right);
   const bindings = useMemo(
     () =>
-      menuBindings({
-        replaceableImage,
-        savableSelection,
-        deselectable: deselectable || hasActiveSelection,
-        snapToLayers,
-        selectionFill,
-        leftPanel,
-        rightPanel,
-      }),
+      menuBindings(
+        {
+          depthSource,
+          replaceableImage,
+          savableSelection,
+          deselectable: deselectable || hasActiveSelection,
+          snapToLayers,
+          selectionFill,
+          leftPanel,
+          rightPanel,
+        },
+        { ensure },
+      ),
     [
+      depthSource,
+      ensure,
       replaceableImage,
       savableSelection,
       deselectable,

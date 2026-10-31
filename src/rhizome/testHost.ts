@@ -216,6 +216,12 @@ export class FakeHost implements RhizomeBackend {
     this.write(path);
     await Promise.all(this.onSaved.map((f) => f({ previous, path })));
   }
+  /** `Document::save` on the document's own path, when there is one and something is unsaved. */
+  async save(): Promise<boolean> {
+    if (this.path === null || !this.unsaved) return false;
+    await this.saveFile(this.path);
+    return true;
+  }
   private write(path: string): void {
     this.disk.set(path, JSON.stringify({ rhizome: MARK, rows: [...this.rows.values()] }));
     this.path = path;

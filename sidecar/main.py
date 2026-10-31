@@ -14,6 +14,7 @@ import traceback
 from typing import Any
 
 from handlers.cook import handle_cook
+from handlers.depth import handle_depth
 from handlers.segment import handle_segment
 from handlers.select_colour import handle_select_colour
 from ops import OPS, categories_to_list
@@ -49,6 +50,8 @@ def dispatch(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any], by
         return handle_cook(header, payload)
     if op_name == "segment":
         return handle_segment(header, payload)
+    if op_name == "depth":
+        return handle_depth(header, payload)
     if op_name == "select_colour":
         return handle_select_colour(header, payload)
 

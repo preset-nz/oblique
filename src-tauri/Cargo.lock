@@ -2445,6 +2445,7 @@ name = "oblique"
 version = "0.2.1"
 dependencies = [
  "fontdb",
+ "png 0.17.16",
  "preset-app-kit",
  "rhizome-core",
  "rhizome-pom",

@@ -86,7 +86,7 @@ function parsePolygons(value: unknown): Array<Array<{ x: number; y: number }>> {
 }
 
 /** app-kit's `NotInstalled`, as it arrives over `invoke` (a plain string). */
-function isNotInstalled(err: unknown): boolean {
+export function isNotInstalled(err: unknown): boolean {
   return /isn't installed/.test(err instanceof Error ? err.message : String(err));
 }
 

@@ -69,6 +69,29 @@ check:
     ./node_modules/.bin/depcruise src
     just licences
 
+# Writes the window-check projects again from the commands that build them: the names given
+# (`depth-map`), or every one. Each is tests/window/fixtures/<name>.oblique with its picture files
+# beside it, committed; its steps are in the project's Notes panel. `just check` fails when one is
+# stale. Open it in the app (copy it to a scratch folder first: the checks write files beside it).
+[group('dev')]
+fixtures *names='all':
+    FIXTURES="$(echo {{names}} | tr ' ' ',')" cargo test --manifest-path src-tauri/Cargo.toml --lib document::fixtures
+
+# A fresh copy of one window-check project, with its picture folders, in ~/Desktop/Oblique
+# checks/<name>/, shown in Finder. The checks write files beside it, so the committed fixture stays
+# clean. Running it again replaces that copy. `just window-check depth-map`
+[group('dev')]
+window-check name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="tests/window/fixtures"
+    [ -f "$src/{{name}}.oblique" ] || { echo "no fixture $src/{{name}}.oblique"; exit 1; }
+    dest="$HOME/Desktop/Oblique checks/{{name}}"
+    rm -rf "$dest" && mkdir -p "$dest"
+    for f in "$src/{{name}}".*; do cp -R "$f" "$dest/"; done
+    open -R "$dest/{{name}}.oblique"
+    echo "File > Open: $dest/{{name}}.oblique"
+
 # Opt-in: every real project opens, saves (to memory) and reopens to the same tree. Takes
 # colon-separated .oblique files and only reads them; needs `uv` for the op catalogue.
 # `just coverage ~/Documents/v2-test.oblique`
@@ -81,6 +104,15 @@ coverage files:
 [group('quality')]
 licences:
     preset-compliance licences check
+
+# Depth model, CPU against CoreML (Epic 17 story 5, depth-map.md): load time, median of 10 after 2
+# warm-ups, CoreML node coverage and how far the maps differ, on three inputs made from one photo.
+# Writes the maps and diffs as PNGs. Weights are never in the repo: `--model-dir <folder>` holds
+# model.onnx and is downloaded there when missing (default ~/.cache/oblique-bench/); `--out <folder>`
+# says where the PNGs go. `just bench-depth ~/Pictures/photo.jpg`
+[group('eval')]
+bench-depth image *args:
+    PYTHONPATH=sidecar uv run --project sidecar python -m bench.depth_providers "{{absolute_path(image)}}" {{args}}
 
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]

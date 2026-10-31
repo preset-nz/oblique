@@ -17,8 +17,8 @@ use tauri::Listener as _;
 
 use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
-    fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue, DocumentHost,
-    Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
+    document_resave, fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue,
+    DocumentHost, Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
 };
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
@@ -834,6 +834,36 @@ fn a_gesture_is_one_undo_step_and_cancel_takes_it_back() {
         Some(Value::Vec2([5.0, 0.0]))
     );
     assert_eq!(d.tree().history_len(), 2);
+}
+
+/// Layer > Create Depth Map (Epic 17 story 5): the webview adds the layer, moves it to sit
+/// directly above its source and gives it the source's transform, all inside one gesture.
+#[test]
+fn a_layer_added_beside_its_source_in_a_gesture_is_one_undo_step() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, node("b", "pixel")).unwrap(); // stack: b, a (a new layer lands on top)
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+
+    let g = d.begin("Edit").unwrap();
+    add(&mut d, node("depth", "pixel")).unwrap(); // depth, b, a
+    reorder(&mut d, "/layers/depth", 1).unwrap(); // b, depth, a: directly above a
+    set(
+        &mut d,
+        "/layers/depth",
+        "transform2d.position",
+        json!([4.0, 5.0]),
+    )
+    .unwrap();
+    d.end(g).unwrap();
+
+    assert_eq!(d.tree().history_len(), steps + 1, "one undo step");
+    let after = d.tree().serialise();
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before, "undo takes the layer away");
+    d.redo().unwrap();
+    assert_eq!(d.tree().serialise(), after, "redo brings it back, in place");
 }
 
 // ---- files ----
@@ -4082,6 +4112,44 @@ fn a_save_says_where_it_came_from_and_where_it_went() {
         payload(&heard, DOCUMENT_SAVED),
         json!({"previous": "/a/doc.oblique", "path": "/b/copy.oblique"})
     );
+}
+
+#[test]
+fn document_resave_writes_an_unsaved_file_again_and_nothing_else() {
+    use tauri::Manager;
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    host.save(app.handle(), Path::new("/a/doc.oblique"))
+        .unwrap();
+    // an edit made while the webview handled that save: the file is behind it
+    add_layer(&transport, "b");
+    assert!(host.is_unsaved());
+    app.manage(host);
+
+    heard.lock().unwrap().clear();
+    assert_eq!(document_resave(app.handle().clone()), Ok(true));
+    assert_eq!(
+        payload(&heard, DOCUMENT_SAVED),
+        json!({"previous": "/a/doc.oblique", "path": "/a/doc.oblique"})
+    );
+    assert!(!app.state::<DocumentHost>().is_unsaved());
+
+    // nothing unsaved now: no write, no event
+    heard.lock().unwrap().clear();
+    assert_eq!(document_resave(app.handle().clone()), Ok(false));
+    assert!(names(&heard).is_empty());
+}
+
+#[test]
+fn document_resave_leaves_an_untitled_document_alone() {
+    use tauri::Manager;
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    app.manage(host);
+    assert_eq!(document_resave(app.handle().clone()), Ok(false));
+    assert!(!names(&heard).contains(&DOCUMENT_SAVED.to_string()));
 }
 
 #[test]

@@ -127,6 +127,12 @@ export interface RhizomeBackend {
    * by a test host and by nothing in the app.
    */
   onDocumentOpened(f: (o: Opened) => void | Promise<void>): Promise<Unlisten>;
+  /**
+   * Writes the open document to its own file again, through the host's `Document::save` (the
+   * path File > Save and the close guard take). `false`, and nothing written, when there is no
+   * file or nothing unsaved. Its `document-saved` follows like any save's.
+   */
+  save(): Promise<boolean>;
   /** Rust saved the document; its status events have been sent already. */
   onDocumentSaved(f: (s: Saved) => void | Promise<void>): Promise<Unlisten>;
 }
@@ -158,6 +164,7 @@ export const tauriBackend: RhizomeBackend = {
   onHistoryStepped: (f) => listen<Stepped>('history-stepped', (e) => f(e.payload)),
   onDocumentOpened: (f) => listen<Opened>('document-opened', (e) => void f(e.payload)),
   onDocumentSaved: (f) => listen<Saved>('document-saved', (e) => void f(e.payload)),
+  save: () => invoke<boolean>('document_resave'),
 };
 
 // ---------------------------------------------------------------- the ordered channel
@@ -202,6 +209,8 @@ export interface Channel {
   cancel(token: Promise<number>): Promise<void>;
   view(): Promise<View>;
   status(): Promise<Status>;
+  /** `RhizomeBackend.save`, queued behind every edit made before it. */
+  save(): Promise<boolean>;
 }
 
 export function createChannel(backend: RhizomeBackend, options: ChannelOptions = {}): Channel {
@@ -270,5 +279,6 @@ export function createChannel(backend: RhizomeBackend, options: ChannelOptions =
       }),
     view: () => queued(() => backend.view()),
     status: () => queued(() => backend.status()),
+    save: () => queued(() => backend.save()),
   };
 }
