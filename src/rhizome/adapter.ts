@@ -9,7 +9,8 @@
  *   and absent unless set.
  * - `/layers/<id>/<modifier id>`: a modifier of type `op.<name>`; `enabled` is its own, every
  *   op param lives under `params.<name>` so it can never meet it.
- * - A modifier's mask is a binding onto its `mask` slot from a vector or text layer.
+ * - A modifier's mask is a binding onto its `mask` slot from a vector or text layer, or from a
+ *   pixel layer that drives it (layer-as-driver.md), its values telling which.
  *
  * `sceneFromRows` is the adapter the app runs. `rowsFromScene` is the same mapping the other
  * way, as Rust's `add_layer` writes it: a TypeScript statement of the contract, used by the
@@ -17,7 +18,9 @@
  * only shows that the two TypeScript halves agree; the Rust tests hold the other side.
  */
 import type {
+  MaskRef,
   Modifier,
+  PixelMaskRef,
   Scene,
   SceneBackground,
   SceneNode,
@@ -81,11 +84,7 @@ export function transformChanges(
 
 // ---------------------------------------------------------------- rows -> scene
 
-function modifierFrom(
-  rows: Map<string, Row>,
-  m: Row,
-  maskRefs: Record<string, VectorMaskRef>,
-): Modifier {
+function modifierFrom(rows: Map<string, Row>, m: Row, maskRefs: Record<string, MaskRef>): Modifier {
   const params: Modifier['params'] = {};
   for (const k of m.set ?? [])
     if (k.startsWith(PARAM_PREFIX)) params[k.slice(PARAM_PREFIX.length)] = val(m, k) as never;
@@ -98,25 +97,66 @@ function modifierFrom(
   const mask = m.bindings?.find((b) => b.on.slot === 'mask');
   if (mask) {
     const v = mask.values ?? {};
-    const ref: VectorMaskRef = {
-      id: v.refId as string,
-      nodeId: rows.get(mask.source)?.name ?? '',
-      featherPx: v.featherPx as number,
-      expand: v.expand as number,
-      invert: v.invert as boolean,
-    };
-    if (v.space != null) ref.space = v.space as VectorMaskRef['space'];
-    if (v.attachTransform != null) ref.attachTransform = v.attachTransform as Transform2D;
+    const source = rows.get(mask.source);
+    const ref: MaskRef = source?.type === 'pixel' ? pixelRef(source, v) : vectorRef(source, v);
     maskRefs[ref.id] = ref;
     mod.maskId = ref.id;
   }
   return mod;
 }
 
+/** A mask bound from a vector or text layer. */
+function vectorRef(source: Row | undefined, v: Record<string, unknown>): VectorMaskRef {
+  const ref: VectorMaskRef = {
+    id: v.refId as string,
+    nodeId: source?.name ?? '',
+    featherPx: v.featherPx as number,
+    expand: v.expand as number,
+    invert: v.invert as boolean,
+  };
+  if (v.space != null) ref.space = v.space as VectorMaskRef['space'];
+  if (v.attachTransform != null) ref.attachTransform = v.attachTransform as Transform2D;
+  return ref;
+}
+
+/** A mask driven by a pixel layer (layer-as-driver.md): the source's type says which kind. */
+function pixelRef(source: Row, v: Record<string, unknown>): PixelMaskRef {
+  return {
+    id: v.refId as string,
+    kind: 'pixel',
+    nodeId: source.name,
+    channel: v.channel as PixelMaskRef['channel'],
+    low: v.low as number,
+    high: v.high as number,
+    invert: v.invert as boolean,
+  };
+}
+
+/** A mask ref as the values its binding carries (Rust's `mask_values` / `driver_values`). */
+export function maskBindingValues(ref: MaskRef): Record<string, unknown> {
+  if (ref.kind === 'pixel') {
+    return {
+      refId: ref.id,
+      channel: ref.channel,
+      low: ref.low,
+      high: ref.high,
+      invert: ref.invert,
+    };
+  }
+  return {
+    refId: ref.id,
+    featherPx: ref.featherPx,
+    expand: ref.expand,
+    invert: ref.invert,
+    ...(ref.space ? { space: ref.space } : {}),
+    ...(ref.attachTransform ? { attachTransform: ref.attachTransform } : {}),
+  };
+}
+
 export function layerNode(
   rows: Map<string, Row>,
   r: Row,
-  maskRefs: Record<string, VectorMaskRef>,
+  maskRefs: Record<string, MaskRef>,
 ): SceneNode {
   const modifiers = (r.orders?.modifiers ?? []).map((mid) =>
     modifierFrom(rows, rows.get(mid) as Row, maskRefs),
@@ -157,7 +197,7 @@ export function sceneFromRows(rows: Map<string, Row>): Scene | null {
   const doc = all.find((r) => r.path === DOCUMENT_PATH);
   const layers = all.find((r) => r.path === LAYERS_PATH);
   if (!doc || !layers) return null;
-  const maskRefs: Record<string, VectorMaskRef> = {};
+  const maskRefs: Record<string, MaskRef> = {};
   const nodes = (layers.orders?.stack ?? []).map((id) =>
     layerNode(rows, rows.get(id) as Row, maskRefs),
   );
@@ -238,14 +278,7 @@ export function layerRows(node: SceneNode, scene: Scene): Row[] {
         {
           on: { slot: 'mask' },
           source: rowId.layer(ref.nodeId),
-          values: {
-            refId: ref.id,
-            featherPx: ref.featherPx,
-            expand: ref.expand,
-            invert: ref.invert,
-            ...(ref.space ? { space: ref.space } : {}),
-            ...(ref.attachTransform ? { attachTransform: ref.attachTransform } : {}),
-          },
+          values: maskBindingValues(ref),
         },
       ];
     }

@@ -400,6 +400,29 @@ export class FakeHost implements RhizomeBackend {
             attach: p.attachTransform,
           });
         });
+      case 'mask.attach_layer':
+        return this.commit('Mask from Layer', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          const source = this.at(p.source as string);
+          if (source.parent !== 'row:layers' || source.type !== 'pixel') {
+            throw new Error(`${p.source} isn't a pixel layer`);
+          }
+          if (source.id === layer.id || this.drives(layer.id, source.id)) {
+            throw new Error(`${p.source} depends on ${layer.path}`);
+          }
+          if (!['luminance', 'alpha'].includes(p.channel as string)) {
+            throw new Error(`${p.channel} isn't a channel`);
+          }
+          const refId = (row.bindings?.[0]?.values?.refId as string | undefined) || row.name;
+          row.bindings = [
+            {
+              on: { slot: 'mask' },
+              source: source.id,
+              values: { refId, channel: p.channel, low: p.low, high: p.high, invert: p.invert },
+            },
+          ];
+        });
       case 'mask.detach':
         return this.commit('Remove Mask', () => {
           const { row, layer } = this.modifier(p.at as string);
@@ -412,6 +435,8 @@ export class FakeHost implements RhizomeBackend {
         this.unlocked(layer);
         const b = row.bindings?.[0];
         if (!b) throw new Error(`${p.at} has no mask`);
+        if (this.rows.get(b.source)?.type === 'pixel')
+          throw new Error(`${p.at} is driven by a layer`);
         if ((b.values?.space === 'node') === (p.space === 'node')) return 'nothing';
         return this.commit('Mask Follows Layer', () => {
           const source = this.rows.get(b.source) as Row;
@@ -710,6 +735,26 @@ export class FakeHost implements RhizomeBackend {
     }
     this.rows.set(row.id, row);
     this.setOrder(layer, [...this.modifierOrder(layer), row.id]);
+  }
+
+  /** Whether `consumer`'s layer is reached from `driver`'s pixel-driven masks (`driver_refusal`). */
+  private drives(consumer: string, driver: string): boolean {
+    const seen = new Set<string>();
+    const stack = [driver];
+    while (stack.length > 0) {
+      const layer = this.rows.get(stack.pop() as string);
+      for (const mid of layer?.orders?.modifiers ?? []) {
+        for (const b of this.rows.get(mid)?.bindings ?? []) {
+          if (this.rows.get(b.source)?.type !== 'pixel') continue;
+          if (b.source === consumer) return true;
+          if (!seen.has(b.source)) {
+            seen.add(b.source);
+            stack.push(b.source);
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /** A layer's transform as a mask snapshots it: unmoved reads as the identity. */

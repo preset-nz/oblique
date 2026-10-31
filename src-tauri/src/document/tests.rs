@@ -4380,3 +4380,240 @@ fn every_built_in_kind_says_what_it_is() {
         assert_eq!(group(n).as_deref(), Some("layer"), "{n}");
     }
 }
+
+// ---- layer as driver: mask.attach_layer (layer-as-driver.md) ----
+
+/// `mask.attach_layer` with luminance, the given levels, not inverted.
+fn drive(
+    d: &mut Document<Oblique>,
+    at: &str,
+    source: &str,
+    low: f64,
+    high: f64,
+) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "mask.attach_layer",
+        json!({"at": at, "source": source, "channel": "luminance",
+               "low": low, "high": high, "invert": false}),
+    )
+}
+
+/// Photo `a` with a blur `m1`, and a depth layer `depth` (with a blur `dm` of its own) on top.
+fn driven_scene() -> Document<Oblique> {
+    let mut d = doc();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, with_blur(node("depth", "pixel"), &["dm"])).unwrap();
+    d
+}
+
+#[test]
+fn mask_attach_layer_binds_a_pixel_layer_with_its_channel_levels_and_invert() {
+    let mut d = driven_scene();
+    is_one_undo_step(&mut d, "Mask from Layer", |d| {
+        run(
+            d,
+            "mask.attach_layer",
+            json!({"at": "/layers/a/m1", "source": "/layers/depth", "channel": "alpha",
+                   "low": 0.2, "high": 0.8, "invert": true}),
+        )
+        .unwrap();
+        // the modifier's own id is the ref, as for a shape mask
+        assert_eq!(masks_of(d, "/layers/a/m1"), [("depth".into(), "m1".into())]);
+        assert_eq!(mask_value(d, "/layers/a/m1", "channel"), json!("alpha"));
+        assert_eq!(mask_value(d, "/layers/a/m1", "low"), json!(0.2));
+        assert_eq!(mask_value(d, "/layers/a/m1", "high"), json!(0.8));
+        assert_eq!(mask_value(d, "/layers/a/m1", "invert"), json!(true));
+    });
+}
+
+#[test]
+fn mask_attach_layer_again_is_the_edit_of_its_numbers_and_a_scrub_is_one_step() {
+    let mut d = driven_scene();
+    drive(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    let steps = d.tree().history_len();
+    let g = d.begin("Edit").unwrap();
+    for low in [0.1, 0.2, 0.3] {
+        drive(&mut d, "/layers/a/m1", "/layers/depth", low, 1.0).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    assert_eq!(
+        masks_of(&d, "/layers/a/m1"),
+        [("depth".into(), "m1".into())]
+    );
+    assert_eq!(mask_value(&d, "/layers/a/m1", "low"), json!(0.3));
+    // a shape mask replaced by a layer keeps its ref, and the other way round
+    add(&mut d, node("v", "vector")).unwrap();
+    attach(&mut d, "/layers/a/m1", "/layers/v", 1.0).unwrap();
+    assert_eq!(masks_of(&d, "/layers/a/m1"), [("v".into(), "m1".into())]);
+    drive(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    assert_eq!(
+        masks_of(&d, "/layers/a/m1"),
+        [("depth".into(), "m1".into())]
+    );
+}
+
+#[test]
+fn mask_attach_layer_refuses_cycles_with_the_reason_and_changes_nothing() {
+    let mut d = driven_scene();
+    // the depth layer's own blur is driven by the photo
+    drive(&mut d, "/layers/depth/dm", "/layers/a", 0.0, 1.0).unwrap();
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+    let e = drive(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap_err();
+    assert!(e.to_string().contains("already takes a mask from"), "{e}");
+    // through a chain: c drives the photo, the depth layer drives c
+    add(&mut d, with_blur(node("c", "pixel"), &["cm"])).unwrap();
+    drive(&mut d, "/layers/c/cm", "/layers/depth", 0.0, 1.0).unwrap();
+    let chained = d.tree().serialise();
+    assert!(drive(&mut d, "/layers/a/m1", "/layers/c", 0.0, 1.0).is_err());
+    assert_eq!(d.tree().serialise(), chained);
+    // a layer can't drive its own modifier
+    let e = drive(&mut d, "/layers/a/m1", "/layers/a", 0.0, 1.0).unwrap_err();
+    assert!(e.to_string().contains("its own modifiers"), "{e}");
+    assert_eq!(d.tree().serialise(), chained);
+    d.undo().unwrap();
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before);
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn mask_attach_layer_refuses_what_cannot_drive_and_shapes_cannot_take_a_pixel_source() {
+    let mut d = driven_scene();
+    add(&mut d, node("v", "vector")).unwrap();
+    let before = d.tree().serialise();
+    for (args, why) in [
+        (
+            json!({"at": "/layers/a/m1", "source": "/layers/v", "channel": "luminance",
+                   "low": 0.0, "high": 1.0, "invert": false}),
+            "a vector layer",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "source": "/layers/depth", "channel": "red",
+                   "low": 0.0, "high": 1.0, "invert": false}),
+            "a channel that isn't one",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "source": "/layers/depth", "channel": "luminance",
+                   "low": -0.5, "high": 1.0, "invert": false}),
+            "a level outside 0..1",
+        ),
+        (
+            json!({"at": "/layers/a", "source": "/layers/depth", "channel": "luminance",
+                   "low": 0.0, "high": 1.0, "invert": false}),
+            "a layer, not a modifier",
+        ),
+    ] {
+        assert!(run(&mut d, "mask.attach_layer", args).is_err(), "{why}");
+    }
+    // a pixel layer goes through mask.attach_layer, not the shape command
+    assert!(attach(&mut d, "/layers/a/m1", "/layers/depth", 1.0).is_err());
+    assert_eq!(d.tree().serialise(), before);
+    // a locked consumer refuses; a locked driver still drives
+    lock(&mut d, "/layers/a");
+    assert!(drive(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).is_err());
+    unlock(&mut d, "/layers/a");
+    lock(&mut d, "/layers/depth");
+    drive(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    // a driven mask has no space to switch
+    let steps = d.tree().history_len();
+    assert!(run(
+        &mut d,
+        "mask.set_space",
+        json!({"at": "/layers/a/m1", "space": "node"})
+    )
+    .is_err());
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn deleting_the_driver_removes_the_mask_and_one_undo_restores_both() {
+    let mut d = driven_scene();
+    drive(&mut d, "/layers/a/m1", "/layers/depth", 0.25, 0.75).unwrap();
+    is_one_undo_step(&mut d, "Delete Layer", |d| {
+        remove(d, "/layers/depth").unwrap();
+        assert!(masks_of(d, "/layers/a/m1").is_empty());
+    });
+    d.undo().unwrap();
+    assert_eq!(
+        masks_of(&d, "/layers/a/m1"),
+        [("depth".into(), "m1".into())]
+    );
+    assert_eq!(mask_value(&d, "/layers/a/m1", "low"), json!(0.25));
+    // hiding the driver keeps it
+    set(&mut d, "/layers/depth", "visible", json!(false)).unwrap();
+    assert_eq!(
+        masks_of(&d, "/layers/a/m1"),
+        [("depth".into(), "m1".into())]
+    );
+}
+
+#[test]
+fn a_duplicate_keeps_its_driven_mask_whole() {
+    let mut d = driven_scene();
+    run(
+        &mut d,
+        "mask.attach_layer",
+        json!({"at": "/layers/a/m1", "source": "/layers/depth", "channel": "alpha",
+               "low": 0.1, "high": 0.6, "invert": true}),
+    )
+    .unwrap();
+    duplicate(&mut d, "/layers/a", "a2", &["n1"], &[Some("r2")]).unwrap();
+    assert_eq!(
+        masks_of(&d, "/layers/a2/n1"),
+        [("depth".into(), "r2".into())]
+    );
+    for (key, want) in [
+        ("channel", json!("alpha")),
+        ("low", json!(0.1)),
+        ("high", json!(0.6)),
+        ("invert", json!(true)),
+    ] {
+        assert_eq!(mask_value(&d, "/layers/a2/n1", key), want, "{key}");
+    }
+}
+
+#[test]
+fn a_document_with_a_driven_mask_saves_and_opens_identically() {
+    let store = MemoryStore::default();
+    let mut d =
+        Document::<Oblique>::new_in(catalogue(), store.clone(), IdSource::sequential()).unwrap();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("depth", "pixel")).unwrap();
+    set(&mut d, "/layers/depth", "visible", json!(false)).unwrap();
+    drive(&mut d, "/layers/a/m1", "/layers/depth", 0.3, 0.9).unwrap();
+    d.save_as("/mem/driven").unwrap();
+    let (back, report) = Document::<Oblique>::open_in(
+        catalogue(),
+        store,
+        "/mem/driven.oblique",
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(back.tree().serialise(), d.tree().serialise());
+    assert_eq!(
+        masks_of(&back, "/layers/a/m1"),
+        [("depth".into(), "m1".into())]
+    );
+    assert_eq!(mask_value(&back, "/layers/a/m1", "high"), json!(0.9));
+}
+
+#[test]
+fn a_file_from_before_drivers_loads_unchanged() {
+    // the depth-map window fixture, committed before pixel layers could drive a mask
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/window/fixtures/depth-map.oblique");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (doc, report) = Document::<Oblique>::open_in(
+        Arc::new(Catalogue(vec![])),
+        FileStore,
+        path.to_str().unwrap(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(doc.tree().serialise(), text);
+}

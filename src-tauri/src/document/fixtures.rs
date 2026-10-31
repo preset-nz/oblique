@@ -12,6 +12,9 @@
 //!
 //! The pictures are synthetic (a near box, a mid sphere, far hills, sky and ground), so a depth
 //! map reads and no personal photo is in the repo.
+//!
+//! - `depth-map`: Create Depth Map (Epic 17 story 5).
+//! - `layer-as-driver`: a depth layer drives a blur on the photo (Epic 17 story 6).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -22,7 +25,7 @@ use rhizome_core::IdSource;
 use rhizome_pom::{Document, MemoryStore};
 use serde_json::{json, Value as Json};
 
-use super::{Catalogue, Oblique};
+use super::{Catalogue, Oblique, Op, OpParam};
 
 const SIZE: (u32, u32) = (640, 480);
 
@@ -200,6 +203,17 @@ fn depth16() -> Vec<u8> {
     data
 }
 
+/// The scene's depth as an 8-bit grey PNG, near white: what a driver is read at.
+fn depth8() -> Vec<u8> {
+    let mut data = Vec::with_capacity((SIZE.0 * SIZE.1) as usize);
+    for y in 0..SIZE.1 {
+        for x in 0..SIZE.0 {
+            data.push(byte(scene(x, y).depth));
+        }
+    }
+    data
+}
+
 // ---- the project ----
 
 const NOTES: &str = "\
@@ -288,6 +302,110 @@ fn write_depth_map_pictures() {
     .unwrap();
 }
 
+// ---- layer as driver ----
+
+const DRIVER_NOTES: &str = "\
+Layer as driver window check (Epic 17 story 6). `just fixtures layer-as-driver` writes this file again.
+
+0. Open a fresh copy (`just window-check layer-as-driver`). Photo has a Gaussian Blur (radius 12) whose mask is driven by Depth, a hidden depth map, near white. The mask reads Depth's luminance, inverted, so far is blurred.
+a. The sky, the hills and the far ground are blurred; the red box at the front is sharp and the sphere nearly so. The ground softens gradually as it recedes.
+b. Open the blur's options (the three dots). It reads Driven by “Depth”, Luminance, Low 0, High 1, Invert on. Scrub Low up: more of the far scene blurs fully. Scrub High down: more of the near scene goes fully sharp. Untick Invert: the box blurs and the sky goes sharp. One undo takes back each scrub whole. Put them back (Low 0, High 1, Invert on).
+c. Select Depth and add an Invert modifier to it, with Depth still hidden. Photo's blur flips (the box blurs, the sky sharpens) with no change to Photo's own stack. Remove the Invert modifier: it flips back.
+d. Show Depth, move it right by a good distance, hide it again. The sharp box region on Photo moves right with it. Undo the move: it comes back.
+e. Hide and show Depth a few times: the blur and its mask stay as they are.
+f. Delete Depth: the blur now covers the whole photo, and the blur's options no longer show a layer mask. One undo brings back Depth and the mask together.
+g. On Photo's blur, choose Mask from layer: Photo is listed but greyed, with the reason (a layer can't drive its own modifiers); Depth is listed and works. Add a Gaussian Blur to Depth and choose Mask from layer on that: Photo is greyed there, with the reason (it already takes a mask from Depth). Remove Depth's blur.
+h. Save, close and reopen the file: the blur, the mask and its numbers are as they were.";
+
+/// `list_ops`' `gaussian_blur` as the sidecar declares it (sidecar/ops/gaussian_blur.py), so
+/// the fixture's modifier is the one the app makes.
+fn blur_catalogue() -> Catalogue {
+    Catalogue(vec![Op {
+        name: "gaussian_blur".into(),
+        label: Some("Gaussian Blur".into()),
+        description: None,
+        category: Some("distort".into()),
+        params: vec![OpParam {
+            name: "radius".into(),
+            label: Some("Radius".into()),
+            description: None,
+            kind: "float".into(),
+            default: json!(4.0),
+            min: Some(0.0),
+            max: Some(100.0),
+            choices: vec![],
+            choice_labels: Default::default(),
+        }],
+    }])
+}
+
+fn layer_as_driver_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(blur_catalogue()),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run(
+        "document.set_size",
+        &json!({"size": [SIZE.0 as f64, SIZE.1 as f64]}),
+    )
+    .unwrap();
+    d.run("document.set_note", &json!({"note": DRIVER_NOTES}))
+        .unwrap();
+    let mut photo = layer("photo", "Photo", "layer-as-driver.assets/photo.png", true);
+    photo["modifiers"] = json!([{
+        "id": "blur", "type": "gaussian_blur", "enabled": true, "params": {"radius": 12.0}
+    }]);
+    let depth = layer("depth", "Depth", "layer-as-driver.assets/depth.png", false);
+    for node in [photo, depth] {
+        d.run("layer.add", &json!({ "node": node })).unwrap();
+    }
+    d.run(
+        "mask.attach_layer",
+        &json!({"at": "/layers/photo/blur", "source": "/layers/depth",
+                "channel": "luminance", "low": 0.0, "high": 1.0, "invert": true}),
+    )
+    .unwrap();
+    d.tree().serialise()
+}
+
+fn write_layer_as_driver_pictures() {
+    let dir = fixtures_dir();
+    encode(
+        &dir.join("layer-as-driver.assets/photo.png"),
+        png::ColorType::Rgb,
+        png::BitDepth::Eight,
+        &photo(),
+    )
+    .unwrap();
+    encode(
+        &dir.join("layer-as-driver.assets/depth.png"),
+        png::ColorType::Grayscale,
+        png::BitDepth::Eight,
+        &depth8(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn layer_as_driver_fixture() {
+    let text = layer_as_driver_project();
+    check_or_write("layer-as-driver", &text);
+    if wanted("layer-as-driver") {
+        write_layer_as_driver_pictures();
+    }
+    for file in [
+        "layer-as-driver.assets/photo.png",
+        "layer-as-driver.assets/depth.png",
+    ] {
+        assert!(
+            fixtures_dir().join(file).is_file(),
+            "tests/window/fixtures/{file} is missing: write it with `just fixtures layer-as-driver`"
+        );
+    }
+}
+
 #[test]
 fn depth_map_fixture() {
     let text = depth_map_project();
@@ -310,6 +428,7 @@ fn depth_map_fixture() {
 #[test]
 fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(depth_map_project(), depth_map_project());
+    assert_eq!(layer_as_driver_project(), layer_as_driver_project());
 }
 
 #[test]

@@ -10,9 +10,9 @@
  * and anything doubtful is simply included (an extra field can only cause a
  * miss, never a wrong hit).
  */
-import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
+import { type DriverRasterKey, hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
 import { textCookKey } from '@/scene/textGeometryCache';
-import type { PixelNode, SceneNode, TextNode, VectorMaskRef, VectorNode } from '@/scene/types';
+import type { MaskRef, PixelNode, SceneNode, TextNode, VectorNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 
 export {
@@ -31,7 +31,7 @@ export {
 /** What `descriptorsFor` reads from the outside world — a subset of `CookDeps`. */
 export interface DescriptorDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
-  getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
+  getMaskRef: (maskId: string) => MaskRef | undefined;
   getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
 }
@@ -72,7 +72,9 @@ export function sourceKeyFor(
  * the previous modifier's pixels:
  * - the modifier itself (type, params, enabled, id, maskId);
  * - its resolved mask inputs (`resolvedMaskInput`: the whole ref + target
- *   geometry for vector and text targets);
+ *   geometry for vector and text targets; for a pixel driver, everything its raster comes
+ *   from, and with `rasterKey` the identity of the raster this level's cook reads, so a
+ *   prefix never outlives the driver raster its mask was built from);
  * - when it has a mask: the document size and this node's extent (both feed
  *   the mask raster), and the consumer's `transform2d` iff THAT modifier's
  *   ref is document-pinned (a node-pinned ref reads `attachTransform`, which
@@ -85,13 +87,14 @@ export function sourceKeyFor(
 export function descriptorsFor(
   node: PixelNode | VectorNode | TextNode,
   deps: DescriptorDeps,
+  rasterKey?: DriverRasterKey,
 ): string[] {
   const ops = new Map(deps.getOps().map((o) => [o.name, o]));
   const extent = extentFor(node, deps);
   return node.modifiers
     .filter((m) => m.enabled)
     .map((m) => {
-      const mask = resolvedMaskInput(m.maskId, deps.getVectorMaskRef, deps.getNode);
+      const mask = resolvedMaskInput(m.maskId, deps.getMaskRef, deps.getNode, rasterKey);
       const op = ops.get(m.type);
       return JSON.stringify({
         modifier: m,
@@ -102,7 +105,7 @@ export function descriptorsFor(
             : {
                 documentSize: deps.getDocumentSize(),
                 extent,
-                consumerTransform2d: hasDocumentPinnedMask([m], deps.getVectorMaskRef)
+                consumerTransform2d: hasDocumentPinnedMask([m], deps.getMaskRef)
                   ? (node.transform2d ?? null)
                   : undefined,
               },

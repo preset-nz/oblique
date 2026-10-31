@@ -8,7 +8,8 @@
 //!   (`op.<name>`), in the layer's order `modifiers`. An op's params are namespaced
 //!   (`params.<name>`) so they never meet the modifier's own values (`enabled`).
 //! - A modifier mask is a binding from a vector or text layer onto the modifier's `mask`
-//!   slot, carrying the mask reference's own values.
+//!   slot, carrying the mask reference's own values. A pixel layer binds there too, as the
+//!   layer that drives the mask (layer-as-driver.md), with the values `driver_values` declares.
 //!
 //! The webview edits only through commands (rhizome decision 46).
 
@@ -333,6 +334,30 @@ fn mask_values() -> Vec<ValueSpec> {
     ]
 }
 
+/// The values a mask driven by a pixel layer carries (`PixelMaskRef` less its layer):
+/// layer-as-driver.md.
+fn driver_values() -> Vec<ValueSpec> {
+    vec![
+        ValueSpec::text("refId", "").described("Mask layer", "Which layer drives the mask."),
+        ValueSpec::choice("channel", &["luminance", "alpha"], "luminance").described(
+            "Channel",
+            "What the mask reads from the layer: how light it is, or how solid.",
+        ),
+        ValueSpec::float("low", 0.0..=1.0, 0.0).described(
+            "Low",
+            "The level read from the layer that gives no effect; anything below it gives none either.",
+        ),
+        ValueSpec::float("high", 0.0..=1.0, 1.0).described(
+            "High",
+            "The level read from the layer that gives the full effect; anything above it does too.",
+        ),
+        ValueSpec::bool("invert", false).described(
+            "Invert",
+            "Swaps where the effect is strong and where it is weak.",
+        ),
+    ]
+}
+
 impl ObjectModel for Oblique {
     const NAME: &'static str = "Oblique";
     const EXTENSION: &'static str = EXTENSION;
@@ -386,7 +411,8 @@ impl ObjectModel for Oblique {
                     "Source size",
                     "The width and height of the picture the layer shows.",
                 )
-                .unit("px"),
+                .unit("px")
+                .bindable(driver_values()),
         );
         k.kind(
             layer("vector")
@@ -774,6 +800,12 @@ impl ObjectModel for Oblique {
                     let (m, layer) = modifier_at(tx, &a.at)?;
                     refuse_locked(tx, layer)?;
                     let source = layer_at(tx, &a.source)?;
+                    if tx.at(source).expect("live").type_name() == "pixel" {
+                        return Err(structural(format!(
+                            "{} is a pixel layer: it drives a mask through mask.attach_layer",
+                            a.source
+                        )));
+                    }
                     let ref_id = mask_ref_id(tx, m);
                     let values = mask_binding(
                         ref_id,
@@ -784,6 +816,26 @@ impl ObjectModel for Oblique {
                     );
                     tx.bind(m, On::slot("mask"), source, values)
                 })?;
+                Ok(commit.into())
+            },
+        );
+        // "Mask from layer" (layer-as-driver.md): a pixel layer's cooked raster drives the
+        // modifier's mask, read as luminance or alpha through the levels `low` and `high`, then
+        // inverted or not. Replaces any mask the modifier has; sent again with the same layer and
+        // new numbers it is the edit of those, so a levels scrub in a gesture is one step. A
+        // layer the consumer already drives (a cycle, the consumer itself included) is refused
+        // with the reason.
+        c.add(
+            "mask.attach_layer",
+            |_| "Mask from Layer".into(),
+            |_, p| {
+                ["at", "source", "channel"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+            },
+            |d, p| {
+                let a: DriverArgs = payload(p)?;
+                let (_, commit) = d.edit("Mask from Layer", |tx| attach_layer(tx, &a))?;
                 Ok(commit.into())
             },
         );
@@ -1150,6 +1202,16 @@ struct AttachArgs {
 }
 
 #[derive(Deserialize)]
+struct DriverArgs {
+    at: String,
+    source: String,
+    channel: String,
+    low: f64,
+    high: f64,
+    invert: bool,
+}
+
+#[derive(Deserialize)]
 struct SpaceArgs {
     at: String,
     space: String,
@@ -1330,14 +1392,18 @@ fn refit_attach_transform(
     }
 }
 
-/// The keys a modifier mask binding carries (`mask_values`).
-const MASK_KEYS: [&str; 6] = [
+/// The keys a modifier mask binding carries: a shape's (`mask_values`) and a driver layer's
+/// (`driver_values`). A binding has only its own kind's; the others read as absent.
+const MASK_KEYS: [&str; 9] = [
     "refId",
     "featherPx",
     "expand",
     "invert",
     "space",
     "attachTransform",
+    "channel",
+    "low",
+    "high",
 ];
 
 /// `layer.set_source`: the path always; with a different size, the fit and the mask refits.
@@ -1757,6 +1823,12 @@ fn set_mask_space(tx: &mut Edit<'_>, a: &SpaceArgs) -> rhizome_core::Result<()> 
         .into_iter()
         .find(|b| *b.on == On::slot("mask"))
         .ok_or_else(|| structural(format!("{} has no mask", a.at)))?;
+    if b.source.type_name() == "pixel" {
+        return Err(structural(format!(
+            "{}'s mask is driven by a layer, which is always placed on the document",
+            a.at
+        )));
+    }
     let following = b.value("space") == Some(Value::Shaped(json!("node")));
     if following == (a.space == "node") {
         return Ok(());
@@ -1777,6 +1849,81 @@ fn set_mask_space(tx: &mut Edit<'_>, a: &SpaceArgs) -> rhizome_core::Result<()> 
         attach.as_ref(),
     );
     tx.bind(m, On::slot("mask"), source, values)
+}
+
+/// The pixel layers whose cooked raster `layer`'s cook reads: the drivers of its modifiers'
+/// masks (layer-as-driver.md). `pixelDriversOf` in src/scene/maskInputs.ts is the twin.
+fn drivers_of(tx: &Edit<'_>, layer: NodeId) -> Vec<NodeId> {
+    let mut out = vec![];
+    let Some(n) = tx.at(layer) else {
+        return out;
+    };
+    for m in n.order("modifiers") {
+        for b in m.bindings() {
+            let id = b.source.id();
+            if *b.on == On::slot("mask") && b.source.type_name() == "pixel" && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// Why `driver` can't drive a mask on one of `consumer`'s modifiers, if it can't: it is the
+/// consumer, or its own look already depends on the consumer, directly or through other
+/// drivers. `driverRefusal` (src/scene/maskInputs.ts) gives the panel the same answer.
+fn driver_refusal(tx: &Edit<'_>, consumer: NodeId, driver: NodeId) -> Option<String> {
+    let label = |id: NodeId| match tx.at(id).and_then(|n| n.value("label")) {
+        Some(Value::Text(l)) => l,
+        _ => String::new(),
+    };
+    if consumer == driver {
+        return Some("A layer can't drive a mask on its own modifiers.".into());
+    }
+    let mut seen = vec![driver];
+    let mut stack = vec![driver];
+    while let Some(id) = stack.pop() {
+        for d in drivers_of(tx, id) {
+            if d == consumer {
+                return Some(format!(
+                    "“{}” already takes a mask from “{}”, so it can't drive one there.",
+                    label(driver),
+                    label(consumer)
+                ));
+            }
+            if !seen.contains(&d) {
+                seen.push(d);
+                stack.push(d);
+            }
+        }
+    }
+    None
+}
+
+/// `mask.attach_layer`.
+fn attach_layer(tx: &mut Edit<'_>, a: &DriverArgs) -> rhizome_core::Result<()> {
+    let (m, layer) = modifier_at(tx, &a.at)?;
+    refuse_locked(tx, layer)?;
+    let source = layer_at(tx, &a.source)?;
+    if tx.at(source).expect("live").type_name() != "pixel" {
+        return Err(structural(format!("{} isn't a pixel layer", a.source)));
+    }
+    if let Some(why) = driver_refusal(tx, layer, source) {
+        return Err(structural(why));
+    }
+    let ref_id = mask_ref_id(tx, m);
+    tx.bind(
+        m,
+        On::slot("mask"),
+        source,
+        [
+            ("refId", Value::Text(ref_id)),
+            ("channel", Value::Choice(a.channel.clone())),
+            ("low", Value::Float(a.low)),
+            ("high", Value::Float(a.high)),
+            ("invert", Value::Bool(a.invert)),
+        ],
+    )
 }
 
 /// A selection node: marked with the selection role, or (a document from before the role)

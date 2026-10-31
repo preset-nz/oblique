@@ -16,7 +16,8 @@
  *   caller selects the copy at once, so the original runs, picks the ids, and `layer.duplicate`
  *   carries them.
  * - **Modifiers and masks** (story 4): `removeModifier`, `reorderModifier`, `setModifierParam`,
- *   `setModifierEnabled`, `setModifierVectorMask`, `removeModifierMask` and `setMaskSpace` are
+ *   `setModifierEnabled`, `setModifierVectorMask`, `setModifierPixelMask` (layer-as-driver.md,
+ *   `mask.attach_layer`), `removeModifierMask` and `setMaskSpace` are
  *   commands-first (`modifier.*`, `mask.*`); a param or mask-number scrub inside a gesture is
  *   latest-wins, so one drag is one undo step. Their update changes the store through the
  *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier`,
@@ -73,20 +74,22 @@
  */
 import { notify, type SnackbarOptions } from '@preset.nz/ux-kit';
 import { bindProjectMeta } from '@/project/projectMeta';
+import { driverRefusal } from '@/scene/maskInputs';
 import { restoreScene } from '@/scene/restore';
 import { useSceneStore } from '@/scene/store';
 import { setTransactionBackend } from '@/scene/transaction';
 import {
   IDENTITY_TRANSFORM_2D,
+  isPixelMaskRef,
   isPixelNode,
   isTextNode,
   isVectorNode,
+  type MaskRef,
   type Modifier,
   type Scene,
   type SceneBackground,
   type SceneNode,
   type Transform2D,
-  type VectorMaskRef,
   type VectorNode,
 } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
@@ -363,6 +366,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     setModifierParam: stateNow().setModifierParam,
     setModifierEnabled: stateNow().setModifierEnabled,
     setModifierVectorMask: stateNow().setModifierVectorMask,
+    setModifierPixelMask: stateNow().setModifierPixelMask,
     removeModifierMask: stateNow().removeModifierMask,
     setMaskSpace: stateNow().setMaskSpace,
     applyMarqueeAsVectorMask: stateNow().applyMarqueeAsVectorMask,
@@ -556,6 +560,38 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       });
       return maskId;
     },
+    setModifierPixelMask: (nodeId, modId, driverNodeId, ref) => {
+      const mod = editable(nodeId, modId);
+      if (!mod) return undefined;
+      // Refused here with the reason (layer-as-driver.md: "attaching one shows why"); Rust
+      // refuses the same, so a stale panel can't get one through either.
+      const s = scene();
+      const refusal = driverRefusal(
+        nodeId,
+        driverNodeId,
+        (id) => s.nodes.find((n) => n.id === id),
+        (id) => s.maskRefs?.[id],
+      );
+      if (refusal) {
+        deps.notify({
+          kind: 'warning',
+          message: "That layer can't drive this mask",
+          description: refusal,
+        });
+        return undefined;
+      }
+      // the id the mask has, or will take (the store's rule, `mask_ref_id` in Rust)
+      const maskId = mod.maskId ?? modId;
+      sendScrub(`mask:${nodeId}:${modId}`, 'mask.attach_layer', {
+        at: modifierPath(nodeId, modId),
+        source: layerPath(driverNodeId),
+        channel: ref.channel,
+        low: ref.low,
+        high: ref.high,
+        invert: ref.invert,
+      });
+      return maskId;
+    },
     removeModifierMask: (nodeId, modId) => {
       if (!editable(nodeId, modId)?.maskId) return;
       sendCommand('mask.detach', { at: modifierPath(nodeId, modId) });
@@ -563,8 +599,8 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     setMaskSpace: (nodeId, modId, space) => {
       const maskId = editable(nodeId, modId)?.maskId;
       const ref = maskId ? scene().maskRefs?.[maskId] : undefined;
-      // already in that space: no command, as the store's own no-op
-      if (!ref || (ref.space ?? 'document') === space) return;
+      // already in that space, or a pixel driver (always document): no command, as the store's
+      if (!ref || isPixelMaskRef(ref) || (ref.space ?? 'document') === space) return;
       sendCommand('mask.set_space', { at: modifierPath(nodeId, modId), space });
     },
     applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
@@ -698,7 +734,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     ) {
       return;
     }
-    const maskRefs: Record<string, VectorMaskRef> = {};
+    const maskRefs: Record<string, MaskRef> = {};
     const built = layerNode(mirror.rows, r, maskRefs);
     original.setPixelSource(node.id, path, size, { transform2d: built.transform2d, maskRefs });
   }
@@ -713,7 +749,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   function applyModifierEcho(nodeId: string): void {
     const row = mirror.byPath(layerPath(nodeId));
     if (!nodeOf(nodeId) || !row) return;
-    const refs: Record<string, VectorMaskRef> = {};
+    const refs: Record<string, MaskRef> = {};
     const want = layerNode(mirror.rows, row, refs).modifiers;
     const wantIds = want.map((m) => m.id);
     for (const m of nodeOf(nodeId)?.modifiers ?? []) {
@@ -733,8 +769,13 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       if (!ref) {
         if (have.maskId) original.removeModifierMask(nodeId, w.id);
       } else if (firstDifference(mine, ref) !== null) {
-        const { id: _id, nodeId: source, ...numbers } = ref;
-        original.setModifierVectorMask(nodeId, w.id, source, numbers);
+        if (isPixelMaskRef(ref)) {
+          const { id: _id, nodeId: driver, kind: _kind, ...numbers } = ref;
+          original.setModifierPixelMask(nodeId, w.id, driver, numbers);
+        } else {
+          const { id: _id, nodeId: source, ...numbers } = ref;
+          original.setModifierVectorMask(nodeId, w.id, source, numbers);
+        }
       }
     }
   }

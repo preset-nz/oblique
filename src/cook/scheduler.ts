@@ -1,4 +1,5 @@
 import * as cache from '@/scene/cache';
+import { dependsOnLayer, pixelDriversOf } from '@/scene/maskInputs';
 import { dirtyRose, sceneChangedIgnoringDirty } from '@/scene/sceneDiff';
 import { useSceneStore } from '@/scene/store';
 import { useSidecarStatusStore } from '@/sidecar/client';
@@ -38,7 +39,14 @@ interface JobState {
  * - No store mutation for 400ms -> enqueue WORKING cooks for working-dirty nodes.
  * - Per node x level: at most one in-flight and one pending; a newer request
  *   supersedes the pending one (dedup, not a new queue entry).
- * - Global concurrency 2, FIFO, DRAFT queue always drained before WORKING.
+ * - Global concurrency 2, FIFO, a runnable DRAFT job always before any WORKING one.
+ * - Drivers before consumers (layer-as-driver.md, architecture rule 4's exception): a node
+ *   whose modifier is masked by a pixel layer waits, at a level, while that driver has a cook
+ *   queued, in flight or pending at the same level, so it reads the driver's fresh raster.
+ *   Waiting never blocks the queue: the next runnable job goes instead, so independent nodes
+ *   still cook two at a time. A driver that is dirty but has no job (no source, a failed
+ *   cook) holds nothing up, and a cycle (attaching refuses them) is never waited on. When a
+ *   driver's cook finishes, its consumers dirty at that level are enqueued.
  * - On sidecar-status: up, reset the error-burst toast flag and re-enqueue
  *   every currently-dirty node/level — the auto-recook-after-restart rule.
  *
@@ -141,6 +149,8 @@ export class CookScheduler {
         })
         .finally(() => {
           this.rehydrating.delete(node.id);
+          // a consumer waiting on this locked driver's bake can go now
+          this.runNext();
         });
     }
   }
@@ -180,8 +190,11 @@ export class CookScheduler {
         // guards, which should already keep a locked node's dirty flags
         // false at all times.
         if (node.state === 'locked') continue;
-        if (node.dirty.draft) this.enqueue(node.id, 'draft');
+        if (node.dirty.draft) this.enqueue(node.id, 'draft', false);
       }
+      // Started only once the whole pass is queued, so a consumer listed above its driver
+      // can see the driver's job and wait for it.
+      this.runNext();
     }, DRAFT_THROTTLE_MS);
   }
 
@@ -191,24 +204,26 @@ export class CookScheduler {
       this.workingTimer = null;
       for (const node of useSceneStore.getState().scene.nodes) {
         if (node.state === 'locked') continue;
-        if (node.dirty.working) this.enqueue(node.id, 'working');
+        if (node.dirty.working) this.enqueue(node.id, 'working', false);
       }
+      this.runNext();
     }, WORKING_IDLE_MS);
   }
 
   private retryAllDirty(): void {
     for (const node of useSceneStore.getState().scene.nodes) {
       if (node.state === 'locked') continue;
-      if (node.dirty.draft) this.enqueue(node.id, 'draft');
-      if (node.dirty.working) this.enqueue(node.id, 'working');
+      if (node.dirty.draft) this.enqueue(node.id, 'draft', false);
+      if (node.dirty.working) this.enqueue(node.id, 'working', false);
     }
+    this.runNext();
   }
 
   private queueFor(level: CookLevel): string[] {
     return level === 'draft' ? this.draftQueue : this.workingQueue;
   }
 
-  private enqueue(nodeId: string, level: CookLevel): void {
+  private enqueue(nodeId: string, level: CookLevel, run = true): void {
     const key = `${level}:${nodeId}`;
     let state = this.jobStates.get(key);
     if (!state) {
@@ -224,18 +239,62 @@ export class CookScheduler {
 
     state.queued = true;
     this.queueFor(level).push(nodeId);
-    this.runNext();
+    if (run) this.runNext();
   }
 
-  /** DRAFT always drains before WORKING; FIFO within each priority. */
+  /** A cook for this node/level is queued, in flight, or due to run again. */
+  private busy(nodeId: string, level: CookLevel): boolean {
+    const state = this.jobStates.get(`${level}:${nodeId}`);
+    return state !== undefined && (state.queued || state.inFlight || state.pending);
+  }
+
+  /**
+   * The pixel drivers `nodeId` has to wait for at `level` (layer-as-driver.md): its direct
+   * drivers with a cook queued, in flight or pending there, or (a locked driver) its bake being
+   * rebuilt, which is the raster a consumer reads then. A driver that itself depends on
+   * `nodeId` (a cycle from a document made elsewhere) is never waited on, so a cycle can't
+   * stall the queue.
+   */
+  private waitsOnDriver(nodeId: string, level: CookLevel): boolean {
+    const scene = useSceneStore.getState().scene;
+    const node = scene.nodes.find((n) => n.id === nodeId);
+    if (!node) return false;
+    const getRef = (id: string) => scene.maskRefs?.[id];
+    const getNode = (id: string) => scene.nodes.find((n) => n.id === id);
+    return pixelDriversOf(node, getRef).some(
+      (driver) =>
+        driver !== nodeId &&
+        (this.busy(driver, level) || this.rehydrating.has(driver)) &&
+        !dependsOnLayer(driver, nodeId, getNode, getRef),
+    );
+  }
+
+  /**
+   * A runnable DRAFT job before any WORKING one; FIFO within each priority, skipping a job whose
+   * driver hasn't cooked at that level yet (it stays in place and goes once the driver is done).
+   * When every queued DRAFT job is waiting on a driver, a WORKING job takes the free slot.
+   */
   private pullNext(): { nodeId: string; level: CookLevel } | undefined {
-    if (this.draftQueue.length > 0) {
-      return { nodeId: this.draftQueue.shift() as string, level: 'draft' };
-    }
-    if (this.workingQueue.length > 0) {
-      return { nodeId: this.workingQueue.shift() as string, level: 'working' };
+    for (const level of ['draft', 'working'] as const) {
+      const queue = this.queueFor(level);
+      const i = queue.findIndex((id) => !this.waitsOnDriver(id, level));
+      if (i !== -1) return { nodeId: queue.splice(i, 1)[0], level };
     }
     return undefined;
+  }
+
+  /**
+   * After a driver's cook at `level`: its consumers that are dirty there get a cook, so the
+   * fresh raster is read even when nothing else would wake them. Same level only, so a draft
+   * cook never starts WORKING work ahead of the idle timer.
+   */
+  private enqueueConsumers(driverId: string, level: CookLevel): void {
+    const scene = useSceneStore.getState().scene;
+    const getRef = (id: string) => scene.maskRefs?.[id];
+    for (const node of scene.nodes) {
+      if (node.state === 'locked' || node.id === driverId || !node.dirty[level]) continue;
+      if (pixelDriversOf(node, getRef).includes(driverId)) this.enqueue(node.id, level, false);
+    }
   }
 
   private runNext(): void {
@@ -270,6 +329,7 @@ export class CookScheduler {
         } else {
           this.jobStates.delete(key);
         }
+        this.enqueueConsumers(nodeId, level);
         this.runNext();
       });
   }

@@ -3,8 +3,11 @@ import {
   applyMatrix,
   boxBlurMask,
   docToLocalMatrix,
+  driverToTargetMatrix,
   invertMask,
   localToDocMatrix,
+  multiplyMatrix,
+  pixelMaskPlane,
   rasterizeVectorMask,
 } from './maskRasterize';
 import { IDENTITY_TRANSFORM_2D, type Transform2D, type VectorPath } from './types';
@@ -290,5 +293,78 @@ describe('rasterizeVectorMask — node-pinned frame (mask-follows-node.md)', () 
     expect(Array.from(plane({ ...ref, space: 'document' }, moves[0][1]))).toEqual(
       Array.from(atLater),
     );
+  });
+});
+
+// ---------------------------------------------------------------- pixel drivers (layer-as-driver.md)
+
+describe('pixelMaskPlane', () => {
+  const lum = { channel: 'luminance' as const, low: 0, high: 1, invert: false };
+  const px = (...rgba: number[]) => new Uint8Array(rgba);
+
+  it('reads Rec. 709 luminance on the stored bytes, the desaturate weights', () => {
+    expect([...pixelMaskPlane(px(255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255), lum)]).toEqual([
+      Math.round(0.2126 * 255),
+      Math.round(0.7152 * 255),
+      Math.round(0.0722 * 255),
+    ]);
+    expect([...pixelMaskPlane(px(255, 255, 255, 255, 0, 0, 0, 255), lum)]).toEqual([255, 0]);
+  });
+
+  it('weights luminance by alpha, so transparent reads as black; alpha reads alpha', () => {
+    expect([...pixelMaskPlane(px(255, 255, 255, 0, 255, 255, 255, 128), lum)]).toEqual([0, 128]);
+    expect([...pixelMaskPlane(px(0, 0, 0, 200), { ...lum, channel: 'alpha' })]).toEqual([200]);
+  });
+
+  it('maps low to 0 and high to 1, clamped, then inverts', () => {
+    const greys = px(51, 51, 51, 255, 128, 128, 128, 255, 204, 204, 204, 255); // 0.2, ~0.5, 0.8
+    const levels = { ...lum, low: 0.2, high: 0.8 };
+    expect([...pixelMaskPlane(greys, levels)]).toEqual([0, 128, 255]);
+    expect([...pixelMaskPlane(greys, { ...levels, invert: true })]).toEqual([255, 127, 0]);
+    // high below low runs the ramp backwards; equal levels are a hard step
+    expect([...pixelMaskPlane(greys, { ...lum, low: 0.8, high: 0.2 })]).toEqual([255, 127, 0]);
+    expect([...pixelMaskPlane(greys, { ...lum, low: 0.5, high: 0.5 })]).toEqual([0, 255, 255]);
+  });
+});
+
+describe('driverToTargetMatrix', () => {
+  it('unmoved layers of the same size map straight through, scaled to the cook level', () => {
+    const m = driverToTargetMatrix(
+      IDENTITY_TRANSFORM_2D,
+      [100, 80],
+      IDENTITY_TRANSFORM_2D,
+      [100, 80],
+      0.5,
+    );
+    expect(applyMatrix(m, 0, 0)).toEqual({ x: 0, y: 0 });
+    expect(applyMatrix(m, 100, 80)).toEqual({ x: 50, y: 40 });
+  });
+
+  it('samples the driver where it sits on the page: a driver moved right lands right', () => {
+    const moved = { ...IDENTITY_TRANSFORM_2D, x: 20, y: 5 };
+    const m = driverToTargetMatrix(moved, [100, 80], IDENTITY_TRANSFORM_2D, [100, 80], 1);
+    expect(applyMatrix(m, 0, 0)).toEqual({ x: 20, y: 5 });
+    // the consumer moved the same way: the two line up again
+    const both = driverToTargetMatrix(moved, [100, 80], moved, [100, 80], 1);
+    const p = applyMatrix(both, 30, 40);
+    expect(p.x).toBeCloseTo(30);
+    expect(p.y).toBeCloseTo(40);
+  });
+
+  it('goes through scale and rotation of both layers (composition, checked by round trip)', () => {
+    const d: Transform2D = { x: 3, y: -7, scaleX: 1.5, scaleY: 0.5, rotation: 0.4 };
+    const c: Transform2D = { x: -12, y: 9, scaleX: 2, scaleY: -1, rotation: -1.1 };
+    const m = driverToTargetMatrix(d, [64, 48], c, [100, 80], 0.25);
+    const doc = applyMatrix(localToDocMatrix(d, 64, 48), 10, 20);
+    const local = applyMatrix(docToLocalMatrix(c, 100, 80), doc.x, doc.y);
+    const got = applyMatrix(m, 10, 20);
+    expect(got.x).toBeCloseTo(local.x * 0.25);
+    expect(got.y).toBeCloseTo(local.y * 0.25);
+  });
+
+  it('multiplyMatrix applies the right-hand matrix first', () => {
+    const translate: [number, number, number, number, number, number] = [1, 0, 0, 1, 10, 0];
+    const scale: [number, number, number, number, number, number] = [2, 0, 0, 2, 0, 0];
+    expect(applyMatrix(multiplyMatrix(scale, translate), 1, 1)).toEqual({ x: 22, y: 2 });
   });
 });

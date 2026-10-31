@@ -60,7 +60,9 @@ export const productionRehydrateDeps: HistoryRehydrateDeps = {
  * node's live paths/fillRule — the referenced GEOMETRY is part of the
  * consumer's cook inputs (vector-modifier-masks.md cross-node dirty), so an
  * undo that only changes the referenced vector node's paths must dirty the
- * consumer too, not just the vector node.
+ * consumer too, not just the vector node. A pixel driver (layer-as-driver.md)
+ * resolves to everything its raster comes from, so an undo on the driver's own
+ * stack or place dirties its consumers as well.
  */
 function resolvedMaskInputIn(maskId: string | undefined, scene: Scene): unknown {
   return resolvedMaskInput(
