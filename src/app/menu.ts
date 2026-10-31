@@ -6,7 +6,6 @@ import {
   createDepthMap,
   productionCreateDepthMapDeps,
 } from '@/ai/createDepthMap';
-import type { DepthBits } from '@/ai/sidecarDepth';
 import { usePanelStore } from '@/app/panelState';
 import { useSelectionFillStore } from '@/canvas/selectionFillState';
 import { useSnapStore } from '@/canvas/snapState';
@@ -102,11 +101,11 @@ async function duplicateSelected(): Promise<void> {
 }
 
 /** Layer → Create Depth Map (Epic 17 story 5): the selected layer, through the ask-first gate. */
-function createDepthMapOfSelection(bits: DepthBits, ensure: MenuDeps['ensure']): void {
+function createDepthMapOfSelection(ensure: MenuDeps['ensure']): void {
   commitActiveTextEdit();
   const selection = useSelectionStore.getState().selection;
   if (selection.kind !== 'node') return;
-  void createDepthMap(selection.nodeId, bits, productionCreateDepthMapDeps(ensure));
+  void createDepthMap(selection.nodeId, 8, productionCreateDepthMapDeps(ensure));
 }
 
 /** What the bindings need that isn't plain state: the model gate, which is a hook (`useModelGate`). */
@@ -204,14 +203,10 @@ export function menuBindings(
       run: () => void replaceSelectedImage(),
     },
     // Layer → Create Depth Map (Epic 17 story 5): a new layer above the selected one, one undo
-    // step. The 16-bit item writes a 16-bit grey PNG.
+    // step, 8-bit. 16-bit waits for the `data` layer type (see `createDepthMap`).
     'layer-create-depth-map': {
       enabled: state.depthSource,
-      run: () => createDepthMapOfSelection(8, deps.ensure),
-    },
-    'layer-create-depth-map-16': {
-      enabled: state.depthSource,
-      run: () => createDepthMapOfSelection(16, deps.ensure),
+      run: () => createDepthMapOfSelection(deps.ensure),
     },
     // Type menu (Epic 20): a Replace Font undo step must not swallow a half-finished text edit,
     // and the outline conversion is its own undo step, so an open edit commits first in both.

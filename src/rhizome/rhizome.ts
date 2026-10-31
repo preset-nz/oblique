@@ -141,8 +141,13 @@ export interface DocumentEvents {
    * scene reaches the store; whatever follows (marking dirty, the issues toast) goes after it.
    */
   opened(opened: Opened, adopt: Adopt): Promise<void>;
-  /** The document was saved to a file; its status (path) has been announced already. */
-  saved(saved: Saved): Promise<void>;
+  /**
+   * The document was saved to a file; its status (path) has been announced already. `saveAgain`
+   * writes the file once more, after every edit queued so far: for a handler that changed the
+   * document while handling the save and must not leave the file behind it. It answers whether
+   * it wrote (a second `document-saved` follows), and is `false` when there was nothing to write.
+   */
+  saved(saved: Saved, saveAgain: () => Promise<boolean>): Promise<void>;
 }
 
 export interface RhizomeDeps {
@@ -970,7 +975,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
   }
 
   function takeSaved(saved: Saved): Promise<void> {
-    return Promise.resolve(deps.events?.saved(saved)).catch(fail);
+    return Promise.resolve(deps.events?.saved(saved, () => channel.save())).catch(fail);
   }
 
   // ---------------------------------------------------------------- start

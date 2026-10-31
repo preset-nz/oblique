@@ -104,8 +104,12 @@ export function useCreateDepthMap(): (nodeId: string, bits: DepthBits) => Promis
 }
 
 /**
- * Returns the new layer's id, or `null` when nothing was added: no such layer, an Untitled
- * project, Not now, or a failure (said with a notification; never thrown).
+ * Returns the new layer's id, or `null` when nothing was added: no such layer, Not now, or a failure (said with a notification; never thrown).
+ *
+ * `bits` 16 asks the sidecar for a 16-bit grey PNG (the writer and its tests are in
+ * `sidecar/handlers/depth.py`). The menu only asks for 8: the canvas composites at 8 bits, so
+ * the extra depth is lost until a `data` layer type (architecture.md, reserved) can carry it,
+ * and no menu item is offered before then.
  */
 export async function createDepthMap(
   nodeId: string,

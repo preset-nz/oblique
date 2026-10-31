@@ -1089,6 +1089,58 @@ describe('depth maps and the document they belong to (Epic 17 story 5)', () => {
     expect(notify).toHaveBeenCalledTimes(1); // the saved toast, no error beside it
   });
 
+  it('the saved file never ends a save naming a placeholder: it is written again once the layer is repointed', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+
+    const file = host.disk.get('/x/proj.oblique') as string;
+    expect(file).not.toContain('pending://');
+    expect(file).toContain('proj.oblique.depth/f1.png');
+    // written twice: the save itself, then once more behind the repoint
+    expect(host.trace.filter((t) => t === 'save:/x/proj.oblique')).toHaveLength(2);
+    expect(host.unsaved).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(1); // one "Saved" for the pair
+  });
+
+  it('a save with nothing to repoint is written once', async () => {
+    await arrange(sampleScene());
+    await saveProject('/x/plain.oblique', use(makeDeps()));
+    await settle();
+    expect(host.trace.filter((t) => t.startsWith('save:'))).toHaveLength(1);
+  });
+
+  it('Save As of a saved document with depth maps ends with no placeholder, and the baked images and re-check still run once', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+    vi.mocked(notify).mockClear();
+
+    const readFile = vi.fn(async () => PNG);
+    await saveProject('/y/copy.oblique', use(makeDeps({ readFile })));
+    await settle();
+
+    expect(host.disk.get('/y/copy.oblique')).toContain('copy.oblique.depth/f1.png');
+    expect(host.disk.get('/y/copy.oblique')).not.toContain('pending://');
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('if writing again fails the baked images and the toast still happen, with the error', async () => {
+    await arrange(sampleScene());
+    await makeDepthLayer(null);
+    vi.spyOn(host, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+    await saveProject('/x/proj.oblique', use(makeDeps()));
+    await settle();
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', description: 'disk full' }),
+    );
+  });
+
   it('undo and redo before the first Save keep the bytes: redo shows the layer again', async () => {
     await arrange(sampleScene());
     const id = await makeDepthLayer(null);

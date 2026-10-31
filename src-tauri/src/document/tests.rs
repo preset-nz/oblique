@@ -17,8 +17,8 @@ use tauri::Listener as _;
 
 use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
-    fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue, DocumentHost,
-    Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
+    document_resave, fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue,
+    DocumentHost, Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
 };
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
@@ -4112,6 +4112,44 @@ fn a_save_says_where_it_came_from_and_where_it_went() {
         payload(&heard, DOCUMENT_SAVED),
         json!({"previous": "/a/doc.oblique", "path": "/b/copy.oblique"})
     );
+}
+
+#[test]
+fn document_resave_writes_an_unsaved_file_again_and_nothing_else() {
+    use tauri::Manager;
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    host.save(app.handle(), Path::new("/a/doc.oblique"))
+        .unwrap();
+    // an edit made while the webview handled that save: the file is behind it
+    add_layer(&transport, "b");
+    assert!(host.is_unsaved());
+    app.manage(host);
+
+    heard.lock().unwrap().clear();
+    assert_eq!(document_resave(app.handle().clone()), Ok(true));
+    assert_eq!(
+        payload(&heard, DOCUMENT_SAVED),
+        json!({"previous": "/a/doc.oblique", "path": "/a/doc.oblique"})
+    );
+    assert!(!app.state::<DocumentHost>().is_unsaved());
+
+    // nothing unsaved now: no write, no event
+    heard.lock().unwrap().clear();
+    assert_eq!(document_resave(app.handle().clone()), Ok(false));
+    assert!(names(&heard).is_empty());
+}
+
+#[test]
+fn document_resave_leaves_an_untitled_document_alone() {
+    use tauri::Manager;
+    let (app, heard) = app_hearing();
+    let (host, transport) = ready(&MemoryStore::default());
+    add_layer(&transport, "a");
+    app.manage(host);
+    assert_eq!(document_resave(app.handle().clone()), Ok(false));
+    assert!(!names(&heard).contains(&DOCUMENT_SAVED.to_string()));
 }
 
 #[test]

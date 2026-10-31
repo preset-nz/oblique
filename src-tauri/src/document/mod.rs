@@ -19,6 +19,8 @@ use rhizome_pom::{payload, Commands, Error, Kinds, ObjectModel, Pom};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
 
+#[cfg(test)]
+mod fixtures;
 mod host;
 #[cfg(test)]
 mod tests;
@@ -2029,6 +2031,27 @@ pub fn add_layer(tx: &mut Edit<'_>, n: &Json) -> rhizome_core::Result<NodeId> {
 #[tauri::command]
 pub fn document_log(message: String) {
     eprintln!("[document] {message}");
+}
+
+/// Writes the open document to its own file again, through the same `Document::save` that
+/// File > Save and the close guard run, so the webview's `document-saved` follows as for any
+/// save. For the webview that changed the document while handling a save (a depth map made in
+/// an Untitled document is repointed from `pending://` to its file) and must not leave the file
+/// behind it. Answers whether it wrote: `false`, and nothing written, for a document with no
+/// file or nothing unsaved.
+#[tauri::command]
+pub fn document_resave<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<bool, String> {
+    use preset_app_kit::Document as _;
+    use tauri::Manager;
+    let host = app.state::<DocumentHost>();
+    let Some(path) = host.path() else {
+        return Ok(false);
+    };
+    if !host.is_unsaved() {
+        return Ok(false);
+    }
+    host.save(&app, &path)?;
+    Ok(true)
 }
 
 /// Fills the document host once the webview has the op catalogue, and manages the transport's

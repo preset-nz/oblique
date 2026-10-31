@@ -1,0 +1,111 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "documentSize": [
+          640.0,
+          480.0
+        ],
+        "note": "Depth map window check. `just fixtures depth-map` writes this file again.\n\n0. Copy depth-map.oblique, depth-map.assets and depth-map.oblique.depth to a scratch folder and open the copy. The checks write files beside it.\na. Settings > Models: remove Depth Anything V2 Small. Select Photo, then Layer > Create Depth Map. The download prompt shows. Not now adds nothing.\nb. Run it again and choose Download. One grey layer sits directly above Photo, near is white, same size as the photo. One undo removes it.\nc. Show Cut-out and select it, then Create Depth Map. The new map is cut out too: nothing outside the shapes.\nd. Show Depth 16-bit. It renders as a smooth grey picture, no errors.\ne. Save As into another folder, quit, remove the model, go offline and reopen the new file. The depth layers are all there. (Photo and Cut-out show as missing: their files stay beside the original.)\nf. New Untitled document: import any image, run Create Depth Map, then Save. Quit and reopen: the layer is still there.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000008",
+          "00000000000000000000000007",
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/cutout",
+      "id": "00000000000000000000000007",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Cut-out",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": false
+      },
+      "refs": {
+        "source": {
+          "file": "depth-map.assets/cutout.png"
+        }
+      }
+    },
+    {
+      "path": "/layers/depth16",
+      "id": "00000000000000000000000008",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Depth 16-bit",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": false
+      },
+      "refs": {
+        "source": {
+          "file": "depth-map.oblique.depth/depth16.png"
+        }
+      }
+    },
+    {
+      "path": "/layers/photo",
+      "id": "00000000000000000000000006",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "depth-map.assets/photo.png"
+        }
+      }
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

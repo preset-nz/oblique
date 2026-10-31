@@ -69,6 +69,14 @@ check:
     ./node_modules/.bin/depcruise src
     just licences
 
+# Writes the window-check projects again from the commands that build them: the names given
+# (`depth-map`), or every one. Each is tests/window/fixtures/<name>.oblique with its picture files
+# beside it, committed; its steps are in the project's Notes panel. `just check` fails when one is
+# stale. Open it in the app (copy it to a scratch folder first: the checks write files beside it).
+[group('dev')]
+fixtures *names='all':
+    FIXTURES="$(echo {{names}} | tr ' ' ',')" cargo test --manifest-path src-tauri/Cargo.toml --lib document::fixtures
+
 # Opt-in: every real project opens, saves (to memory) and reopens to the same tree. Takes
 # colon-separated .oblique files and only reads them; needs `uv` for the op catalogue.
 # `just coverage ~/Documents/v2-test.oblique`

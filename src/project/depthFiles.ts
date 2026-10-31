@@ -42,14 +42,15 @@ const DEPTH_SOURCE = /^[^/]+\.depth\/[^/]+\.png$/;
  *   the new `<project>.depth/`, so the paths keep working; the old files are left where they are.
  *
  * Each repoint is a real edit, inside one gesture so all of them are one undo step (as
- * `recheckRelativeSources` is). One file failing doesn't stop the rest; the first error is
- * thrown at the end, for the caller's toast.
+ * `recheckRelativeSources` is). One file failing doesn't stop the rest. Answers whether any
+ * layer was repointed, so the caller writes the document again (a file saved before the repoint
+ * still names `pending://`), and the first error, for the caller's toast.
  */
 export async function settleDepthFiles(
   previous: string | null,
   path: string,
   deps: DepthFileDeps,
-): Promise<void> {
+): Promise<{ repointed: boolean; error?: unknown }> {
   const nodes = useSceneStore.getState().scene.nodes;
   const moved = previous !== null && previous !== path;
   const repoints: Array<[id: string, sourcePath: string]> = [];
@@ -97,5 +98,8 @@ export async function settleDepthFiles(
       endTransaction();
     }
   }
-  if (firstError !== undefined) throw firstError;
+  return {
+    repointed: repoints.length > 0,
+    ...(firstError !== undefined ? { error: firstError } : {}),
+  };
 }

@@ -37,6 +37,10 @@ def _chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
 
+# The 16-bit writer below is not reached from the app yet: Create Depth Map asks for 8 bits,
+# because the canvas composites at 8 and a 16-bit map would show no better. It is kept, with its
+# tests, for the planned `data` layer type (architecture.md, reserved), which can drive a modifier
+# at full depth.
 def encode_grey_alpha_png(grey: np.ndarray, alpha: np.ndarray, bits: int) -> bytes:
     """A grey+alpha PNG. `grey` is uint8 (`bits` 8) or uint16 (`bits` 16); `alpha` is uint8
     (H, W) either way, widened to 16 bits exactly (x * 257) for the 16-bit file."""
