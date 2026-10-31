@@ -10,12 +10,15 @@ use std::path::{Path, PathBuf};
 use preset_app_kit::models::{FileSpec, ModelSpec};
 use tauri::{AppHandle, Manager, Runtime};
 
+/// The models Oblique asks app-kit for. Each URL is pinned to the host repo's revision, never `main`.
+///
 /// MobileSAM (Apache-2.0, ONNX export by Acly: the pair the Krita AI plugin uses for interactive
 /// segmentation). The single-mask decoder, not the 4-mask one: v1 takes the decoder's own best
 /// mask. URLs are pinned to the repo's revision, never `main` (models.md decision 9), so the id
 /// always means the same bytes. SHA-256 values and sizes verified 2026-09-10, and again against
 /// this revision on 2026-10-21.
-pub const REGISTRY: &[ModelSpec] = &[ModelSpec {
+pub const REGISTRY: &[ModelSpec] = &[
+    ModelSpec {
     id: "mobile_sam",
     label: "MobileSAM",
     used_by: "Smart Select",
@@ -35,7 +38,26 @@ pub const REGISTRY: &[ModelSpec] = &[ModelSpec {
             size: 16_501_323,
         },
     ],
-}];
+    },
+    // Depth Anything V2 Small (Apache-2.0; the Base and Large sizes are CC-BY-NC-4.0 and fail the
+    // licence gate). The ONNX export by onnx-community, fp32: about 99 MB. `model_fp16.onnx`
+    // (49 642 442 bytes, sha256 2df6223f...0f5fb04) is in the same repo, left unregistered until
+    // the maps are compared by eye. Checked on Hugging Face 2026-10-31. The URL tail is
+    // `onnx/model.onnx`; the file is installed as `model.onnx`.
+    ModelSpec {
+        id: "depth_anything_v2_small",
+        label: "Depth Anything V2 Small",
+        used_by: "Create depth map",
+        licence: "Apache-2.0",
+        host: "huggingface.co",
+        files: &[FileSpec {
+            name: "model.onnx",
+            url: "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model.onnx",
+            sha256: "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
+            size: 99_060_839,
+        }],
+    },
+];
 
 /// Declare the registry to app-kit: writes this app's `.users` file, sweeps stale `.part` files,
 /// manages the store and starts the `app-kit://models` event. Call it from the synchronous
@@ -92,14 +114,15 @@ mod tests {
     #[test]
     fn registry_pins_every_file() {
         let ids: Vec<_> = REGISTRY.iter().map(|m| m.id).collect();
-        assert_eq!(ids, ["mobile_sam"]);
+        assert_eq!(ids, ["mobile_sam", "depth_anything_v2_small"]);
         for model in REGISTRY {
             for file in model.files {
                 // A host revision (a 40-hex commit), never a moving branch.
                 let rest = file
                     .url
-                    .strip_prefix("https://huggingface.co/Acly/MobileSAM/resolve/")
+                    .strip_prefix("https://huggingface.co/")
                     .expect("pinned to the Hugging Face repo");
+                let (_repo, rest) = rest.split_once("/resolve/").expect("a /resolve/ URL");
                 let (revision, tail) = rest.split_once('/').unwrap();
                 assert_eq!(revision.len(), 40, "{}", file.url);
                 assert!(
@@ -107,7 +130,8 @@ mod tests {
                     "{}",
                     file.url
                 );
-                assert_eq!(tail, file.name);
+                // The file's name is the last path segment: `onnx/model.onnx` installs as `model.onnx`.
+                assert_eq!(tail.rsplit('/').next().unwrap(), file.name);
                 assert_eq!(file.sha256.len(), 64);
                 assert!(file
                     .sha256
@@ -117,6 +141,12 @@ mod tests {
             }
         }
         assert_eq!(REGISTRY[0].total_size(), 44_658_416);
+        assert_eq!(REGISTRY[1].total_size(), 99_060_839);
+        assert_eq!(REGISTRY[1].licence, "Apache-2.0");
+        assert_eq!(REGISTRY[1].used_by, "Create depth map");
+        assert!(REGISTRY[1].files[0].url.contains(
+            "/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/"
+        ));
     }
 
     #[test]

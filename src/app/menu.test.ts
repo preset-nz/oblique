@@ -11,7 +11,7 @@ const rust = readFileSync(new URL('../../src-tauri/src/menu.rs', import.meta.url
 
 /** The ids `commands()` declares: `file("file-new", …)`, `item("edit-duplicate", …)` and so on. */
 const declared = [
-  ...rust.matchAll(/\b(?:file|view|layer|text|select|item|toggle)\(\s*"([a-z.-]+)"/g),
+  ...rust.matchAll(/\b(?:file|view|layer|text|select|item|toggle)\(\s*"([a-z0-9.-]+)"/g),
 ].map((m) => m[1]);
 
 /** Items app-kit builds itself: Settings…, Undo and Redo (File's are below). */
@@ -21,6 +21,7 @@ const APP_KITS = ['app.settings', 'edit.undo', 'edit.redo'];
 const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 
 const state = {
+  depthSource: false,
   replaceableImage: false,
   savableSelection: false,
   snapToLayers: true,

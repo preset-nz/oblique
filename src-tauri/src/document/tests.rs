@@ -836,6 +836,36 @@ fn a_gesture_is_one_undo_step_and_cancel_takes_it_back() {
     assert_eq!(d.tree().history_len(), 2);
 }
 
+/// Layer > Create Depth Map (Epic 17 story 5): the webview adds the layer, moves it to sit
+/// directly above its source and gives it the source's transform, all inside one gesture.
+#[test]
+fn a_layer_added_beside_its_source_in_a_gesture_is_one_undo_step() {
+    let mut d = doc();
+    add(&mut d, node("a", "pixel")).unwrap();
+    add(&mut d, node("b", "pixel")).unwrap(); // stack: b, a (a new layer lands on top)
+    let before = d.tree().serialise();
+    let steps = d.tree().history_len();
+
+    let g = d.begin("Edit").unwrap();
+    add(&mut d, node("depth", "pixel")).unwrap(); // depth, b, a
+    reorder(&mut d, "/layers/depth", 1).unwrap(); // b, depth, a: directly above a
+    set(
+        &mut d,
+        "/layers/depth",
+        "transform2d.position",
+        json!([4.0, 5.0]),
+    )
+    .unwrap();
+    d.end(g).unwrap();
+
+    assert_eq!(d.tree().history_len(), steps + 1, "one undo step");
+    let after = d.tree().serialise();
+    d.undo().unwrap();
+    assert_eq!(d.tree().serialise(), before, "undo takes the layer away");
+    d.redo().unwrap();
+    assert_eq!(d.tree().serialise(), after, "redo brings it back, in place");
+}
+
 // ---- files ----
 
 fn busy(d: &mut Document<Oblique>) {
