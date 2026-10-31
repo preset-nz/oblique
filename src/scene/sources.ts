@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getPending } from '@/project/pendingFiles';
 import { resolveSourcePath, type UnresolvableReason } from '@/project/resolvePath';
 
 /** Anything with a `.close()`, so tests can stub `ImageBitmap` without a real one. */
@@ -108,6 +109,15 @@ export async function loadSource(
   projectPath: string | null,
   deps: SourceReadDeps,
 ): Promise<SourceLoad> {
+  // A file made in an Untitled document and not yet saved lives in memory (pendingFiles.ts).
+  const pending = getPending(stored);
+  if (pending) {
+    try {
+      return { ok: true, bitmap: (await deps.decode(pending)) as ImageBitmap };
+    } catch {
+      return { ok: false, reason: 'unreadable' };
+    }
+  }
   const resolved = resolveSourcePath(stored, projectPath);
   if (resolved.kind === 'unresolvable') return { ok: false, reason: resolved.reason };
   let bytes: Uint8Array;

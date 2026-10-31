@@ -12,7 +12,9 @@ import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import type { Scene } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
+import { settleDepthFiles } from './depthFiles';
 import { filenameOf, type ImportDeps, importFiles, tauriImportDeps } from './import';
+import { clearPending } from './pendingFiles';
 import { useProjectMetaStore } from './projectMeta';
 import { isRelativeSourcePath, resolveSourcePath } from './resolvePath';
 import { homeDirOnce, SavedToastPath } from './SavedToastPath';
@@ -247,6 +249,7 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
         cache.clearAll();
         prefixStore.clearAll();
         sources.clearAll();
+        clearPending(); // a new or opened document owns none of the last one's unsaved files
         backgroundSource.clear(); // like sources: a load always re-decodes
         if (path) await rehydrateBaked(path, target, deps);
       });
@@ -273,6 +276,7 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
 
     async saved({ previous, path }) {
       try {
+        await settleDepthFiles(previous, path, deps);
         await writeBakedSidecar(path, useSceneStore.getState().scene, deps);
         if (path !== previous) await recheckRelativeSources(previous, path, deps);
         // one toast per save: this one, or the error below

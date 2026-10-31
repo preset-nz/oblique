@@ -3,7 +3,9 @@ import { notify } from '@preset.nz/ux-kit';
 import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
 import { productionSelectPayloadDeps } from '@/canvas/selectShared/payload';
 import { cookNodeFullRes } from '@/cook/cook';
-import { filenameOf, tauriImportDeps } from '@/project/import';
+import { depthDir, depthRelativePath, pendingDepthPath } from '@/project/depthFiles';
+import { tauriImportDeps } from '@/project/import';
+import { setPending } from '@/project/pendingFiles';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import * as cache from '@/scene/cache';
 import { useSelectionStore } from '@/scene/selection';
@@ -25,11 +27,11 @@ import { ModelMissingError } from './sidecarSegment';
  * Layer > Create Depth Map (Epic 17 story 5, `depth-map.md`). A command that makes a layer, not
  * a modifier: the depth map is content, so it does not follow later edits to the source.
  *
- *  1. The project has to be saved (the PNG lives beside it); an Untitled one is told so.
- *  2. The ask-first gate (`ensure`), as Smart Select has it: no network request until Download.
- *  3. The source's full-resolution cooked raster goes to the sidecar; the PNG comes back.
- *  4. The bytes are written to `<project>.depth/<id>.png` as they are, and decoded.
- *  5. One undo step adds a `PixelNode` named `<layer> depth` directly above the source, with
+ *  1. The ask-first gate (`ensure`), as Smart Select has it: no network request until Download.
+ *  2. The source's full-resolution cooked raster goes to the sidecar; the PNG comes back.
+ *  3. The bytes are written to `<project>.depth/<id>.png` as they are, and decoded. In an Untitled
+ *     document they are held in memory instead, until the first Save (`pendingFiles.ts`).
+ *  4. One undo step adds a `PixelNode` named `<layer> depth` directly above the source, with
  *     the source's 2D transform so it sits over it. The source is not touched.
  *
  * Not in `<project>.baked/`: `writeBakedSidecar` sweeps every file there that is not a locked
@@ -48,6 +50,8 @@ export interface CreateDepthMapDeps {
   projectPath: () => string | null;
   mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   writeFile: (path: string, bytes: Uint8Array) => Promise<void>;
+  /** Holds a file in memory under a placeholder path (`project/pendingFiles.ts`). */
+  keepPending: (path: string, bytes: Uint8Array) => void;
   decode: (bytes: Uint8Array) => Promise<{ width: number; height: number } & sources.Closable>;
   notify: typeof notify;
   newId: () => string;
@@ -86,6 +90,7 @@ export function productionCreateDepthMapDeps(
     projectPath: () => useProjectMetaStore.getState().path,
     mkdir: (path, options) => mkdir(path, options),
     writeFile: (path, bytes) => writeFile(path, bytes),
+    keepPending: setPending,
     decode: tauriImportDeps.decode,
     notify,
     newId: () => crypto.randomUUID(),
@@ -110,16 +115,6 @@ export async function createDepthMap(
   const source = useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId);
   if (!canCreateDepthMap(source)) return null;
 
-  const projectPath = deps.projectPath();
-  if (projectPath === null) {
-    deps.notify({
-      kind: 'warning',
-      message: 'Save the project first',
-      description: 'A depth map is kept in a folder beside the project file.',
-    });
-    return null;
-  }
-
   try {
     await deps.ensure(DEPTH_MODEL_ID, { for: DEPTH_MAP_FOR });
   } catch (err) {
@@ -132,13 +127,19 @@ export async function createDepthMap(
   try {
     const raster = await deps.readRaster(nodeId);
     const result = await deps.depth({ ...raster, bits });
-    const dir = `${projectPath}.depth`;
     const fileName = `${deps.newId()}.png`;
-    await deps.mkdir(dir, { recursive: true });
-    await deps.writeFile(`${dir}/${fileName}`, result.png);
+    const projectPath = deps.projectPath();
+    if (projectPath === null) {
+      // Untitled: nowhere to write yet. The bytes are held, named by a placeholder path, and the
+      // first Save writes them and repoints the layer (`project/depthFiles.ts`).
+      relativePath = pendingDepthPath(fileName);
+      deps.keepPending(relativePath, result.png);
+    } else {
+      await deps.mkdir(depthDir(projectPath), { recursive: true });
+      await deps.writeFile(`${depthDir(projectPath)}/${fileName}`, result.png);
+      relativePath = depthRelativePath(projectPath, fileName);
+    }
     bitmap = await deps.decode(result.png);
-    // Relative to the project's folder, like any source kept beside the project (image-source.md).
-    relativePath = `${filenameOf(projectPath)}.depth/${fileName}`;
   } catch (err) {
     bitmap?.close?.();
     failed(deps, err);

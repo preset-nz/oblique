@@ -51,6 +51,7 @@ function makeDeps(over: Partial<CreateDepthMapDeps> = {}) {
     writeFile: vi.fn(async () => {
       calls.push('write');
     }),
+    keepPending: vi.fn(),
     decode: vi.fn(async () => ({ width: 40, height: 30, close: closed })),
     notify: vi.fn() as unknown as CreateDepthMapDeps['notify'],
     newId: () => 'file-id',
@@ -161,16 +162,19 @@ describe('createDepthMap (depth-map.md)', () => {
     expect(deps.notify).not.toHaveBeenCalled();
   });
 
-  it('says so, and asks nothing, in an Untitled project', async () => {
+  it('in an Untitled project holds the PNG in memory under a placeholder path, and writes nothing', async () => {
     const { deps } = makeDeps({ projectPath: () => null });
 
-    expect(await createDepthMap('src', 8, deps)).toBeNull();
+    const id = (await createDepthMap('src', 8, deps)) as string;
 
-    expect(deps.notify).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'Save the project first' }),
+    expect(deps.ensure).toHaveBeenCalled(); // the DownloadPrompt shows on the first try
+    expect(deps.keepPending).toHaveBeenCalledWith('pending://depth/file-id.png', PNG);
+    expect(deps.mkdir).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
+    expect(ids()).toEqual(['top', id, 'src', 'bottom']);
+    expect((useSceneStore.getState().scene.nodes[1] as PixelNode).sourcePath).toBe(
+      'pending://depth/file-id.png',
     );
-    expect(deps.ensure).not.toHaveBeenCalled();
-    expect(ids()).toEqual(['top', 'src', 'bottom']);
   });
 
   it('reports a model that has gone since, and adds nothing', async () => {
