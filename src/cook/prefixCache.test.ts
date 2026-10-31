@@ -81,7 +81,7 @@ const t1 = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
 function deps(over: Partial<DescriptorDeps> = {}): DescriptorDeps {
   return {
     getNode: () => undefined,
-    getVectorMaskRef: () => undefined,
+    getMaskRef: () => undefined,
     getDocumentSize: () => [800, 400],
     getOps: () => ops,
     ...over,
@@ -143,7 +143,7 @@ describe('descriptorsFor', () => {
     const masked = (transform2d = t1) => pixel([blur('a', 1, { maskId: 'r1' })], { transform2d });
     const mk = (r: VectorMaskRef, target: VectorNode) =>
       deps({
-        getVectorMaskRef: (id) => (id === 'r1' ? r : undefined),
+        getMaskRef: (id) => (id === 'r1' ? r : undefined),
         getNode: (id) => (id === 'v1' ? target : undefined),
       });
 
@@ -222,5 +222,38 @@ describe('sourceKeyFor', () => {
     expect(sourceKeyFor(t({ content: 'BYE' }), undefined)).not.toBe(base);
     expect(sourceKeyFor(t({ position: { x: 1, y: 0 } }), undefined)).not.toBe(base);
     expect(sourceKeyFor(t({ transform2d: { ...t1, x: 9 } }), undefined)).toBe(base);
+  });
+});
+
+describe('descriptorsFor — pixel drivers (layer-as-driver.md)', () => {
+  const driver = pixel([blur('d1', 2)], { id: 'depth' });
+  const ref = {
+    id: 'r1',
+    kind: 'pixel' as const,
+    nodeId: 'depth',
+    channel: 'luminance' as const,
+    low: 0,
+    high: 1,
+    invert: false,
+  };
+  const consumer = pixel([blur('a', 1), blur('m', 4, { maskId: 'r1' })]);
+  const withDriver = (d: PixelNode) =>
+    deps({ getNode: (id) => (id === 'depth' ? d : undefined), getMaskRef: () => ref });
+
+  it("folds in the driver's raster identity, so a driver recook misses from the masked modifier on", () => {
+    const a = descriptorsFor(consumer, withDriver(driver), () => 'working:1');
+    const b = descriptorsFor(consumer, withDriver(driver), () => 'working:2');
+    expect(a[0]).toBe(b[0]); // the unmasked prefix stays reusable
+    expect(a[1]).not.toBe(b[1]);
+  });
+
+  it("folds in the driver's own stack and place", () => {
+    const base = descriptorsFor(consumer, withDriver(driver));
+    expect(
+      descriptorsFor(consumer, withDriver({ ...driver, modifiers: [blur('d1', 3)] }))[1],
+    ).not.toBe(base[1]);
+    expect(
+      descriptorsFor(consumer, withDriver({ ...driver, transform2d: { ...t1, x: 4 } }))[1],
+    ).not.toBe(base[1]);
   });
 });

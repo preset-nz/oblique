@@ -121,6 +121,37 @@ describe('the scene as a rhizome tree', () => {
     expect(back?.nodes.map((n) => n.id)).toEqual(['p1', 'v1', 't1']);
   });
 
+  it('round-trips a pixel-driven mask, telling it from a shape mask by its source', () => {
+    const depth = { ...pixel, id: 'depth', modifiers: [] } as PixelNode;
+    const photo = { ...pixel, id: 'photo', modifiers: [{ ...blur, id: 'm2', maskId: 'd1' }] };
+    const driven: Scene = {
+      ...scene,
+      nodes: [depth, photo as PixelNode, vector],
+      maskRefs: {
+        d1: {
+          id: 'd1',
+          kind: 'pixel',
+          nodeId: 'depth',
+          channel: 'alpha',
+          low: 0.25,
+          high: 0.75,
+          invert: true,
+        },
+      },
+    };
+    const rows = rowsFromScene(driven);
+    const mod = [...rows.values()].find((r) => r.path === `${layerPath('photo')}/m2`) as Row;
+    expect(mod.bindings?.[0].values).toEqual({
+      refId: 'd1',
+      channel: 'alpha',
+      low: 0.25,
+      high: 0.75,
+      invert: true,
+    });
+    const back = sceneFromRows(rows) as Scene;
+    expect(firstDifference(normal(driven), normal(back))).toBeNull();
+  });
+
   it('round-trips the selection role, and reads an absent role as undefined', () => {
     const marked: Scene = {
       ...scene,

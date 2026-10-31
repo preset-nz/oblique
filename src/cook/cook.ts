@@ -4,16 +4,24 @@ import * as prefixCache from '@/cook/prefixCache';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
-import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
-import { rasterizeVectorMask } from '@/scene/maskRasterize';
+import {
+  type DriverRasterKey,
+  hasDocumentPinnedMask,
+  pixelDriversOf,
+  resolvedMaskInput,
+} from '@/scene/maskInputs';
+import { rasterizePixelMask, rasterizeVectorMask } from '@/scene/maskRasterize';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { documentPathsFor, ensureGeometry, textCookKey } from '@/scene/textGeometryCache';
 import { rasterizeText } from '@/scene/textRasterize';
 import {
   IDENTITY_TRANSFORM_2D,
+  isPixelMaskRef,
+  isPixelNode,
   isTextNode,
   isVectorNode,
+  type MaskRef,
   type Modifier,
   type PixelNode,
   type SceneNode,
@@ -162,6 +170,28 @@ function reportCookFailure(message: string): void {
   notify({ message: 'Cook failed', kind: 'error', description: message });
 }
 
+/** A driver layer's cooked raster as a consumer's cook reads it, and which write it was. */
+export interface DriverRaster {
+  bitmap: ImageBitmap;
+  /** `<cache level>:<write sequence>` — changes whenever the driver recooks. */
+  key: string;
+}
+
+const OTHER_LEVEL: Record<CookLevel, CookLevel> = { draft: 'working', working: 'draft' };
+
+/**
+ * The cache map's raster for a driver, for a consumer cooking at `level`: that level, else the
+ * bake (a locked driver), else the other level. The scheduler cooks a driver before its
+ * consumer, so the first is the usual case; the others only cover a driver that can't cook.
+ */
+function cachedDriverRaster(nodeId: string, level: CookLevel): DriverRaster | undefined {
+  for (const l of [level, 'baked', OTHER_LEVEL[level]] as const) {
+    const bitmap = cache.get(nodeId, l);
+    if (bitmap) return { bitmap, key: `${l}:${cache.getSeq(nodeId, l)}` };
+  }
+  return undefined;
+}
+
 /**
  * Real browser/Tauri wiring, injected as `CookDeps` so the executor's
  * control-flow (scaling, run-partitioning, the conditional clearDirty) is
@@ -174,8 +204,8 @@ export interface CookDeps {
   /** `Scene.documentSize` — a vector node's raster spans this (vector-node-model.md's Sizing note), it has no `sourceSize` of its own. */
   getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
-  /** `Modifier.maskId` resolves against this — a live vector reference. */
-  getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
+  /** `Modifier.maskId` resolves against this — a live vector, text or pixel-driver reference. */
+  getMaskRef: (maskId: string) => MaskRef | undefined;
   /** Rasterise a live vector-referenced mask (scene/maskRasterize.ts's `rasterizeVectorMask`; needs OffscreenCanvas, so injected). */
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
@@ -189,6 +219,14 @@ export interface CookDeps {
     height: number,
     factor: number,
   ) => Uint8Array;
+  /**
+   * A pixel driver's cooked raster for a cook at `level` (layer-as-driver.md), with the
+   * identity the race guard and prefix descriptors fold in. Production reads the cache map:
+   * the same level, else the bake, else the other level.
+   */
+  getDriverRaster: (nodeId: string, level: CookLevel) => DriverRaster | undefined;
+  /** Rasterise a pixel-driven mask (scene/maskRasterize.ts's `rasterizePixelMask`; needs OffscreenCanvas, so injected). */
+  rasterizePixelMask: typeof rasterizePixelMask;
   /** Draw `source` into an offscreen surface at `[w, h]` and read back RGBA8 bytes. */
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
   /** Rasterise a vector node's paths at the cook target size — a vector node's "source pixels" (scene/vectorRasterize.ts; needs OffscreenCanvas, so injected). */
@@ -286,13 +324,13 @@ async function realRunPython(
  */
 async function prefetchMaskTextGeometry(
   node: SceneNode,
-  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef' | 'getTextGeometry'>,
+  deps: Pick<CookDeps, 'getNode' | 'getMaskRef' | 'getTextGeometry'>,
 ): Promise<Map<string, TextGeometry>> {
   const out = new Map<string, TextGeometry>();
   for (const modifier of node.modifiers) {
     if (!modifier.maskId) continue;
-    const ref = deps.getVectorMaskRef(modifier.maskId);
-    if (!ref || out.has(ref.nodeId)) continue;
+    const ref = deps.getMaskRef(modifier.maskId);
+    if (!ref || isPixelMaskRef(ref) || out.has(ref.nodeId)) continue;
     const target = deps.getNode(ref.nodeId);
     if (!target || !isTextNode(target)) continue;
     out.set(target.id, await deps.getTextGeometry(target));
@@ -311,8 +349,12 @@ async function prefetchMaskTextGeometry(
  * space; fill/stroke colour don't matter (glyph fill only).
  */
 function makeRasterizeFor(
-  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef' | 'getDocumentSize' | 'rasterizeVectorMask'>,
+  deps: Pick<
+    CookDeps,
+    'getNode' | 'getMaskRef' | 'getDocumentSize' | 'rasterizeVectorMask' | 'rasterizePixelMask'
+  >,
   textGeometry: Map<string, TextGeometry>,
+  driverRaster: (driverId: string) => ImageBitmap | undefined,
   nodeExtent: [number, number],
   consumerTransform2d: Transform2D,
   width: number,
@@ -320,10 +362,26 @@ function makeRasterizeFor(
   factor: number,
 ): (maskId: string) => Uint8Array | undefined {
   return (maskId: string) => {
-    const ref = deps.getVectorMaskRef(maskId);
+    const ref = deps.getMaskRef(maskId);
     if (!ref) return undefined;
     const target = deps.getNode(ref.nodeId);
     if (!target) return undefined;
+    if (isPixelMaskRef(ref)) {
+      // A pixel driver (layer-as-driver.md): its cooked raster, sampled in document space.
+      // No raster yet reads as transparent, like the page outside the driver.
+      if (!isPixelNode(target)) return undefined;
+      return deps.rasterizePixelMask(
+        driverRaster(target.id),
+        ref,
+        target.transform2d ?? IDENTITY_TRANSFORM_2D,
+        target.sourceSize,
+        consumerTransform2d,
+        nodeExtent,
+        width,
+        height,
+        factor,
+      );
+    }
     if (isVectorNode(target)) {
       return deps.rasterizeVectorMask(
         target.paths,
@@ -364,8 +422,10 @@ export const productionCookDeps: CookDeps = {
   getSource: (nodeId) => sources.get(nodeId),
   getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   getOps: () => useOpsCacheStore.getState().ops,
-  getVectorMaskRef: (maskId) => useSceneStore.getState().scene.maskRefs?.[maskId],
+  getMaskRef: (maskId) => useSceneStore.getState().scene.maskRefs?.[maskId],
   rasterizeVectorMask,
+  getDriverRaster: cachedDriverRaster,
+  rasterizePixelMask,
   downscale: realDownscale,
   rasterizeVector,
   // Wait for the font catalogue first: until it settles, effectiveFontFor
@@ -395,7 +455,7 @@ export interface FullResCookDeps {
   getSource: (nodeId: string) => ImageBitmap | undefined;
   getOps: () => OpDescriptor[];
   getDocumentSize: () => [number, number];
-  getVectorMaskRef: (maskId: string) => VectorMaskRef | undefined;
+  getMaskRef: (maskId: string) => MaskRef | undefined;
   rasterizeVectorMask: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
@@ -408,6 +468,8 @@ export interface FullResCookDeps {
     height: number,
     factor: number,
   ) => Uint8Array;
+  /** Same injection as `CookDeps.rasterizePixelMask`; the driver's raster is its own full-res cook. */
+  rasterizePixelMask: typeof rasterizePixelMask;
   downscale: (source: ImageBitmap, width: number, height: number) => Uint8Array;
   /** A vector node's "source pixels" at full res — same injection as `CookDeps.rasterizeVector`. */
   rasterizeVector: (
@@ -436,8 +498,9 @@ export const productionFullResCookDeps: FullResCookDeps = {
   getSource: productionCookDeps.getSource,
   getOps: productionCookDeps.getOps,
   getDocumentSize: productionCookDeps.getDocumentSize,
-  getVectorMaskRef: productionCookDeps.getVectorMaskRef,
+  getMaskRef: productionCookDeps.getMaskRef,
   rasterizeVectorMask: productionCookDeps.rasterizeVectorMask,
+  rasterizePixelMask: productionCookDeps.rasterizePixelMask,
   rasterizeVector: productionCookDeps.rasterizeVector,
   getTextGeometry: productionCookDeps.getTextGeometry,
   rasterizeText: productionCookDeps.rasterizeText,
@@ -445,6 +508,26 @@ export const productionFullResCookDeps: FullResCookDeps = {
   runPython: realRunPython,
   encode: realEncode,
 };
+
+/**
+ * The full-res cooked raster of every pixel driver an ENABLED modifier of `node` reads, by
+ * driver id (`cookNodeFullRes`, recursively). A driver already waiting further up (a cycle in
+ * a document from elsewhere; attaching refuses them) is left out and reads as transparent.
+ */
+async function fullResDriverRasters(
+  node: SceneNode,
+  deps: FullResCookDeps,
+  visiting: ReadonlySet<string>,
+): Promise<Map<string, ImageBitmap>> {
+  const out = new Map<string, ImageBitmap>();
+  const enabled = { ...node, modifiers: node.modifiers.filter((m) => m.enabled) };
+  const inner = new Set(visiting).add(node.id);
+  for (const driverId of pixelDriversOf(enabled, deps.getMaskRef)) {
+    if (inner.has(driverId)) continue;
+    out.set(driverId, await cookNodeFullRes(driverId, deps, inner));
+  }
+  return out;
+}
 
 /**
  * One-shot full-resolution cook for export (architecture.md's "baked"
@@ -464,6 +547,8 @@ export const productionFullResCookDeps: FullResCookDeps = {
 export async function cookNodeFullRes(
   nodeId: string,
   deps: FullResCookDeps = productionFullResCookDeps,
+  /** Layers whose full-res cook is waiting on this one (driver recursion's cycle guard). */
+  visiting: ReadonlySet<string> = new Set(),
 ): Promise<ImageBitmap> {
   const rawNode = deps.getNode(nodeId);
   if (
@@ -494,9 +579,13 @@ export async function cookNodeFullRes(
   // Text mask targets' geometry resolves before the sync rasterizeFor (a
   // rejection throws, aborting the export like any other cook failure).
   const maskTextGeometry = await prefetchMaskTextGeometry(node, deps);
+  // Pixel drivers (layer-as-driver.md) at full res too: each cooked here, first, never a
+  // lower-resolution cache (the "never substitute a draft" rule above). A failure throws.
+  const drivers = await fullResDriverRasters(node, deps, visiting);
   const rasterizeFor = makeRasterizeFor(
     deps,
     maskTextGeometry,
+    (id) => drivers.get(id),
     nodeExtent,
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
     width,
@@ -504,6 +593,8 @@ export async function cookNodeFullRes(
     factor,
   );
   const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
+  // The masks are rasterised (synchronously, above): the drivers' bitmaps are done with.
+  for (const bitmap of drivers.values()) (bitmap as { close?: () => void }).close?.();
 
   const tDownscale = performance.now();
   if (cookModifiers.length > 0) {
@@ -533,23 +624,25 @@ export async function cookNodeFullRes(
 
 /**
  * Everything a node's modifier masks rasterise from that lives OUTSIDE its
- * `modifiers` array: each resolved ref + target geometry, and — when any
+ * `modifiers` array: each resolved ref + target geometry (a pixel driver's inputs and the
+ * raster this level reads, layer-as-driver.md), and — when any
  * DOCUMENT-pinned mask resolves — the node's own transform2d (such masks
  * rasterise through the consumer's current frame). Mirrors `restore.ts`'s
  * `cookAffectingChanged` mask clauses.
  */
 function maskInputsKey(
   node: SceneNode,
-  deps: Pick<CookDeps, 'getNode' | 'getVectorMaskRef'>,
+  deps: Pick<CookDeps, 'getNode' | 'getMaskRef'>,
+  rasterKey: DriverRasterKey,
 ): string {
   const refs = node.modifiers.map((m) =>
-    resolvedMaskInput(m.maskId, deps.getVectorMaskRef, deps.getNode),
+    resolvedMaskInput(m.maskId, deps.getMaskRef, deps.getNode, rasterKey),
   );
   if (refs.every((r) => r === null)) return '';
   // Only document-pinned refs read the consumer's current transform2d
   // (mask-follows-node.md): a node-pinned mask rasterises through its own
   // attachTransform, so moving the consumer must not look like a change.
-  const transform2d = hasDocumentPinnedMask(node.modifiers, deps.getVectorMaskRef)
+  const transform2d = hasDocumentPinnedMask(node.modifiers, deps.getMaskRef)
     ? node.transform2d
     : undefined;
   return JSON.stringify({ refs, transform2d });
@@ -632,7 +725,10 @@ export async function cookNode(
   // Mask race guard: a mask-source edit (dirtyMaskRefConsumers) dirties this
   // node without touching its `modifiers`, so the reference check alone
   // would let this in-flight cook clear that fresh dirty flag.
-  const maskKeyAtStart = maskInputsKey(node, deps);
+  // A pixel driver's raster as this level reads it (layer-as-driver.md): its identity is a
+  // cook input, so a driver recooking mid-cook leaves this node dirty and misses the prefix.
+  const rasterKey: DriverRasterKey = (id) => deps.getDriverRaster(id, level)?.key ?? null;
+  const maskKeyAtStart = maskInputsKey(node, deps, rasterKey);
 
   // Prefix-cache inputs (prefix-cache.md), captured synchronously beside the
   // guard keys and before any await: what this cook's bytes will be derived
@@ -640,7 +736,7 @@ export async function cookNode(
   // so a mid-cook edit can never leave a prefix claiming inputs it wasn't
   // built from.
   const sourceKey = prefixCache.sourceKeyFor(node, source);
-  const stackDescriptors = prefixCache.descriptorsFor(node, deps);
+  const stackDescriptors = prefixCache.descriptorsFor(node, deps, rasterKey);
   /** True while every prefix input still reads as it did at the start of this cook. */
   const prefixInputsUnchanged = (): boolean => {
     const latest = deps.getNode(nodeId);
@@ -659,7 +755,10 @@ export async function cookNode(
         latestNode,
         latestNode.type === 'pixel' ? deps.getSource(nodeId) : undefined,
       ) === sourceKey &&
-      prefixCache.sameDescriptors(prefixCache.descriptorsFor(latestNode, deps), stackDescriptors)
+      prefixCache.sameDescriptors(
+        prefixCache.descriptorsFor(latestNode, deps, rasterKey),
+        stackDescriptors,
+      )
     );
   };
 
@@ -713,6 +812,7 @@ export async function cookNode(
     const rasterizeFor = makeRasterizeFor(
       deps,
       maskTextGeometry,
+      (id) => deps.getDriverRaster(id, level)?.bitmap,
       nodeExtent,
       node.transform2d ?? IDENTITY_TRANSFORM_2D,
       width,
@@ -794,7 +894,7 @@ export async function cookNode(
       current &&
       current.modifiers === modifiersAtStart &&
       textInputsUnchanged &&
-      maskInputsKey(current, deps) === maskKeyAtStart
+      maskInputsKey(current, deps, rasterKey) === maskKeyAtStart
     ) {
       deps.clearDirty(nodeId, level);
     }

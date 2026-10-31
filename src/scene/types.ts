@@ -49,6 +49,8 @@ export interface Modifier {
  */
 export interface VectorMaskRef {
   id: string;
+  /** Absent on a vector ref (and in every file from before pixel drivers); see `PixelMaskRef`. */
+  kind?: never;
   nodeId: string; // a VectorNode's or TextNode's id (Epic 20)
   featherPx: number;
   expand: number;
@@ -61,6 +63,46 @@ export interface VectorMaskRef {
   space?: 'document' | 'node';
   /** The consumer's `transform2d` snapshot taken when this ref was created or switched to `'node'`. Present iff `space === 'node'`. */
   attachTransform?: Transform2D;
+}
+
+/**
+ * A modifier mask driven by a pixel layer (Epic 17 story 6, layer-as-driver.md): the driver's
+ * COOKED raster (its own stack applied) becomes the single-channel mask plane `cook` already
+ * takes. Live: editing the driver's stack or moving it recooks the consumer, never the
+ * reverse, and the scheduler cooks a driver before its consumer.
+ *
+ * `kind: 'pixel'` tells it from a `VectorMaskRef`, which has no `kind` (so vector refs and
+ * every file from before this story stay as they were). Always document-space: the driver's
+ * pixels are sampled where it sits on the page, through both layers' `transform2d`.
+ *
+ * `channel`: Rec. 709 luminance (the `desaturate` weights, on the stored sRGB bytes) or alpha.
+ * `low`/`high`: the channel levels (0..1) that map to mask 0 and 1, linear between; `invert`
+ * flips the result afterwards.
+ */
+export interface PixelMaskRef {
+  id: string;
+  kind: 'pixel';
+  nodeId: string; // a PixelNode's id
+  channel: 'luminance' | 'alpha';
+  low: number;
+  high: number;
+  invert: boolean;
+  // The shape-only fields, absent here, so code that reads them off either kind still checks.
+  featherPx?: never;
+  expand?: never;
+  space?: never;
+  attachTransform?: never;
+}
+
+/** What `Modifier.maskId` resolves to: a shape (vector or text layer) or a pixel layer. */
+export type MaskRef = VectorMaskRef | PixelMaskRef;
+
+export function isPixelMaskRef(ref: MaskRef | undefined): ref is PixelMaskRef {
+  return ref?.kind === 'pixel';
+}
+
+export function isVectorMaskRef(ref: MaskRef | undefined): ref is VectorMaskRef {
+  return ref !== undefined && !isPixelMaskRef(ref);
 }
 
 /**
@@ -235,13 +277,13 @@ export interface Scene {
   resolution: Resolution; // current global cook target ('working' default)
   documentSize: [number, number];
   /**
-   * Live vector-referenced modifier masks (vector-modifier-masks.md),
-   * what `Modifier.maskId` resolves against. Optional so pre-Epic-06
+   * Live modifier masks (vector-modifier-masks.md; pixel drivers from
+   * layer-as-driver.md), what `Modifier.maskId` resolves against. Optional so pre-Epic-06
    * `.oblique` files load verbatim — treat absence as empty. Entries are
-   * pruned when their modifier, node, or referenced vector node goes (see
+   * pruned when their modifier, node, or referenced layer goes (see
    * `store.ts`'s `pruneMaskState`).
    */
-  maskRefs?: Record<string, VectorMaskRef>;
+  maskRefs?: Record<string, MaskRef>;
   /**
    * Document background (background-colour.md). Optional so pre-existing
    * `.oblique` files load verbatim — absence means today's behaviour

@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import type { TextGeometry } from '../fonts/textGeometry';
-import type { Modifier, PixelNode, SceneNode, TextNode, VectorNode } from '../scene/types';
+import type {
+  Modifier,
+  PixelMaskRef,
+  PixelNode,
+  SceneNode,
+  TextNode,
+  VectorNode,
+} from '../scene/types';
 
 vi.mock('@preset.nz/ux-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@preset.nz/ux-kit')>()),
@@ -126,7 +133,7 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
     getSource: vi.fn(() => sourceBitmap),
     getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
     getOps: vi.fn(() => opsFixture),
-    getVectorMaskRef: vi.fn(() => undefined),
+    getMaskRef: vi.fn(() => undefined),
     rasterizeVectorMask: vi.fn(
       (
         _paths,
@@ -140,6 +147,11 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
         h: number,
         _factor: number,
       ) => new Uint8Array(w * h),
+    ),
+    getDriverRaster: vi.fn(() => undefined),
+    rasterizePixelMask: vi.fn(
+      (_raster, _ref, _dt, _ds, _ct, _cs, w: number, h: number, _factor: number) =>
+        new Uint8Array(w * h),
     ),
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
     rasterizeVector: vi.fn(
@@ -319,7 +331,7 @@ describe('cookNode — masks', () => {
   it('race guard: a mask-source edit mid-cook (consumer modifiers untouched) leaves dirty set', async () => {
     const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
       ),
@@ -342,7 +354,7 @@ describe('cookNode — masks', () => {
   it('race guard: a consumer move mid-cook leaves a vector-masked node dirty', async () => {
     const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
       ),
@@ -368,7 +380,7 @@ describe('cookNode — masks', () => {
       attachTransform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
     };
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => nodePinned),
+      getMaskRef: vi.fn(() => nodePinned),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
       ),
@@ -389,7 +401,7 @@ describe('cookNode — masks', () => {
   it('race guard: an unrelated dirty flip on a masked consumer still clears dirty', async () => {
     const { vectorRef, ref, nodeRef } = maskedConsumerSetup();
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorRef.current : undefined,
       ),
@@ -433,7 +445,7 @@ describe('cookNode — masks', () => {
     };
     const plane = new Uint8Array(100 * 50);
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
+      getMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
       // getNode must resolve BOTH the cooking node and the referenced vector node.
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 'v1' ? vectorNode : undefined,
@@ -475,7 +487,7 @@ describe('cookNode — masks', () => {
       }),
     };
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) => (id === 'node-1' ? nodeRef.current : undefined)),
     });
 
@@ -522,7 +534,7 @@ describe('cookNode — text-node mask targets', () => {
     const nodeRef = { current: consumer() };
     const plane = new Uint8Array(100 * 50);
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
+      getMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 't1' ? text : undefined,
       ),
@@ -560,7 +572,7 @@ describe('cookNode — text-node mask targets', () => {
   it('a ref to a deleted node resolves to no mask and asks for no geometry', async () => {
     const nodeRef = { current: consumer() };
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) => (id === 'node-1' ? nodeRef.current : undefined)),
     });
 
@@ -576,7 +588,7 @@ describe('cookNode — text-node mask targets', () => {
     const text = makeTextNode({ id: 't1' });
     const nodeRef = { current: consumer() };
     const deps = makeDeps(nodeRef, {
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       getNode: vi.fn((id: string) =>
         id === 'node-1' ? nodeRef.current : id === 't1' ? text : undefined,
       ),
@@ -604,8 +616,9 @@ describe('cookNode — text-node mask targets', () => {
       getSource: vi.fn(() => fakeBitmap()),
       getOps: vi.fn(() => opsFixture),
       getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
-      getVectorMaskRef: vi.fn(() => ref),
+      getMaskRef: vi.fn(() => ref),
       rasterizeVectorMask,
+      rasterizePixelMask: vi.fn(),
       rasterizeVector: vi.fn(),
       getTextGeometry: vi.fn(async () => textGeometry),
       rasterizeText: vi.fn(),
@@ -1005,7 +1018,7 @@ describe('cookNodeFullRes', () => {
       getSource: vi.fn(() => fakeBitmap()),
       getOps: vi.fn(() => opsFixture),
       getDocumentSize: vi.fn(() => [800, 400] as [number, number]),
-      getVectorMaskRef: vi.fn(() => undefined),
+      getMaskRef: vi.fn(() => undefined),
       rasterizeVectorMask: vi.fn(
         (
           _paths,
@@ -1019,6 +1032,10 @@ describe('cookNodeFullRes', () => {
           h: number,
           _factor: number,
         ) => new Uint8Array(w * h),
+      ),
+      rasterizePixelMask: vi.fn(
+        (_raster, _ref, _dt, _ds, _ct, _cs, w: number, h: number, _factor: number) =>
+          new Uint8Array(w * h),
       ),
       rasterizeVector: vi.fn(
         (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
@@ -1512,7 +1529,7 @@ describe('cookNode — prefix cache', () => {
         const nodeRef = { current: makeNode({ modifiers }) };
         // harness() builds its own nodeRef; share ours via getNode below.
         const h = harness(nodeRef.current, {
-          getVectorMaskRef: vi.fn((id: string) => (id === 'ref-1' ? world.ref : undefined)),
+          getMaskRef: vi.fn((id: string) => (id === 'ref-1' ? world.ref : undefined)),
           getNode: vi.fn((id: string) =>
             id === 'node-1' ? h.nodeRef.current : id === 'v1' ? world.vec : undefined,
           ),
@@ -1683,7 +1700,7 @@ describe('cookNode — prefix cache', () => {
       };
       const modifiers = stackOf(1, 2).map((m, i) => (i === 0 ? { ...m, maskId: 'ref-1' } : m));
       const h = harness(makeNode({ modifiers }), {
-        getVectorMaskRef: vi.fn(() => world.ref),
+        getMaskRef: vi.fn(() => world.ref),
         getNode: vi.fn((id: string) =>
           id === 'node-1' ? h.nodeRef.current : id === 'v1' ? world.vec : undefined,
         ),
@@ -1726,5 +1743,169 @@ describe('cookNode — prefix cache', () => {
       const built = buildCookModifiers(mods, 1 / 8, opsFixture, () => undefined);
       expect(built.map((m) => m.type)).toEqual(['levels', 'no_such_op', 'gaussian_blur']);
     });
+  });
+});
+
+// ---------------------------------------------------------------- layer as driver
+
+describe('cookNode — pixel drivers (layer-as-driver.md)', () => {
+  const ref: PixelMaskRef = {
+    id: 'r1',
+    kind: 'pixel',
+    nodeId: 'depth',
+    channel: 'luminance',
+    low: 0.1,
+    high: 0.9,
+    invert: true,
+  };
+  const driverTransform = { x: 12, y: -4, scaleX: 1, scaleY: 1, rotation: 0.1 };
+
+  function setup() {
+    const depth = makeNode({
+      id: 'depth',
+      sourceSize: [400, 200],
+      transform2d: driverTransform,
+    }) as PixelNode;
+    const consumerTransform = { x: 3, y: 2, scaleX: 2, scaleY: 2, rotation: 0 };
+    const nodeRef = {
+      current: makeNode({
+        transform2d: consumerTransform,
+        modifiers: [
+          { id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 }, maskId: 'r1' },
+        ],
+      }),
+    };
+    const raster = { current: { bitmap: fakeBitmap(), key: 'draft:1' } };
+    return { depth, consumerTransform, nodeRef, raster };
+  }
+
+  it("samples the driver's cooked raster at this level, through both transforms", async () => {
+    const { depth, consumerTransform, nodeRef, raster } = setup();
+    const plane = new Uint8Array(100 * 50);
+    const deps = makeDeps(nodeRef, {
+      getMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+      ),
+      getDriverRaster: vi.fn(() => raster.current),
+      rasterizePixelMask: vi.fn(() => plane),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.getDriverRaster).toHaveBeenCalledWith('depth', 'draft');
+    expect(deps.rasterizePixelMask).toHaveBeenCalledWith(
+      raster.current.bitmap,
+      ref,
+      driverTransform,
+      [400, 200], // the DRIVER's own source size: its raster is drawn at that extent
+      consumerTransform,
+      [800, 400],
+      100,
+      50,
+      1 / 8,
+    );
+    expect(deps.rasterizeVectorMask).not.toHaveBeenCalled();
+    const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runModifiers[0].mask).toBe(plane);
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+  });
+
+  it('race guard: the driver recooking mid-cook leaves the consumer dirty', async () => {
+    const { depth, nodeRef, raster } = setup();
+    const deps = makeDeps(nodeRef, {
+      getMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+      ),
+      getDriverRaster: vi.fn(() => raster.current),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        raster.current = { bitmap: fakeBitmap(), key: 'draft:2' };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.setCache).toHaveBeenCalledTimes(1);
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it("race guard: an edit to the driver's own stack mid-cook leaves the consumer dirty", async () => {
+    const { nodeRef, raster } = setup();
+    let depth = setup().depth;
+    const deps = makeDeps(nodeRef, {
+      getMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+      ),
+      getDriverRaster: vi.fn(() => raster.current),
+      runPython: vi.fn(async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+        depth = { ...depth, modifiers: [{ id: 'd1', type: 'levels', enabled: true, params: {} }] };
+        return payload;
+      }),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('no raster yet: still rasterises (as transparent), never throws', async () => {
+    const { depth, nodeRef } = setup();
+    const deps = makeDeps(nodeRef, {
+      getMaskRef: vi.fn(() => ref),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+      ),
+      getDriverRaster: vi.fn(() => undefined),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect((deps.rasterizePixelMask as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBeUndefined();
+    expect(deps.setCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('cookNodeFullRes cooks the driver at full res first and samples that, never a cache', async () => {
+    const { depth, nodeRef } = setup();
+    const driverBitmap = { close: vi.fn() } as unknown as ImageBitmap;
+    const consumerBitmap = fakeBitmap();
+    const encode = vi.fn(async (_b: Uint8Array, w: number) =>
+      w === 400 ? driverBitmap : consumerBitmap,
+    );
+    const rasterizePixelMask = vi.fn(
+      (_r, _ref, _dt, _ds, _ct, _cs, w: number, h: number) => new Uint8Array(w * h),
+    );
+    const deps = {
+      ...makeDeps(nodeRef, {
+        getMaskRef: vi.fn(() => ref),
+        getNode: vi.fn((id: string) =>
+          id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+        ),
+      }),
+      encode,
+      rasterizePixelMask,
+    } as unknown as FullResCookDeps;
+
+    const out = await cookNodeFullRes('node-1', deps);
+
+    expect(out).toBe(consumerBitmap);
+    // the driver (400x200) cooked before the consumer (800x400)
+    expect(encode.mock.calls.map((c) => c[1])).toEqual([400, 800]);
+    expect(rasterizePixelMask).toHaveBeenCalledWith(
+      driverBitmap,
+      ref,
+      driverTransform,
+      [400, 200],
+      expect.anything(),
+      [800, 400],
+      800,
+      400,
+      1,
+    );
+    expect(
+      (driverBitmap as unknown as { close: ReturnType<typeof vi.fn> }).close,
+    ).toHaveBeenCalled();
   });
 });

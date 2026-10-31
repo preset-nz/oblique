@@ -1,0 +1,117 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "documentSize": [
+          640.0,
+          480.0
+        ],
+        "note": "Layer as driver window check (Epic 17 story 6). `just fixtures layer-as-driver` writes this file again.\n\n0. Open a fresh copy (`just window-check layer-as-driver`). Photo has a Gaussian Blur (radius 12) whose mask is driven by Depth, a hidden depth map, near white. The mask reads Depth's luminance, inverted, so far is blurred.\na. The sky, the hills and the far ground are blurred; the red box at the front is sharp and the sphere nearly so. The ground softens gradually as it recedes.\nb. Open the blur's options (the three dots). It reads Driven by “Depth”, Luminance, Low 0, High 1, Invert on. Scrub Low up: more of the far scene blurs fully. Scrub High down: more of the near scene goes fully sharp. Untick Invert: the box blurs and the sky goes sharp. One undo takes back each scrub whole. Put them back (Low 0, High 1, Invert on).\nc. Select Depth and add an Invert modifier to it, with Depth still hidden. Photo's blur flips (the box blurs, the sky sharpens) with no change to Photo's own stack. Remove the Invert modifier: it flips back.\nd. Show Depth, move it right by a good distance, hide it again. The sharp box region on Photo moves right with it. Undo the move: it comes back.\ne. Hide and show Depth a few times: the blur and its mask stay as they are.\nf. Delete Depth: the blur now covers the whole photo, and the blur's options no longer show a layer mask. One undo brings back Depth and the mask together.\ng. On Photo's blur, choose Mask from layer: Photo is listed but greyed, with the reason (a layer can't drive its own modifiers); Depth is listed and works. Add a Gaussian Blur to Depth and choose Mask from layer on that: Photo is greyed there, with the reason (it already takes a mask from Depth). Remove Depth's blur.\nh. Save, close and reopen the file: the blur, the mask and its numbers are as they were.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000008",
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/depth",
+      "id": "00000000000000000000000008",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Depth",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": false
+      },
+      "refs": {
+        "source": {
+          "file": "layer-as-driver.assets/depth.png"
+        }
+      }
+    },
+    {
+      "path": "/layers/photo",
+      "id": "00000000000000000000000006",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "layer-as-driver.assets/photo.png"
+        }
+      },
+      "orders": {
+        "modifiers": [
+          "00000000000000000000000007"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo/blur",
+      "id": "00000000000000000000000007",
+      "type": "op.gaussian_blur",
+      "values": {
+        "enabled": true,
+        "params.radius": 12.0
+      },
+      "bindings": [
+        {
+          "on": {
+            "slot": "mask"
+          },
+          "source": "00000000000000000000000008",
+          "values": {
+            "channel": "luminance",
+            "high": 1.0,
+            "invert": true,
+            "low": 0.0,
+            "refId": "blur"
+          }
+        }
+      ]
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

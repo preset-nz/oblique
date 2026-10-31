@@ -8,9 +8,17 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
-import { isTextNode, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
+import {
+  isPixelMaskRef,
+  isPixelNode,
+  isTextNode,
+  isVectorNode,
+  type Modifier,
+  type SceneNode,
+} from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
+import { LayerMaskPicker, LayerMaskSettings } from './LayerMaskControls';
 import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
 import { modifierScopeKey } from './modifierScope';
 import { useRowCollapseStore } from './rowCollapse';
@@ -57,12 +65,17 @@ export function StackRow({
   // cached invariant and loops forever.
   const sceneNodes = useSceneStore((s) => s.scene.nodes);
   const maskSourceNodes = sceneNodes.filter((n) => isVectorNode(n) || isTextNode(n));
+  const pixelLayers = sceneNodes.filter(isPixelNode);
+  const driver = isPixelMaskRef(maskRef)
+    ? sceneNodes.find((n) => n.id === maskRef.nodeId)
+    : undefined;
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const maskParams = useMarqueeStateStore((s) => s.params);
   const setMaskParams = useMarqueeStateStore((s) => s.setParams);
   const rowExpanded = useRowCollapseStore((s) => s.isExpanded(modifier.id));
   const toggleExpanded = useRowCollapseStore((s) => s.toggle);
   const [vectorPickerOpen, setVectorPickerOpen] = useState(false);
+  const [layerPickerOpen, setLayerPickerOpen] = useState(false);
 
   const descriptor = ops.find((o) => o.name === modifier.type);
   // Param-less ops (e.g. invert) have nothing to expand. An UNKNOWN op stays
@@ -206,7 +219,9 @@ export function StackRow({
                 }
               />
               <TooltipContent>
-                Masked — live vector reference; editing the shape recooks this modifier
+                {isPixelMaskRef(maskRef)
+                  ? `Masked by “${driver?.label ?? 'a missing layer'}” — editing that layer recooks this modifier`
+                  : 'Masked — live vector reference; editing the shape recooks this modifier'}
               </TooltipContent>
             </Tooltip>
           )}
@@ -231,7 +246,7 @@ export function StackRow({
             </TooltipTrigger>
             <TooltipContent>Options</TooltipContent>
           </Tooltip>
-          <PopoverContent align="end" className="w-40 p-1">
+          <PopoverContent align="end" className="w-48 p-1">
             <button
               type="button"
               disabled={locked}
@@ -320,7 +335,32 @@ export function StackRow({
                 ))}
               </div>
             )}
-            {maskRef && (
+            <button
+              type="button"
+              disabled={locked || pixelLayers.length === 0}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+              onClick={() => !locked && setLayerPickerOpen((open) => !open)}
+            >
+              <Icons.ImageIcon size={12} />{' '}
+              {modifier.maskId ? 'Replace mask from layer' : 'Mask from layer'}
+            </button>
+            {layerPickerOpen && !locked && (
+              <LayerMaskPicker
+                node={node}
+                modifier={modifier}
+                locked={locked}
+                onPicked={() => setLayerPickerOpen(false)}
+              />
+            )}
+            {isPixelMaskRef(maskRef) && (
+              <LayerMaskSettings
+                node={node}
+                modifier={modifier}
+                maskRef={maskRef}
+                locked={locked}
+              />
+            )}
+            {maskRef && !isPixelMaskRef(maskRef) && (
               <label
                 htmlFor={`vector-mask-follows-${modifier.id}`}
                 className={`flex items-center gap-2 px-2 py-1 text-xs ${locked ? 'opacity-40' : ''}`}

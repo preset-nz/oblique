@@ -1712,6 +1712,98 @@ describe('modifiers and masks (modifier.*, mask.*)', () => {
     });
   });
 
+  describe('Mask from layer (mask.attach_layer, layer-as-driver.md)', () => {
+    /** Photo `m` (its `mod2` unmasked), and a depth layer `d` with a blur of its own. */
+    const scene = () => {
+      const { nodes, extra } = maskedScene();
+      return {
+        nodes: [
+          pixel('d', {
+            label: 'Depth',
+            visible: false,
+            modifiers: [{ id: 'dm', type: 'blur', enabled: true, params: { radius: 2 } }],
+          }),
+          ...nodes,
+        ],
+        extra,
+      };
+    };
+    const numbers = { channel: 'luminance' as const, low: 0.2, high: 0.8, invert: true };
+
+    it('commands first: sends mask.attach_layer, the store follows the update, and agrees', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      expect(state().setModifierPixelMask('m', 'mod2', 'd', numbers)).toBe('mod2');
+      expect(modifiers('m')[1].maskId).toBeUndefined(); // nothing local yet
+      await settle();
+      expect(sent()).toEqual(['mask.attach_layer']);
+      expect(host.runs[0].payload).toEqual({
+        at: '/layers/m/mod2',
+        source: '/layers/d',
+        ...numbers,
+      });
+      expect(maskRefs().mod2).toEqual({ id: 'mod2', kind: 'pixel', nodeId: 'd', ...numbers });
+      expect(modifiers('m')[1].maskId).toBe('mod2');
+      await agrees();
+      await undo();
+      expect(maskRefs().mod2).toBeUndefined();
+      await agrees();
+    });
+
+    it('a levels scrub inside a gesture is one undo step', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierPixelMask('m', 'mod2', 'd', numbers);
+      await settle();
+      transaction.beginTransaction();
+      for (const low of [0.3, 0.4, 0.5]) {
+        state().setModifierPixelMask('m', 'mod2', 'd', { ...numbers, low });
+      }
+      transaction.endTransaction();
+      await settle();
+      expect(maskRefs().mod2).toMatchObject({ kind: 'pixel', low: 0.5 });
+      await agrees();
+      await undo();
+      expect(maskRefs().mod2).toMatchObject({ low: 0.2 });
+      await agrees();
+    });
+
+    it('refuses a cycle with the reason and sends nothing', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierPixelMask('d', 'dm', 'm', numbers); // Depth's blur driven by Photo
+      await settle();
+      host.runs.length = 0;
+      expect(state().setModifierPixelMask('m', 'mod2', 'd', numbers)).toBeUndefined();
+      expect(state().setModifierPixelMask('m', 'mod2', 'm', numbers)).toBeUndefined();
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'warning',
+          description: expect.stringContaining('already takes a mask from this layer'),
+        }),
+      );
+    });
+
+    it('deleting the driver drops the mask; one undo brings both back', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierPixelMask('m', 'mod2', 'd', numbers);
+      await settle();
+      state().removeNode('d');
+      await settle();
+      expect(node('d')).toBeUndefined();
+      expect(modifiers('m')[1].maskId).toBeUndefined();
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+      await undo();
+      expect(node('d')).toBeDefined();
+      expect(maskRefs().mod2).toEqual({ id: 'mod2', kind: 'pixel', nodeId: 'd', ...numbers });
+      await agrees();
+    });
+  });
+
   describe('Mask from Selection (mask.from_marquee)', () => {
     const rect = { kind: 'rect', rect: { x: 10, y: 20, w: 30, h: 40 } } as const;
     const params = { featherPx: 2, expand: 1, invert: false };

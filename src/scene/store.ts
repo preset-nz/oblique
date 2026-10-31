@@ -9,16 +9,19 @@ import {
   selectionLabel,
   useMarqueeStateStore,
 } from './marquee';
-import { hasDocumentPinnedMask } from './maskInputs';
+import { driverRefusal, hasDocumentPinnedMask, pixelDriversOf } from './maskInputs';
 import {
   type BlendMode,
   IDENTITY_TRANSFORM_2D,
+  isPixelMaskRef,
   isPixelNode,
   isSelectionNode,
   isTextNode,
   isVectorNode,
+  type MaskRef,
   type Modifier,
   type NodeOutput,
+  type PixelMaskRef,
   type PixelNode,
   type Scene,
   type SceneNode,
@@ -256,7 +259,7 @@ interface SceneState {
     id: string,
     sourcePath: string,
     sourceSize?: [number, number],
-    decided?: { transform2d?: Transform2D; maskRefs?: Record<string, VectorMaskRef> },
+    decided?: { transform2d?: Transform2D; maskRefs?: Record<string, MaskRef> },
   ) => void;
 
   /**
@@ -290,7 +293,21 @@ interface SceneState {
     vectorNodeId: string,
     ref: Omit<VectorMaskRef, 'id' | 'nodeId'>,
   ) => string;
-  /** Detach and delete a modifier's vector mask. */
+  /**
+   * "Mask from layer" (layer-as-driver.md): `maskId` resolves to a new/reused `PixelMaskRef`
+   * driven by `driverNodeId`'s cooked raster, with its own channel, levels and invert. Sent
+   * again with the same driver and new numbers it is the edit of those. Reuses the modifier's
+   * existing maskId when present, like `setModifierVectorMask`. Refused (`undefined`, nothing
+   * mutated) for a locked consumer, a driver that isn't a pixel layer, or one that would close
+   * a cycle (`driverRefusal`).
+   */
+  setModifierPixelMask: (
+    nodeId: string,
+    modId: string,
+    driverNodeId: string,
+    ref: Omit<PixelMaskRef, 'id' | 'nodeId' | 'kind'>,
+  ) => string | undefined;
+  /** Detach and delete a modifier's mask (either kind). */
   removeModifierMask: (nodeId: string, modId: string) => void;
   /**
    * "Follows layer" (mask-follows-node.md): switches a modifier's mask ref
@@ -436,7 +453,10 @@ function pruneMaskState(
       const { maskId: _dropped, ...rest } = m;
       return rest;
     });
-    return changed ? { ...n, modifiers } : n;
+    // A modifier that lost its mask cooks unmasked from now on: dirty, so the masked cache
+    // doesn't keep painting (a locked consumer keeps its bake and its clean flags).
+    if (!changed) return n;
+    return n.state === 'locked' ? { ...n, modifiers } : { ...n, modifiers, dirty: dirtyBoth() };
   });
 
   return { nodes: clearedNodes, maskRefs: prunedRefs };
@@ -478,11 +498,13 @@ function copyNode(
       // a fresh object so the two refs never share one.
       nextRefs = {
         ...nextRefs,
-        [newMaskId]: {
-          ...ref,
-          id: newMaskId,
-          ...(ref.attachTransform ? { attachTransform: { ...ref.attachTransform } } : {}),
-        },
+        [newMaskId]: isPixelMaskRef(ref)
+          ? { ...ref, id: newMaskId }
+          : {
+              ...ref,
+              id: newMaskId,
+              ...(ref.attachTransform ? { attachTransform: { ...ref.attachTransform } } : {}),
+            },
       };
       copy.maskId = newMaskId;
     }
@@ -516,659 +538,762 @@ function copyNode(
   return { node, maskRefs: nextRefs };
 }
 
+/**
+ * Live drivers (layer-as-driver.md): a layer whose cook reads a pixel driver's raster is dirty
+ * at every level its driver is, through chains of drivers too. Applied to every scene the store
+ * writes (the `set` below), so no action has to remember it: an edit to the driver's own stack,
+ * a replaced source, an unlock, an undo landing on it, all dirty its consumers in the same
+ * mutation. The reverse never happens: nothing here reads a consumer to dirty a driver.
+ *
+ * A consumer's flag clearing while its driver is still dirty is raised again at once: its
+ * cook read a raster that is about to change. Locked consumers are left alone (their bake
+ * stands, dirty rule for locks). Returns `scene` itself when nothing changes.
+ */
+export function withDriverDirty(scene: Scene): Scene {
+  const refs = scene.maskRefs;
+  if (!refs || !Object.values(refs).some(isPixelMaskRef)) return scene;
+  const getRef = (id: string) => refs[id];
+  const dirty = new Map(scene.nodes.map((n) => [n.id, n.dirty]));
+  let changed = false;
+  // A fixed point over the chains; each pass can only raise flags, so it ends within as many
+  // passes as there are layers.
+  for (let pass = 0; pass <= scene.nodes.length; pass++) {
+    let raised = false;
+    for (const n of scene.nodes) {
+      if (n.state === 'locked') continue;
+      const own = dirty.get(n.id) as SceneNode['dirty'];
+      let { draft, working } = own;
+      for (const driverId of pixelDriversOf(n, getRef)) {
+        const d = dirty.get(driverId);
+        if (d?.draft) draft = true;
+        if (d?.working) working = true;
+      }
+      if (draft !== own.draft || working !== own.working) {
+        dirty.set(n.id, { draft, working });
+        raised = true;
+        changed = true;
+      }
+    }
+    if (!raised) break;
+  }
+  if (!changed) return scene;
+  return {
+    ...scene,
+    nodes: scene.nodes.map((n) => {
+      const d = dirty.get(n.id) as SceneNode['dirty'];
+      return d === n.dirty ? n : { ...n, dirty: d };
+    }),
+  };
+}
+
+type SetScene = (
+  partial:
+    | SceneState
+    | Partial<SceneState>
+    | ((state: SceneState) => SceneState | Partial<SceneState>),
+) => void;
+
 // Typed outright: `applyMarqueeAsVectorMask` reaches the store's own initial actions through it,
 // and an inferred type would depend on itself.
 type SceneStore = UseBoundStore<StoreApi<SceneState>>;
 
-export const useSceneStore: SceneStore = create<SceneState>((set, get) => ({
-  scene: makeEmptyScene(),
-  bakingNodeIds: new Set<string>(),
+export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
+  // Every scene the store writes passes through `withDriverDirty` (layer-as-driver.md).
+  const set: SetScene = (partial) =>
+    rawSet((state) => {
+      const next = typeof partial === 'function' ? partial(state) : partial;
+      if (next.scene === undefined || next.scene === state.scene) return next;
+      return { ...next, scene: withDriverDirty(next.scene) };
+    });
+  return {
+    scene: makeEmptyScene(),
+    bakingNodeIds: new Set<string>(),
 
-  lockNode: async (nodeId, cookFullRes) => {
-    if (get().bakingNodeIds.has(nodeId)) return; // already baking — no-op
-    const node = get().scene.nodes.find((n) => n.id === nodeId);
-    if (!node || node.state === 'locked') return;
+    lockNode: async (nodeId, cookFullRes) => {
+      if (get().bakingNodeIds.has(nodeId)) return; // already baking — no-op
+      const node = get().scene.nodes.find((n) => n.id === nodeId);
+      if (!node || node.state === 'locked') return;
 
-    set((s) => ({ bakingNodeIds: new Set(s.bakingNodeIds).add(nodeId) }));
-    try {
-      const bitmap = await cookFullRes(nodeId);
-      cache.set(nodeId, 'baked', bitmap);
+      set((s) => ({ bakingNodeIds: new Set(s.bakingNodeIds).add(nodeId) }));
+      try {
+        const bitmap = await cookFullRes(nodeId);
+        cache.set(nodeId, 'baked', bitmap);
+        set((s) => ({
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, state: 'locked' })),
+          },
+        }));
+      } finally {
+        set((s) => {
+          const next = new Set(s.bakingNodeIds);
+          next.delete(nodeId);
+          return { bakingNodeIds: next };
+        });
+      }
+    },
+
+    unlockNode: (nodeId) => {
+      set((s) => {
+        const target = s.scene.nodes.find((n) => n.id === nodeId);
+        if (target?.state !== 'locked') return s;
+        cache.clearLevel(nodeId, 'baked');
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              state: 'active',
+              dirty: dirtyBoth(),
+            })),
+          },
+        };
+      });
+    },
+
+    addPixelNode: (partial) => {
+      const id = crypto.randomUUID();
+      const node: PixelNode = {
+        id,
+        label: partial.label ?? 'Layer',
+        type: 'pixel',
+        state: partial.state ?? 'active',
+        output: partial.output ?? 'image',
+        transform: partial.transform,
+        cameraId: partial.cameraId ?? null,
+        modifiers: partial.modifiers ?? [],
+        visible: partial.visible ?? true,
+        blendMode: partial.blendMode ?? 'normal',
+        opacity: partial.opacity ?? 1,
+        dirty: dirtyBoth(),
+        sourcePath: partial.sourcePath,
+        sourceSize: partial.sourceSize,
+      };
+      set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
+      return id;
+    },
+
+    addVectorNode: (partial) => {
+      const id = crypto.randomUUID();
+      const node: VectorNode = {
+        id,
+        label: partial.label ?? 'Vector',
+        type: 'vector',
+        state: partial.state ?? 'active',
+        output: partial.output ?? 'image',
+        transform: partial.transform,
+        cameraId: partial.cameraId ?? null,
+        modifiers: partial.modifiers ?? [],
+        visible: partial.visible ?? true,
+        blendMode: partial.blendMode ?? 'normal',
+        opacity: partial.opacity ?? 1,
+        dirty: dirtyBoth(),
+        paths: partial.paths,
+        fillRule: partial.fillRule,
+        ...(partial.role ? { role: partial.role } : {}),
+      };
+      set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
+      return id;
+    },
+
+    addTextNode: (partial) => {
+      const id = crypto.randomUUID();
+      const node: TextNode = {
+        id,
+        label: partial.label ?? textLabel(partial.content),
+        type: 'text',
+        state: partial.state ?? 'active',
+        output: partial.output ?? 'image',
+        transform: partial.transform,
+        cameraId: partial.cameraId ?? null,
+        modifiers: partial.modifiers ?? [],
+        visible: partial.visible ?? true,
+        blendMode: partial.blendMode ?? 'normal',
+        opacity: partial.opacity ?? 1,
+        dirty: dirtyBoth(),
+        content: partial.content,
+        font: partial.font,
+        fontSize: partial.fontSize ?? 72,
+        tracking: partial.tracking ?? 0,
+        kerning: partial.kerning ?? 100,
+        lineHeight: partial.lineHeight ?? 1.2,
+        align: partial.align ?? 'left',
+        fill: partial.fill === undefined ? '#ffffff' : partial.fill,
+        stroke: partial.stroke === undefined ? null : partial.stroke,
+        position: partial.position,
+      };
+      set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
+      return id;
+    },
+
+    setTextProps: (nodeId, patch) => {
+      set((s) => {
+        const target = s.scene.nodes.find((n) => n.id === nodeId);
+        if (target?.type !== 'text') return s;
+        if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
+        const text = target as TextNode;
+
+        const entries = (Object.entries(patch) as [keyof TextPropPatch, unknown][]).filter(
+          ([, value]) => value !== undefined,
+        );
+        const changed = entries.some(
+          ([key, value]) => JSON.stringify(value) !== JSON.stringify(text[key]),
+        );
+        if (!changed) return s;
+
+        const label =
+          patch.content !== undefined && text.label === textLabel(text.content)
+            ? textLabel(patch.content)
+            : text.label;
+        const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...(n as TextNode),
+          ...Object.fromEntries(entries),
+          label,
+          dirty: dirtyBoth(),
+        }));
+        const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
+
+        return { scene: { ...s.scene, nodes } };
+      });
+    },
+
+    convertTextToOutlines: (nodeId, paths) => {
+      const before = get().scene;
+      const index = before.nodes.findIndex((n) => n.id === nodeId);
+      const target = before.nodes[index];
+      if (target?.type !== 'text' || target.state === 'locked') return null;
+
+      const newId = crypto.randomUUID();
+      set((s) => {
+        const text = target;
+        const vector: VectorNode = {
+          id: newId,
+          label: text.label,
+          type: 'vector',
+          state: 'active',
+          output: text.output,
+          cameraId: text.cameraId ?? null,
+          modifiers: text.modifiers,
+          visible: text.visible,
+          blendMode: text.blendMode,
+          opacity: text.opacity,
+          ...(text.transform2d ? { transform2d: text.transform2d } : {}),
+          dirty: dirtyBoth(),
+          paths,
+          fillRule: 'nonzero',
+        };
+        const replaced = s.scene.nodes.map((n, i) => (i === index ? vector : n));
+
+        let maskRefs = s.scene.maskRefs;
+        if (maskRefs && Object.values(maskRefs).some((ref) => ref.nodeId === nodeId)) {
+          maskRefs = Object.fromEntries(
+            Object.entries(maskRefs).map(([id, ref]) => [
+              id,
+              ref.nodeId === nodeId ? { ...ref, nodeId: newId } : ref,
+            ]),
+          );
+        }
+        const nodes = dirtyMaskRefConsumers(replaced, maskRefs, newId);
+        return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
+      });
+      return newId;
+    },
+
+    setVectorPaths: (nodeId, paths) => {
+      set((s) => {
+        const target = s.scene.nodes.find((n) => n.id === nodeId);
+        if (target?.type !== 'vector') return s;
+        if (target.state === 'locked') return s; // path edits guarded (lock-state-machine.md)
+
+        const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...(n as VectorNode),
+          paths,
+          dirty: dirtyBoth(),
+        }));
+        const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
+
+        return { scene: { ...s.scene, nodes } };
+      });
+    },
+
+    setVectorFillRule: (nodeId, fillRule) => {
+      set((s) => {
+        const target = s.scene.nodes.find((n) => n.id === nodeId);
+        if (target?.type !== 'vector') return s;
+        if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
+
+        const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...(n as VectorNode),
+          fillRule,
+          dirty: dirtyBoth(),
+        }));
+        const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
+
+        return { scene: { ...s.scene, nodes } };
+      });
+    },
+
+    duplicateNode: (id) => {
+      const original = get().scene.nodes.find((n) => n.id === id);
+      if (!original) return null;
+      const newId = crypto.randomUUID();
+      set((s) => {
+        const index = s.scene.nodes.findIndex((n) => n.id === id);
+        const source = s.scene.nodes[index];
+        const { node, maskRefs } = copyNode(source, newId, s.scene.maskRefs);
+        const nodes = [...s.scene.nodes];
+        nodes.splice(index, 0, node);
+        return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
+      });
+      return newId;
+    },
+
+    removeNode: (id) => {
+      set((s) => {
+        const nodes = s.scene.nodes.filter((n) => n.id !== id);
+        const pruned = pruneMaskState(nodes, s.scene.maskRefs);
+        return {
+          scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
+        };
+      });
+    },
+
+    reorderNode: (id, toIndex) => {
+      // Compositing-only mutation — order affects the composite, not any
+      // node's own cache, so no dirty flag per dirty rule 4.
+      set((s) => {
+        const nodes = [...s.scene.nodes];
+        const fromIndex = nodes.findIndex((n) => n.id === id);
+        if (fromIndex === -1) return s;
+        const [node] = nodes.splice(fromIndex, 1);
+        nodes.splice(toIndex, 0, node);
+        return { scene: { ...s.scene, nodes } };
+      });
+    },
+
+    setNodeProp: (id, patch) => {
+      // Compositing-only mutation (visible/blendMode/opacity/label/output) — no
+      // dirty flag per dirty rule 4.
+      set((s) => ({
+        scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, ...patch })) },
+      }));
+    },
+
+    setNodeTransform: (id, transform2d) => {
+      // Compositing-only mutation — no dirty flag per dirty rule 4 (see
+      // Transform2D's doc comment in scene/types.ts) — with TWO narrow,
+      // deliberate exceptions for vector masks (VectorMaskRef's doc comment):
+      // (a) the moved node carries a DOCUMENT-pinned mask — it must
+      // re-rasterise in its new frame (node-pinned masks, mask-follows-node.md,
+      // read their own attachTransform and travel with the pixels: no recook);
+      // (b) the moved node IS a
+      // vector node some maskRefs entry points at — every consumer's mask
+      // must re-rasterise at the shape's new composited position (same
+      // cross-node dirty as setVectorPaths).
+      set((s) => {
+        if (isLocked(s.scene.nodes, id)) return s; // guarded (lock-state-machine.md)
+
+        const maskRefs = s.scene.maskRefs ?? {};
+        const refsAtMovedNode = new Set(
+          Object.values(maskRefs)
+            .filter((ref) => ref.nodeId === id)
+            .map((ref) => ref.id),
+        );
+
+        const nodes = s.scene.nodes.map((n) => {
+          if (n.id === id) {
+            const hasDocPinnedMask = hasDocumentPinnedMask(n.modifiers, (mid) => maskRefs[mid]);
+            return hasDocPinnedMask
+              ? { ...n, transform2d, dirty: dirtyBoth() }
+              : { ...n, transform2d };
+          }
+          const consumesMovedShape = n.modifiers.some(
+            (m) => m.maskId && refsAtMovedNode.has(m.maskId),
+          );
+          return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
+        });
+        return { scene: { ...s.scene, nodes } };
+      });
+    },
+
+    setDocumentSize: (size) => {
+      set((s) => ({ scene: { ...s.scene, documentSize: size } }));
+    },
+
+    setBackgroundColor: (color) => {
+      // Choosing none/colour leaves no image to hold (background-image.md).
+      backgroundSource.clear();
       set((s) => ({
         scene: {
           ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, state: 'locked' })),
+          background: color === null ? undefined : { type: 'color', color },
         },
       }));
-    } finally {
+    },
+
+    setBackgroundImage: (sourcePath, sourceSize) => {
+      set((s) => ({
+        scene: { ...s.scene, background: { type: 'image', sourcePath, sourceSize } },
+      }));
+    },
+
+    setPixelSource: (id, sourcePath, sourceSize, decided) => {
       set((s) => {
-        const next = new Set(s.bakingNodeIds);
-        next.delete(nodeId);
-        return { bakingNodeIds: next };
-      });
-    }
-  },
-
-  unlockNode: (nodeId) => {
-    set((s) => {
-      const target = s.scene.nodes.find((n) => n.id === nodeId);
-      if (target?.state !== 'locked') return s;
-      cache.clearLevel(nodeId, 'baked');
-      return {
-        scene: {
-          ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-            ...n,
-            state: 'active',
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-  },
-
-  addPixelNode: (partial) => {
-    const id = crypto.randomUUID();
-    const node: PixelNode = {
-      id,
-      label: partial.label ?? 'Layer',
-      type: 'pixel',
-      state: partial.state ?? 'active',
-      output: partial.output ?? 'image',
-      transform: partial.transform,
-      cameraId: partial.cameraId ?? null,
-      modifiers: partial.modifiers ?? [],
-      visible: partial.visible ?? true,
-      blendMode: partial.blendMode ?? 'normal',
-      opacity: partial.opacity ?? 1,
-      dirty: dirtyBoth(),
-      sourcePath: partial.sourcePath,
-      sourceSize: partial.sourceSize,
-    };
-    set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
-    return id;
-  },
-
-  addVectorNode: (partial) => {
-    const id = crypto.randomUUID();
-    const node: VectorNode = {
-      id,
-      label: partial.label ?? 'Vector',
-      type: 'vector',
-      state: partial.state ?? 'active',
-      output: partial.output ?? 'image',
-      transform: partial.transform,
-      cameraId: partial.cameraId ?? null,
-      modifiers: partial.modifiers ?? [],
-      visible: partial.visible ?? true,
-      blendMode: partial.blendMode ?? 'normal',
-      opacity: partial.opacity ?? 1,
-      dirty: dirtyBoth(),
-      paths: partial.paths,
-      fillRule: partial.fillRule,
-      ...(partial.role ? { role: partial.role } : {}),
-    };
-    set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
-    return id;
-  },
-
-  addTextNode: (partial) => {
-    const id = crypto.randomUUID();
-    const node: TextNode = {
-      id,
-      label: partial.label ?? textLabel(partial.content),
-      type: 'text',
-      state: partial.state ?? 'active',
-      output: partial.output ?? 'image',
-      transform: partial.transform,
-      cameraId: partial.cameraId ?? null,
-      modifiers: partial.modifiers ?? [],
-      visible: partial.visible ?? true,
-      blendMode: partial.blendMode ?? 'normal',
-      opacity: partial.opacity ?? 1,
-      dirty: dirtyBoth(),
-      content: partial.content,
-      font: partial.font,
-      fontSize: partial.fontSize ?? 72,
-      tracking: partial.tracking ?? 0,
-      kerning: partial.kerning ?? 100,
-      lineHeight: partial.lineHeight ?? 1.2,
-      align: partial.align ?? 'left',
-      fill: partial.fill === undefined ? '#ffffff' : partial.fill,
-      stroke: partial.stroke === undefined ? null : partial.stroke,
-      position: partial.position,
-    };
-    set((s) => ({ scene: { ...s.scene, nodes: [node, ...s.scene.nodes] } }));
-    return id;
-  },
-
-  setTextProps: (nodeId, patch) => {
-    set((s) => {
-      const target = s.scene.nodes.find((n) => n.id === nodeId);
-      if (target?.type !== 'text') return s;
-      if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
-      const text = target as TextNode;
-
-      const entries = (Object.entries(patch) as [keyof TextPropPatch, unknown][]).filter(
-        ([, value]) => value !== undefined,
-      );
-      const changed = entries.some(
-        ([key, value]) => JSON.stringify(value) !== JSON.stringify(text[key]),
-      );
-      if (!changed) return s;
-
-      const label =
-        patch.content !== undefined && text.label === textLabel(text.content)
-          ? textLabel(patch.content)
-          : text.label;
-      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
-        ...(n as TextNode),
-        ...Object.fromEntries(entries),
-        label,
-        dirty: dirtyBoth(),
-      }));
-      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
-
-      return { scene: { ...s.scene, nodes } };
-    });
-  },
-
-  convertTextToOutlines: (nodeId, paths) => {
-    const before = get().scene;
-    const index = before.nodes.findIndex((n) => n.id === nodeId);
-    const target = before.nodes[index];
-    if (target?.type !== 'text' || target.state === 'locked') return null;
-
-    const newId = crypto.randomUUID();
-    set((s) => {
-      const text = target;
-      const vector: VectorNode = {
-        id: newId,
-        label: text.label,
-        type: 'vector',
-        state: 'active',
-        output: text.output,
-        cameraId: text.cameraId ?? null,
-        modifiers: text.modifiers,
-        visible: text.visible,
-        blendMode: text.blendMode,
-        opacity: text.opacity,
-        ...(text.transform2d ? { transform2d: text.transform2d } : {}),
-        dirty: dirtyBoth(),
-        paths,
-        fillRule: 'nonzero',
-      };
-      const replaced = s.scene.nodes.map((n, i) => (i === index ? vector : n));
-
-      let maskRefs = s.scene.maskRefs;
-      if (maskRefs && Object.values(maskRefs).some((ref) => ref.nodeId === nodeId)) {
-        maskRefs = Object.fromEntries(
-          Object.entries(maskRefs).map(([id, ref]) => [
-            id,
-            ref.nodeId === nodeId ? { ...ref, nodeId: newId } : ref,
-          ]),
-        );
-      }
-      const nodes = dirtyMaskRefConsumers(replaced, maskRefs, newId);
-      return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
-    });
-    return newId;
-  },
-
-  setVectorPaths: (nodeId, paths) => {
-    set((s) => {
-      const target = s.scene.nodes.find((n) => n.id === nodeId);
-      if (target?.type !== 'vector') return s;
-      if (target.state === 'locked') return s; // path edits guarded (lock-state-machine.md)
-
-      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
-        ...(n as VectorNode),
-        paths,
-        dirty: dirtyBoth(),
-      }));
-      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
-
-      return { scene: { ...s.scene, nodes } };
-    });
-  },
-
-  setVectorFillRule: (nodeId, fillRule) => {
-    set((s) => {
-      const target = s.scene.nodes.find((n) => n.id === nodeId);
-      if (target?.type !== 'vector') return s;
-      if (target.state === 'locked') return s; // guarded (lock-state-machine.md)
-
-      const withOwnDirty = updateNode(s.scene.nodes, nodeId, (n) => ({
-        ...(n as VectorNode),
-        fillRule,
-        dirty: dirtyBoth(),
-      }));
-      const nodes = dirtyMaskRefConsumers(withOwnDirty, s.scene.maskRefs, nodeId);
-
-      return { scene: { ...s.scene, nodes } };
-    });
-  },
-
-  duplicateNode: (id) => {
-    const original = get().scene.nodes.find((n) => n.id === id);
-    if (!original) return null;
-    const newId = crypto.randomUUID();
-    set((s) => {
-      const index = s.scene.nodes.findIndex((n) => n.id === id);
-      const source = s.scene.nodes[index];
-      const { node, maskRefs } = copyNode(source, newId, s.scene.maskRefs);
-      const nodes = [...s.scene.nodes];
-      nodes.splice(index, 0, node);
-      return { scene: { ...s.scene, nodes, ...(maskRefs ? { maskRefs } : {}) } };
-    });
-    return newId;
-  },
-
-  removeNode: (id) => {
-    set((s) => {
-      const nodes = s.scene.nodes.filter((n) => n.id !== id);
-      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
-      return {
-        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
-      };
-    });
-  },
-
-  reorderNode: (id, toIndex) => {
-    // Compositing-only mutation — order affects the composite, not any
-    // node's own cache, so no dirty flag per dirty rule 4.
-    set((s) => {
-      const nodes = [...s.scene.nodes];
-      const fromIndex = nodes.findIndex((n) => n.id === id);
-      if (fromIndex === -1) return s;
-      const [node] = nodes.splice(fromIndex, 1);
-      nodes.splice(toIndex, 0, node);
-      return { scene: { ...s.scene, nodes } };
-    });
-  },
-
-  setNodeProp: (id, patch) => {
-    // Compositing-only mutation (visible/blendMode/opacity/label/output) — no
-    // dirty flag per dirty rule 4.
-    set((s) => ({
-      scene: { ...s.scene, nodes: updateNode(s.scene.nodes, id, (n) => ({ ...n, ...patch })) },
-    }));
-  },
-
-  setNodeTransform: (id, transform2d) => {
-    // Compositing-only mutation — no dirty flag per dirty rule 4 (see
-    // Transform2D's doc comment in scene/types.ts) — with TWO narrow,
-    // deliberate exceptions for vector masks (VectorMaskRef's doc comment):
-    // (a) the moved node carries a DOCUMENT-pinned mask — it must
-    // re-rasterise in its new frame (node-pinned masks, mask-follows-node.md,
-    // read their own attachTransform and travel with the pixels: no recook);
-    // (b) the moved node IS a
-    // vector node some maskRefs entry points at — every consumer's mask
-    // must re-rasterise at the shape's new composited position (same
-    // cross-node dirty as setVectorPaths).
-    set((s) => {
-      if (isLocked(s.scene.nodes, id)) return s; // guarded (lock-state-machine.md)
-
-      const maskRefs = s.scene.maskRefs ?? {};
-      const refsAtMovedNode = new Set(
-        Object.values(maskRefs)
-          .filter((ref) => ref.nodeId === id)
-          .map((ref) => ref.id),
-      );
-
-      const nodes = s.scene.nodes.map((n) => {
-        if (n.id === id) {
-          const hasDocPinnedMask = hasDocumentPinnedMask(n.modifiers, (mid) => maskRefs[mid]);
-          return hasDocPinnedMask
-            ? { ...n, transform2d, dirty: dirtyBoth() }
-            : { ...n, transform2d };
-        }
-        const consumesMovedShape = n.modifiers.some(
-          (m) => m.maskId && refsAtMovedNode.has(m.maskId),
-        );
-        return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
-      });
-      return { scene: { ...s.scene, nodes } };
-    });
-  },
-
-  setDocumentSize: (size) => {
-    set((s) => ({ scene: { ...s.scene, documentSize: size } }));
-  },
-
-  setBackgroundColor: (color) => {
-    // Choosing none/colour leaves no image to hold (background-image.md).
-    backgroundSource.clear();
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        background: color === null ? undefined : { type: 'color', color },
-      },
-    }));
-  },
-
-  setBackgroundImage: (sourcePath, sourceSize) => {
-    set((s) => ({
-      scene: { ...s.scene, background: { type: 'image', sourcePath, sourceSize } },
-    }));
-  },
-
-  setPixelSource: (id, sourcePath, sourceSize, decided) => {
-    set((s) => {
-      const node = s.scene.nodes.find((n) => n.id === id);
-      if (!node || !isPixelNode(node) || node.state === 'locked') return s;
-      const maskRefs = decided?.maskRefs
-        ? { ...s.scene.maskRefs, ...decided.maskRefs }
-        : s.scene.maskRefs;
-      return {
-        scene: {
-          ...s.scene,
-          ...(maskRefs ? { maskRefs } : {}),
-          nodes: updateNode(s.scene.nodes, id, (n) => ({
-            ...n,
-            sourcePath,
-            ...(sourceSize ? { sourceSize } : {}),
-            ...(decided?.transform2d ? { transform2d: decided.transform2d } : {}),
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-  },
-
-  setNote: (note) => {
-    set((s) => {
-      if (note === (s.scene.note ?? '')) return s;
-      const { note: _previous, ...rest } = s.scene;
-      return { scene: note === '' ? rest : { ...rest, note } };
-    });
-  },
-
-  addModifier: (nodeId, type, defaults) => {
-    const modId = crypto.randomUUID();
-    const modifier: Modifier = { id: modId, type, enabled: true, params: defaults };
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      return {
-        scene: {
-          ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-            ...n,
-            modifiers: [...n.modifiers, modifier],
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-    return modId;
-  },
-
-  removeModifier: (nodeId, modId) => {
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
-        ...n,
-        modifiers: n.modifiers.filter((m) => m.id !== modId),
-        dirty: dirtyBoth(),
-      }));
-      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
-      return {
-        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
-      };
-    });
-  },
-
-  reorderModifier: (nodeId, modId, toIndex) => {
-    // Unlike node reorder, modifier order changes the pixel result —
-    // dirty per dirty rule 4.
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      return {
-        scene: {
-          ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => {
-            const modifiers = [...n.modifiers];
-            const fromIndex = modifiers.findIndex((m) => m.id === modId);
-            if (fromIndex === -1) return n;
-            const [modifier] = modifiers.splice(fromIndex, 1);
-            modifiers.splice(toIndex, 0, modifier);
-            return { ...n, modifiers, dirty: dirtyBoth() };
-          }),
-        },
-      };
-    });
-  },
-
-  setModifierParam: (nodeId, modId, key, value) => {
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      return {
-        scene: {
-          ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-            ...n,
-            modifiers: n.modifiers.map((m) =>
-              m.id === modId ? { ...m, params: { ...m.params, [key]: value } } : m,
-            ),
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-  },
-
-  setModifierEnabled: (nodeId, modId, enabled) => {
-    // Toggling a modifier changes the pixel result — dirty per dirty rule 4.
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      return {
-        scene: {
-          ...s.scene,
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-            ...n,
-            modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, enabled } : m)),
-            dirty: dirtyBoth(),
-          })),
-        },
-      };
-    });
-  },
-
-  setModifierVectorMask: (nodeId, modId, vectorNodeId, ref) => {
-    // Reuse the existing maskId if the modifier already has one — a
-    // replace IS an edit, and keeping the id stable means undo restores
-    // land on the same entry. Dirty per rule 4: masking changes the pixel
-    // result exactly like a param edit.
-    // A first mask takes the modifier's own id: one mask per modifier, so it is unique, and
-    // Rust's `mask.attach` picks the same (document/mod.rs `mask_ref_id`), so the id needs
-    // no round trip.
-    const existing = get()
-      .scene.nodes.find((n) => n.id === nodeId)
-      ?.modifiers.find((m) => m.id === modId)?.maskId;
-    const maskId = existing ?? modId;
-    set((s) => {
-      // Guarded on the CONSUMER's lock state (lock-state-machine.md) — the
-      // referenced vector node's own lock state is irrelevant here, mirrors
-      // every other guard being keyed on the mutated node's target id.
-      if (isLocked(s.scene.nodes, nodeId)) return s;
-      return {
-        scene: {
-          ...s.scene,
-          maskRefs: {
-            ...s.scene.maskRefs,
-            [maskId]: { id: maskId, nodeId: vectorNodeId, ...ref },
+        const node = s.scene.nodes.find((n) => n.id === id);
+        if (!node || !isPixelNode(node) || node.state === 'locked') return s;
+        const maskRefs = decided?.maskRefs
+          ? { ...s.scene.maskRefs, ...decided.maskRefs }
+          : s.scene.maskRefs;
+        return {
+          scene: {
+            ...s.scene,
+            ...(maskRefs ? { maskRefs } : {}),
+            nodes: updateNode(s.scene.nodes, id, (n) => ({
+              ...n,
+              sourcePath,
+              ...(sourceSize ? { sourceSize } : {}),
+              ...(decided?.transform2d ? { transform2d: decided.transform2d } : {}),
+              dirty: dirtyBoth(),
+            })),
           },
+        };
+      });
+    },
+
+    setNote: (note) => {
+      set((s) => {
+        if (note === (s.scene.note ?? '')) return s;
+        const { note: _previous, ...rest } = s.scene;
+        return { scene: note === '' ? rest : { ...rest, note } };
+      });
+    },
+
+    addModifier: (nodeId, type, defaults) => {
+      const modId = crypto.randomUUID();
+      const modifier: Modifier = { id: modId, type, enabled: true, params: defaults };
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              modifiers: [...n.modifiers, modifier],
+              dirty: dirtyBoth(),
+            })),
+          },
+        };
+      });
+      return modId;
+    },
+
+    removeModifier: (nodeId, modId) => {
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...n,
+          modifiers: n.modifiers.filter((m) => m.id !== modId),
+          dirty: dirtyBoth(),
+        }));
+        const pruned = pruneMaskState(nodes, s.scene.maskRefs);
+        return {
+          scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
+        };
+      });
+    },
+
+    reorderModifier: (nodeId, modId, toIndex) => {
+      // Unlike node reorder, modifier order changes the pixel result —
+      // dirty per dirty rule 4.
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => {
+              const modifiers = [...n.modifiers];
+              const fromIndex = modifiers.findIndex((m) => m.id === modId);
+              if (fromIndex === -1) return n;
+              const [modifier] = modifiers.splice(fromIndex, 1);
+              modifiers.splice(toIndex, 0, modifier);
+              return { ...n, modifiers, dirty: dirtyBoth() };
+            }),
+          },
+        };
+      });
+    },
+
+    setModifierParam: (nodeId, modId, key, value) => {
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              modifiers: n.modifiers.map((m) =>
+                m.id === modId ? { ...m, params: { ...m.params, [key]: value } } : m,
+              ),
+              dirty: dirtyBoth(),
+            })),
+          },
+        };
+      });
+    },
+
+    setModifierEnabled: (nodeId, modId, enabled) => {
+      // Toggling a modifier changes the pixel result — dirty per dirty rule 4.
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, enabled } : m)),
+              dirty: dirtyBoth(),
+            })),
+          },
+        };
+      });
+    },
+
+    setModifierVectorMask: (nodeId, modId, vectorNodeId, ref) => {
+      // Reuse the existing maskId if the modifier already has one — a
+      // replace IS an edit, and keeping the id stable means undo restores
+      // land on the same entry. Dirty per rule 4: masking changes the pixel
+      // result exactly like a param edit.
+      // A first mask takes the modifier's own id: one mask per modifier, so it is unique, and
+      // Rust's `mask.attach` picks the same (document/mod.rs `mask_ref_id`), so the id needs
+      // no round trip.
+      const existing = get()
+        .scene.nodes.find((n) => n.id === nodeId)
+        ?.modifiers.find((m) => m.id === modId)?.maskId;
+      const maskId = existing ?? modId;
+      set((s) => {
+        // Guarded on the CONSUMER's lock state (lock-state-machine.md) — the
+        // referenced vector node's own lock state is irrelevant here, mirrors
+        // every other guard being keyed on the mutated node's target id.
+        if (isLocked(s.scene.nodes, nodeId)) return s;
+        return {
+          scene: {
+            ...s.scene,
+            maskRefs: {
+              ...s.scene.maskRefs,
+              [maskId]: { id: maskId, nodeId: vectorNodeId, ...ref },
+            },
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, maskId } : m)),
+              dirty: dirtyBoth(),
+            })),
+          },
+        };
+      });
+      return maskId;
+    },
+
+    setModifierPixelMask: (nodeId, modId, driverNodeId, ref) => {
+      const scene = get().scene;
+      const consumer = scene.nodes.find((n) => n.id === nodeId);
+      const modifier = consumer?.modifiers.find((m) => m.id === modId);
+      if (!consumer || !modifier || consumer.state === 'locked') return undefined;
+      const refusal = driverRefusal(
+        nodeId,
+        driverNodeId,
+        (id) => scene.nodes.find((n) => n.id === id),
+        (id) => scene.maskRefs?.[id],
+      );
+      if (refusal) return undefined;
+      // the id rule `setModifierVectorMask` and Rust's `mask_ref_id` share
+      const maskId = modifier.maskId ?? modId;
+      const next: PixelMaskRef = {
+        id: maskId,
+        kind: 'pixel',
+        nodeId: driverNodeId,
+        channel: ref.channel,
+        low: ref.low,
+        high: ref.high,
+        invert: ref.invert,
+      };
+      set((s) => ({
+        scene: {
+          ...s.scene,
+          maskRefs: { ...s.scene.maskRefs, [maskId]: next },
           nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
             ...n,
             modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, maskId } : m)),
             dirty: dirtyBoth(),
           })),
         },
-      };
-    });
-    return maskId;
-  },
-
-  removeModifierMask: (nodeId, modId) => {
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
-        ...n,
-        modifiers: n.modifiers.map((m) => {
-          if (m.id !== modId) return m;
-          const { maskId: _dropped, ...rest } = m;
-          return rest;
-        }),
-        dirty: dirtyBoth(),
       }));
-      const pruned = pruneMaskState(nodes, s.scene.maskRefs);
-      return {
-        scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
-      };
-    });
-  },
+      return maskId;
+    },
 
-  setMaskSpace: (nodeId, modId, space) => {
-    set((s) => {
-      if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
-      const consumer = s.scene.nodes.find((n) => n.id === nodeId);
-      const maskId = consumer?.modifiers.find((m) => m.id === modId)?.maskId;
-      const ref = maskId ? s.scene.maskRefs?.[maskId] : undefined;
-      if (!consumer || !maskId || !ref) return s;
-      if ((ref.space ?? 'document') === space) return s;
+    removeModifierMask: (nodeId, modId) => {
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        const nodes = updateNode(s.scene.nodes, nodeId, (n) => ({
+          ...n,
+          modifiers: n.modifiers.map((m) => {
+            if (m.id !== modId) return m;
+            const { maskId: _dropped, ...rest } = m;
+            return rest;
+          }),
+          dirty: dirtyBoth(),
+        }));
+        const pruned = pruneMaskState(nodes, s.scene.maskRefs);
+        return {
+          scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
+        };
+      });
+    },
 
-      const { space: _space, attachTransform: _attach, ...base } = ref;
-      const next: VectorMaskRef =
-        space === 'node'
-          ? {
-              ...base,
-              space: 'node',
-              attachTransform: { ...(consumer.transform2d ?? IDENTITY_TRANSFORM_2D) },
-            }
-          : base;
-      return {
+    setMaskSpace: (nodeId, modId, space) => {
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        const consumer = s.scene.nodes.find((n) => n.id === nodeId);
+        const maskId = consumer?.modifiers.find((m) => m.id === modId)?.maskId;
+        const ref = maskId ? s.scene.maskRefs?.[maskId] : undefined;
+        // a pixel driver is always document-space (layer-as-driver.md): nothing to switch
+        if (!consumer || !maskId || !ref || isPixelMaskRef(ref)) return s;
+        if ((ref.space ?? 'document') === space) return s;
+
+        const { space: _space, attachTransform: _attach, ...base } = ref;
+        const next: VectorMaskRef =
+          space === 'node'
+            ? {
+                ...base,
+                space: 'node',
+                attachTransform: { ...(consumer.transform2d ?? IDENTITY_TRANSFORM_2D) },
+              }
+            : base;
+        return {
+          scene: {
+            ...s.scene,
+            maskRefs: { ...s.scene.maskRefs, [maskId]: next },
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, dirty: dirtyBoth() })),
+          },
+        };
+      });
+    },
+
+    applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
+      if (isLocked(get().scene.nodes, nodeId)) return undefined;
+
+      // Snapshot what the modifier's mask pointed at BEFORE this call, so the
+      // replace-cleanup rule below can tell whether a previously-converted
+      // selection node is now orphaned.
+      const existingMaskId = get()
+        .scene.nodes.find((n) => n.id === nodeId)
+        ?.modifiers.find((m) => m.id === modId)?.maskId;
+      const previousVectorNodeId = existingMaskId
+        ? get().scene.maskRefs?.[existingMaskId]?.nodeId
+        : undefined;
+
+      // The label rule (a `polygons` marquee's own label, or `Selection (kind)`) is
+      // `selectionLabel`'s.
+      const label = selectionLabel(marquee);
+      // The store's own actions, not whatever is installed over them: on rhizome the installed
+      // `addVectorNode`, `setModifierVectorMask` and `removeNode` each send a command of their
+      // own, and this is one edit that `rhizome.ts` sends as one `mask.from_marquee`.
+      const own = useSceneStore.getInitialState();
+      const vectorNodeId = own.addVectorNode({
+        paths: marqueeToVectorPaths(marquee),
+        // evenodd, not nonzero: only `polygons` marquees can carry holes
+        // (colour-range-select.md) and `trace.py` is winding-agnostic, so
+        // evenodd is the only rule that reliably cuts them — see
+        // `fillRuleForMarquee`'s own comment in `scene/marquee.ts`.
+        fillRule: fillRuleForMarquee(marquee),
+        label,
+        visible: false,
+        output: 'image',
+        role: 'selection',
+      });
+
+      // Node-pinned by default (mask-follows-node.md): a selection made on the
+      // image belongs to the image, so snapshot the consumer's transform now.
+      const consumerTransform = get().scene.nodes.find((n) => n.id === nodeId)?.transform2d;
+      const maskId = own.setModifierVectorMask(nodeId, modId, vectorNodeId, {
+        featherPx: params.featherPx,
+        expand: params.expand,
+        invert: params.invert,
+        space: 'node',
+        attachTransform: { ...(consumerTransform ?? IDENTITY_TRANSFORM_2D) },
+      });
+
+      if (previousVectorNodeId && previousVectorNodeId !== vectorNodeId) {
+        const s = get();
+        const previousNode = s.scene.nodes.find((n) => n.id === previousVectorNodeId);
+        const stillReferenced = Object.values(s.scene.maskRefs ?? {}).some(
+          (ref) => ref.nodeId === previousVectorNodeId,
+        );
+        if (previousNode && isSelectionNode(previousNode) && !stillReferenced) {
+          own.removeNode(previousVectorNodeId);
+        }
+      }
+
+      return { vectorNodeId, maskId };
+    },
+
+    saveMarqueeAsSelection: (marquee) => {
+      if (!isMaskableMarquee(marquee)) return undefined;
+      // The store's own addVectorNode, not the one installed over it: on rhizome that would
+      // send a `layer.add` of its own, and this is one edit that `rhizome.ts` sends as one
+      // `selection.save`.
+      return useSceneStore.getInitialState().addVectorNode({
+        paths: marqueeToVectorPaths(marquee),
+        fillRule: fillRuleForMarquee(marquee),
+        label: selectionLabel(marquee),
+        visible: false,
+        output: 'image',
+        role: 'selection',
+      });
+    },
+
+    markDirty: (nodeId, level) => {
+      set((s) => ({
         scene: {
           ...s.scene,
-          maskRefs: { ...s.scene.maskRefs, [maskId]: next },
-          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({ ...n, dirty: dirtyBoth() })),
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            // Rule 1: dirtying draft also dirties working.
+            // Rule 2: dirtying working touches only working.
+            dirty:
+              level === 'draft' ? { draft: true, working: true } : { ...n.dirty, working: true },
+          })),
         },
-      };
-    });
-  },
+      }));
+    },
 
-  applyMarqueeAsVectorMask: (nodeId, modId, marquee, params) => {
-    if (isLocked(get().scene.nodes, nodeId)) return undefined;
+    clearDirty: (nodeId, level) => {
+      set((s) => ({
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            dirty: { ...n.dirty, [level]: false },
+          })),
+        },
+      }));
+    },
 
-    // Snapshot what the modifier's mask pointed at BEFORE this call, so the
-    // replace-cleanup rule below can tell whether a previously-converted
-    // selection node is now orphaned.
-    const existingMaskId = get()
-      .scene.nodes.find((n) => n.id === nodeId)
-      ?.modifiers.find((m) => m.id === modId)?.maskId;
-    const previousVectorNodeId = existingMaskId
-      ? get().scene.maskRefs?.[existingMaskId]?.nodeId
-      : undefined;
+    loadScene: (scene) => {
+      // Verbatim — no dirty rewrite. Recook-on-load is the persistence
+      // story's job (deferred: project-persistence.md).
+      set({ scene });
+      // A marquee is transient editing state over the OLD scene; carrying it
+      // across a whole-scene swap leaves a selection floating over nothing
+      // (Georg, 2026-09-10: Cmd+N mid colour-select). The canvas tool stores
+      // clear themselves when their target node disappears (selectShared/
+      // clearWhenTargetGone.ts); the marquee store lives here, so this is
+      // the one place that can clear it without scene/ importing canvas/.
+      useMarqueeStateStore.getState().clear();
+    },
 
-    // The label rule (a `polygons` marquee's own label, or `Selection (kind)`) is
-    // `selectionLabel`'s.
-    const label = selectionLabel(marquee);
-    // The store's own actions, not whatever is installed over them: on rhizome the installed
-    // `addVectorNode`, `setModifierVectorMask` and `removeNode` each send a command of their
-    // own, and this is one edit that `rhizome.ts` sends as one `mask.from_marquee`.
-    const own = useSceneStore.getInitialState();
-    const vectorNodeId = own.addVectorNode({
-      paths: marqueeToVectorPaths(marquee),
-      // evenodd, not nonzero: only `polygons` marquees can carry holes
-      // (colour-range-select.md) and `trace.py` is winding-agnostic, so
-      // evenodd is the only rule that reliably cuts them — see
-      // `fillRuleForMarquee`'s own comment in `scene/marquee.ts`.
-      fillRule: fillRuleForMarquee(marquee),
-      label,
-      visible: false,
-      output: 'image',
-      role: 'selection',
-    });
-
-    // Node-pinned by default (mask-follows-node.md): a selection made on the
-    // image belongs to the image, so snapshot the consumer's transform now.
-    const consumerTransform = get().scene.nodes.find((n) => n.id === nodeId)?.transform2d;
-    const maskId = own.setModifierVectorMask(nodeId, modId, vectorNodeId, {
-      featherPx: params.featherPx,
-      expand: params.expand,
-      invert: params.invert,
-      space: 'node',
-      attachTransform: { ...(consumerTransform ?? IDENTITY_TRANSFORM_2D) },
-    });
-
-    if (previousVectorNodeId && previousVectorNodeId !== vectorNodeId) {
-      const s = get();
-      const previousNode = s.scene.nodes.find((n) => n.id === previousVectorNodeId);
-      const stillReferenced = Object.values(s.scene.maskRefs ?? {}).some(
-        (ref) => ref.nodeId === previousVectorNodeId,
-      );
-      if (previousNode && isSelectionNode(previousNode) && !stillReferenced) {
-        own.removeNode(previousVectorNodeId);
-      }
-    }
-
-    return { vectorNodeId, maskId };
-  },
-
-  saveMarqueeAsSelection: (marquee) => {
-    if (!isMaskableMarquee(marquee)) return undefined;
-    // The store's own addVectorNode, not the one installed over it: on rhizome that would
-    // send a `layer.add` of its own, and this is one edit that `rhizome.ts` sends as one
-    // `selection.save`.
-    return useSceneStore.getInitialState().addVectorNode({
-      paths: marqueeToVectorPaths(marquee),
-      fillRule: fillRuleForMarquee(marquee),
-      label: selectionLabel(marquee),
-      visible: false,
-      output: 'image',
-      role: 'selection',
-    });
-  },
-
-  markDirty: (nodeId, level) => {
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          // Rule 1: dirtying draft also dirties working.
-          // Rule 2: dirtying working touches only working.
-          dirty: level === 'draft' ? { draft: true, working: true } : { ...n.dirty, working: true },
-        })),
-      },
-    }));
-  },
-
-  clearDirty: (nodeId, level) => {
-    set((s) => ({
-      scene: {
-        ...s.scene,
-        nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
-          ...n,
-          dirty: { ...n.dirty, [level]: false },
-        })),
-      },
-    }));
-  },
-
-  loadScene: (scene) => {
-    // Verbatim — no dirty rewrite. Recook-on-load is the persistence
-    // story's job (deferred: project-persistence.md).
-    set({ scene });
-    // A marquee is transient editing state over the OLD scene; carrying it
-    // across a whole-scene swap leaves a selection floating over nothing
-    // (Georg, 2026-09-10: Cmd+N mid colour-select). The canvas tool stores
-    // clear themselves when their target node disappears (selectShared/
-    // clearWhenTargetGone.ts); the marquee store lives here, so this is
-    // the one place that can clear it without scene/ importing canvas/.
-    useMarqueeStateStore.getState().clear();
-  },
-
-  resetScene: () => {
-    set({ scene: makeEmptyScene() });
-    useMarqueeStateStore.getState().clear();
-  },
-}));
+    resetScene: () => {
+      set({ scene: makeEmptyScene() });
+      useMarqueeStateStore.getState().clear();
+    },
+  };
+});

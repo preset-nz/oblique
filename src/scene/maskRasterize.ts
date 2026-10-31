@@ -1,4 +1,4 @@
-import type { Transform2D, VectorMaskRef, VectorPath } from './types';
+import type { PixelMaskRef, Transform2D, VectorMaskRef, VectorPath } from './types';
 import { buildPath2D, pathCommandsFor } from './vectorRasterize';
 
 /**
@@ -264,4 +264,114 @@ export function rasterizeVectorMask(
   if (featherRadius >= 0.5) boxBlurMask(plane, width, height, featherRadius);
   if (ref.invert) invertMask(plane);
   return plane;
+}
+
+// ---------------------------------------------------------------- pixel drivers
+
+/** `m1 ∘ m2`: the matrix that applies `m2` first, then `m1`. */
+export function multiplyMatrix(m1: Matrix2D, m2: Matrix2D): Matrix2D {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+}
+
+/**
+ * Driver-local px (its source extent) -> the consumer's cook buffer px (layer-as-driver.md
+ * §Space): the driver's placement into the document, then the document into the consumer's
+ * local frame (its CURRENT transform: a pixel driver is always document-space), then the cook
+ * factor. The driver's raster is drawn at its source extent whatever its cooked size, so the
+ * cook-level rounding and a locked driver's full-size bake both land in the same place.
+ */
+export function driverToTargetMatrix(
+  driverTransform2d: Transform2D,
+  driverSourceSize: [number, number],
+  consumerTransform2d: Transform2D,
+  consumerSourceSize: [number, number],
+  factor: number,
+): Matrix2D {
+  const toDoc = localToDocMatrix(driverTransform2d, driverSourceSize[0], driverSourceSize[1]);
+  const toConsumer = docToLocalMatrix(
+    consumerTransform2d,
+    consumerSourceSize[0],
+    consumerSourceSize[1],
+  );
+  return multiplyMatrix([factor, 0, 0, factor, 0, 0], multiplyMatrix(toConsumer, toDoc));
+}
+
+/** Rec. 709 luma weights: `sidecar/ops/__init__.py`'s `LUMA_*709`, the ones `desaturate` uses. */
+const LUMA_R709 = 0.2126;
+const LUMA_G709 = 0.7152;
+const LUMA_B709 = 0.0722;
+
+/**
+ * A driver's sampled RGBA8 pixels -> the single-channel mask plane (1 byte/px) the sidecar
+ * blends by (selection-to-mask.md). Pure, so the maths is tested without a canvas.
+ *
+ * - `luminance`: Rec. 709 on the stored sRGB bytes, as `desaturate` reads them (no
+ *   linearising), times alpha, so a transparent pixel (outside the driver, or cut away) reads
+ *   as black rather than as whatever colour it hides.
+ * - `alpha`: the alpha channel.
+ * - Levels: `low` maps to 0 and `high` to 1, linear between, clamped. `high < low` runs the
+ *   ramp backwards; `high === low` is a hard step at that level.
+ * - `invert` flips the result, after the levels.
+ */
+export function pixelMaskPlane(
+  rgba: Uint8Array | Uint8ClampedArray,
+  ref: Pick<PixelMaskRef, 'channel' | 'low' | 'high' | 'invert'>,
+): Uint8Array {
+  const n = rgba.length >> 2;
+  const plane = new Uint8Array(n);
+  const span = ref.high - ref.low;
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const alpha = rgba[o + 3] / 255;
+    const v =
+      ref.channel === 'alpha'
+        ? alpha
+        : ((LUMA_R709 * rgba[o] + LUMA_G709 * rgba[o + 1] + LUMA_B709 * rgba[o + 2]) / 255) * alpha;
+    let t = span === 0 ? (v >= ref.low ? 1 : 0) : (v - ref.low) / span;
+    t = Math.max(0, Math.min(1, t));
+    if (ref.invert) t = 1 - t;
+    plane[i] = Math.round(t * 255);
+  }
+  return plane;
+}
+
+/**
+ * Rasterise a pixel-driven mask (layer-as-driver.md): draw the driver's cooked raster into the
+ * consumer's cook buffer through `driverToTargetMatrix`, read it back and turn it into the
+ * plane (`pixelMaskPlane`). `raster` absent (the driver hasn't cooked, or has no source)
+ * samples as fully transparent, the same as outside the driver's footprint. Production-only
+ * (needs OffscreenCanvas); injected through `CookDeps.rasterizePixelMask`, like the vector one.
+ */
+export function rasterizePixelMask(
+  raster: ImageBitmap | undefined,
+  ref: Pick<PixelMaskRef, 'channel' | 'low' | 'high' | 'invert'>,
+  driverTransform2d: Transform2D,
+  driverSourceSize: [number, number],
+  consumerTransform2d: Transform2D,
+  consumerSourceSize: [number, number],
+  width: number,
+  height: number,
+  factor: number,
+): Uint8Array {
+  if (!raster) return pixelMaskPlane(new Uint8Array(width * height * 4), ref);
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
+  const m = driverToTargetMatrix(
+    driverTransform2d,
+    driverSourceSize,
+    consumerTransform2d,
+    consumerSourceSize,
+    factor,
+  );
+  ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+  ctx.drawImage(raster, 0, 0, driverSourceSize[0], driverSourceSize[1]);
+  return pixelMaskPlane(ctx.getImageData(0, 0, width, height).data, ref);
 }

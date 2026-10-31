@@ -430,4 +430,173 @@ describe('CookScheduler', () => {
       scheduler.stop();
     });
   });
+
+  // ---------------------------------------------------------------- layer as driver
+
+  describe('drivers before consumers (layer-as-driver.md)', () => {
+    /** Executor whose cooks finish when the test says, by `level:nodeId`. */
+    function keyedExecutor() {
+      const calls: string[] = [];
+      const pending = new Map<string, () => void>();
+      const executor: Executor = (nodeId, level) => {
+        calls.push(`${level}:${nodeId}`);
+        return new Promise<void>((resolve) => pending.set(`${level}:${nodeId}`, resolve));
+      };
+      const finish = async (key: string) => {
+        pending.get(key)?.();
+        pending.delete(key);
+        await Promise.resolve();
+        await Promise.resolve();
+      };
+      return { executor, calls, finish };
+    }
+
+    const masked = (id: string, maskId: string, dirty = { draft: true, working: true }) =>
+      makeNode(id, {
+        dirty,
+        modifiers: [{ id: maskId, type: 'blur', enabled: true, params: {}, maskId }],
+      });
+
+    function setDriven(nodes: SceneNode[], refs: Record<string, string>) {
+      useSceneStore.setState({
+        scene: {
+          ...emptyScene(),
+          nodes,
+          maskRefs: Object.fromEntries(
+            Object.entries(refs).map(([id, nodeId]) => [
+              id,
+              { id, kind: 'pixel', nodeId, channel: 'luminance', low: 0, high: 1, invert: false },
+            ]),
+          ),
+        },
+      });
+    }
+
+    it('cooks the driver first even when the consumer sits above it in the stack', async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+      setDriven(
+        [masked('photo', 'r'), makeNode('depth', { dirty: { draft: true, working: true } })],
+        { r: 'depth' },
+      );
+      await vi.advanceTimersByTimeAsync(80);
+      // a free slot stays free rather than cook photo against a stale depth raster
+      expect(calls).toEqual(['draft:depth']);
+      await finish('draft:depth');
+      expect(calls).toEqual(['draft:depth', 'draft:photo']);
+      await finish('draft:photo');
+      scheduler.stop();
+    });
+
+    it('keeps two independent layers cooking in parallel while a consumer waits', async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+      setDriven(
+        [
+          masked('photo', 'r'),
+          makeNode('depth', { dirty: { draft: true, working: true } }),
+          makeNode('other', { dirty: { draft: true, working: true } }),
+        ],
+        { r: 'depth' },
+      );
+      await vi.advanceTimersByTimeAsync(80);
+      expect(calls).toEqual(['draft:depth', 'draft:other']);
+      await finish('draft:other');
+      expect(calls).toHaveLength(2); // photo still waits for depth
+      await finish('draft:depth');
+      expect(calls).toEqual(['draft:depth', 'draft:other', 'draft:photo']);
+      await finish('draft:photo');
+      scheduler.stop();
+    });
+
+    it('a driver that is dirty but has no cook coming holds nothing up', async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+      // depth is draft-dirty only (say its source is missing and its cook left it dirty):
+      // photo's WORKING cook must still run
+      setDriven(
+        [
+          masked('photo', 'r', { draft: false, working: true }),
+          makeNode('depth', { dirty: { draft: true, working: false } }),
+        ],
+        { r: 'depth' },
+      );
+      await vi.advanceTimersByTimeAsync(80);
+      await finish('draft:depth');
+      await vi.advanceTimersByTimeAsync(400);
+      expect(calls).toContain('working:photo');
+      await finish('working:photo');
+      scheduler.stop();
+    });
+
+    it("waits for a locked driver's bake to be rebuilt before cooking against it", async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      let bake: (b: ImageBitmap) => void = () => {};
+      const rehydrate: RehydrateExecutor = vi.fn(
+        () =>
+          new Promise<ImageBitmap>((resolve) => {
+            bake = resolve;
+          }),
+      );
+      const scheduler = new CookScheduler(executor, rehydrate);
+      scheduler.start();
+      setDriven([masked('photo', 'r'), makeNode('depth', { state: 'locked' })], { r: 'depth' });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(rehydrate).toHaveBeenCalledWith('depth');
+      expect(calls).toEqual([]);
+      bake({} as ImageBitmap);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toEqual(['draft:photo']);
+      await finish('draft:photo');
+      scheduler.stop();
+    });
+
+    it('a cycle from elsewhere never stalls the queue', async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+      setDriven([masked('a', 'ra'), masked('b', 'rb')], { ra: 'b', rb: 'a' });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(calls.sort()).toEqual(['draft:a', 'draft:b']);
+      await finish('draft:a');
+      await finish('draft:b');
+      scheduler.stop();
+    });
+
+    it("a consumer dirty at a level gets a cook when its driver's cook there finishes", async () => {
+      const { executor, calls, finish } = keyedExecutor();
+      const scheduler = new CookScheduler(executor);
+      scheduler.start();
+      setDriven(
+        [
+          masked('photo', 'r', { draft: false, working: false }),
+          makeNode('depth', { dirty: { draft: true, working: true } }),
+        ],
+        {
+          r: 'depth',
+        },
+      );
+      await vi.advanceTimersByTimeAsync(80);
+      expect(calls).toEqual(['draft:depth']);
+      // the consumer turns dirty with no edit that would wake the throttle (dirty state only)
+      const s = useSceneStore.getState().scene;
+      useSceneStore.setState({
+        scene: {
+          ...s,
+          nodes: s.nodes.map((n) =>
+            n.id === 'photo' ? { ...n, dirty: { draft: true, working: true } } : n,
+          ),
+        },
+      });
+      await finish('draft:depth');
+      expect(calls).toContain('draft:photo');
+      await finish('draft:photo');
+      scheduler.stop();
+    });
+  });
 });
