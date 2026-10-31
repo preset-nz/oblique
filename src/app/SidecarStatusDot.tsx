@@ -1,4 +1,4 @@
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useSidecarStatusStore } from '@/sidecar/client';
 // Side-effecting import: wires up the app-wide sidecar client singleton
 // (transport listeners + initial ping) the first time this module loads.

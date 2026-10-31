@@ -1,4 +1,4 @@
-import { Icons, notify } from '@preset.nz/ux-kit';
+import { Icons, notify, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useEffect, useRef } from 'react';
 import {
   Select,
@@ -8,7 +8,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type SpanRole, spanRoles } from '@/compositor/composite';
 import { cookNodeFullRes } from '@/cook/cook';
 import { missingFontTooltip, useMissingFont } from '@/fonts/missingFonts';

@@ -1,8 +1,7 @@
 import { useDocument } from '@preset.nz/app-kit/core';
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { SidecarStatusDot } from '@/app/SidecarStatusDot';
 import { useViewTransformStore } from '@/canvas/viewTransform';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatCookMs, SLOW_COOK_MS, useLastCookStore } from '@/cook/lastCook';
 
 const ZOOM_BUTTON_CLASS =

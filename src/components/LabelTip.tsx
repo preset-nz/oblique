@@ -1,5 +1,5 @@
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@preset.nz/ux-kit';
 import type { ReactElement } from 'react';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 /** Hover delay before a param description appears — long enough that scrubbing past labels doesn't flash tooltips. */
 export const LABEL_TIP_DELAY_MS = 500;

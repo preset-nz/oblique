@@ -6,7 +6,7 @@ import {
   ReadOnlyText,
   registerFieldRenderer,
 } from '@preset.nz/facets';
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type FontFamilyGroup, useFontCatalogueStore } from '@/fonts/catalogue';
 import { buildPickerSections } from '@/fonts/pickerSections';
 import {

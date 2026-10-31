@@ -1,5 +1,5 @@
 import { ModelPromptHost } from '@preset.nz/app-kit/models';
-import { SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
+import { SnackbarProvider, SnackbarViewport, TooltipProvider } from '@preset.nz/ux-kit';
 import { useEffect, useState } from 'react';
 import { usePanelStore } from '@/app/panelState';
 import { StatusBar } from '@/app/StatusBar';
@@ -7,7 +7,6 @@ import { PRODUCT_NAME } from '@/branding';
 import { ToolbarRail } from '@/canvas/ToolbarRail';
 import { Viewport } from '@/canvas/Viewport';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { TooltipProvider } from '@/components/ui/tooltip';
 import { DocumentSettingsDialog } from '@/panels/document/DocumentSettingsDialog';
 import { ExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { MissingFontsDialog } from '@/panels/fonts/MissingFontsDialog';

@@ -1,10 +1,9 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useState } from 'react';
 import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useActiveSelectionStore } from '@/scene/activeSelection';
 import { useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';

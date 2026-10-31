@@ -1,5 +1,4 @@
-import { Icons } from '@preset.nz/ux-kit';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useActiveSelectionStore } from '@/scene/activeSelection';
 import { deleteNode } from '@/scene/deleteNode';
 import { useSelectionStore } from '@/scene/selection';

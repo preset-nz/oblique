@@ -1,7 +1,6 @@
-import { Icons, notify } from '@preset.nz/ux-kit';
+import { Icons, notify, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { homeDir } from '@tauri-apps/api/path';
 import { useEffect, useRef, useState } from 'react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 /** How long the copy button shows its check before turning back into the copy icon. */
 const CHECK_MS = 1500;

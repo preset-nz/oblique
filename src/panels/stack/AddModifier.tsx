@@ -1,8 +1,7 @@
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { useMemo, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier } from '@/scene/types';
 import type { OpCategory, OpDescriptor } from '@/sidecar/opsCache';

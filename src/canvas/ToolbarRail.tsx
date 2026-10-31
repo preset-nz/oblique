@@ -1,7 +1,6 @@
 import { ModelDeclined, useModelGate } from '@preset.nz/app-kit/models';
-import { Icons } from '@preset.nz/ux-kit';
+import { Icons, Tooltip, TooltipContent, TooltipTrigger } from '@preset.nz/ux-kit';
 import { MOBILE_SAM_ID } from '@/ai/sidecarSegment';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidecarStatusStore } from '@/sidecar/client';
 import { type Tool, useToolStateStore } from './toolState';
 
