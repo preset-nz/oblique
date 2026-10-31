@@ -77,6 +77,21 @@ check:
 fixtures *names='all':
     FIXTURES="$(echo {{names}} | tr ' ' ',')" cargo test --manifest-path src-tauri/Cargo.toml --lib document::fixtures
 
+# A fresh copy of one window-check project, with its picture folders, in ~/Desktop/Oblique
+# checks/<name>/, shown in Finder. The checks write files beside it, so the committed fixture stays
+# clean. Running it again replaces that copy. `just window-check depth-map`
+[group('dev')]
+window-check name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="tests/window/fixtures"
+    [ -f "$src/{{name}}.oblique" ] || { echo "no fixture $src/{{name}}.oblique"; exit 1; }
+    dest="$HOME/Desktop/Oblique checks/{{name}}"
+    rm -rf "$dest" && mkdir -p "$dest"
+    for f in "$src/{{name}}".*; do cp -R "$f" "$dest/"; done
+    open -R "$dest/{{name}}.oblique"
+    echo "File > Open: $dest/{{name}}.oblique"
+
 # Opt-in: every real project opens, saves (to memory) and reopens to the same tree. Takes
 # colon-separated .oblique files and only reads them; needs `uv` for the op catalogue.
 # `just coverage ~/Documents/v2-test.oblique`
