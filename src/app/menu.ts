@@ -1,18 +1,22 @@
 import { type Binding, useCommands } from '@preset.nz/app-kit/core';
 import { useMemo } from 'react';
 import { usePanelStore } from '@/app/panelState';
+import { useColourSelectStore } from '@/canvas/colourSelect/state';
 import { useSelectionFillStore } from '@/canvas/selectionFillState';
+import { useSmartSelectStore } from '@/canvas/smartSelect/state';
 import { useSnapStore } from '@/canvas/snapState';
+import { useToolStateStore } from '@/canvas/toolState';
 import { useViewTransformStore } from '@/canvas/viewTransform';
 import { convertSelectedTextToOutlines } from '@/fonts/convertToOutlines';
 import { openDocumentSettingsDialog } from '@/panels/document/DocumentSettingsDialog';
 import { openExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { openReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { openSettingsDialog } from '@/panels/settings/SettingsDialog';
-import { type LayerMove, layerMoveTarget } from '@/panels/stack/dragReorder';
+import { type LayerMove, layerMoveRealIndex } from '@/panels/stack/dragReorder';
 import { exportPng } from '@/project/export';
 import { tauriImportDeps } from '@/project/import';
 import { importImagesDialog, replaceImageDialog } from '@/project/io';
+import { useActiveSelectionStore } from '@/scene/activeSelection';
 import { duplicateNode } from '@/scene/duplicateNode';
 import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
 import { saveActiveSelection } from '@/scene/saveSelection';
@@ -30,7 +34,7 @@ import { isPixelNode } from '@/scene/types';
  * enabled, and pushes the enabled and ticked state back to the menu. So this module is only
  * `id -> what it does`, plus the items whose state follows the app: Replace Image… (enabled
  * while an unlocked image layer is selected), Save Selection (enabled while a finished marquee
- * is up) and the View ticks: Snap to Layers (the snap store's),
+ * is up), Deselect (enabled while a marquee or an active selection is up) and the View ticks: Snap to Layers (the snap store's),
  * Show Selection Fill (the selection fill store's) and the two side panels (`app/panelState.ts`).
  *
  * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
@@ -53,15 +57,16 @@ import { isPixelNode } from '@/scene/types';
  * Send to Back act on the selected node — the keyboard path for what the layer
  * grip does with the pointer. An open text edit commits first, like its
  * neighbours; no selection or the stack edge is a no-op (no store write, so no
- * undo step). Index 0 is the top of the stack.
+ * undo step). Index 0 is the top of the stack; saved selections are skipped (selections-panel.md).
  */
 function moveSelectedLayer(move: LayerMove): void {
   commitActiveTextEdit();
   const selection = useSelectionStore.getState().selection;
   if (selection.kind !== 'node') return;
   const { nodes } = useSceneStore.getState().scene;
-  const from = nodes.findIndex((n) => n.id === selection.nodeId);
-  const to = layerMoveTarget(from, nodes.length, move);
+  // Counted among the layers the list shows: a saved selection (selected after Edit Shape) is
+  // not in the layer order, so it is a no-op, and a layer never stops on one.
+  const to = layerMoveRealIndex(nodes, selection.nodeId, move);
   if (to === null) return;
   useSceneStore.getState().reorderNode(selection.nodeId, to);
 }
@@ -93,12 +98,27 @@ async function duplicateSelected(): Promise<void> {
   if (newId) useSelectionStore.getState().selectNode(newId);
 }
 
+/**
+ * Select > Deselect: drops the live marquee and the active selection. Smart and Colour Select's
+ * prompt markers follow the marquee's clearing through their controllers, as they do for Return.
+ */
+export function deselect(): void {
+  useMarqueeStateStore.getState().clear();
+  useActiveSelectionStore.getState().clear();
+  // As Escape does: the armed selection tool's own prompt goes with the marquee.
+  const tool = useToolStateStore.getState().tool;
+  if (tool === 'select-smart') useSmartSelectStore.getState().clearPrompt();
+  if (tool === 'select-colour') useColourSelectStore.getState().clearPrompt();
+}
+
 /** The state the menu shows besides what the table says. */
 export interface MenuState {
   /** An unlocked image layer is selected: Replace Image… is enabled. */
   replaceableImage: boolean;
   /** A finished marquee is up: Select > Save Selection is enabled. */
   savableSelection: boolean;
+  /** A marquee or an active selection is up: Select > Deselect is enabled. */
+  deselectable: boolean;
   /** Snap to Layers is on: its tick. */
   snapToLayers: boolean;
   /** Show Selection Fill is on: its tick. */
@@ -196,6 +216,13 @@ export function menuBindings(state: MenuState): Record<string, Binding> {
         saveActiveSelection();
       },
     },
+    // Select > Deselect (selections-panel.md): what Escape clears on the canvas, the marquee and
+    // the active selection (not the node selection), here for the menu. No chord: Cmd+D is
+    // Duplicate. View state, so not an undo step.
+    'select-deselect': {
+      enabled: state.deselectable,
+      run: deselect,
+    },
   };
 }
 
@@ -212,6 +239,8 @@ export function useMenuCommands(): void {
     return node !== undefined && isPixelNode(node) && node.state !== 'locked';
   });
   const savableSelection = useMarqueeStateStore((s) => isMaskableMarquee(s.marquee));
+  const deselectable = useMarqueeStateStore((s) => s.marquee !== null);
+  const hasActiveSelection = useActiveSelectionStore((s) => s.id !== null);
   const snapToLayers = useSnapStore((s) => s.enabled);
   const selectionFill = useSelectionFillStore((s) => s.enabled);
   const leftPanel = usePanelStore((s) => s.left);
@@ -221,12 +250,22 @@ export function useMenuCommands(): void {
       menuBindings({
         replaceableImage,
         savableSelection,
+        deselectable: deselectable || hasActiveSelection,
         snapToLayers,
         selectionFill,
         leftPanel,
         rightPanel,
       }),
-    [replaceableImage, savableSelection, snapToLayers, selectionFill, leftPanel, rightPanel],
+    [
+      replaceableImage,
+      savableSelection,
+      deselectable,
+      hasActiveSelection,
+      snapToLayers,
+      selectionFill,
+      leftPanel,
+      rightPanel,
+    ],
   );
   useCommands(bindings);
 }

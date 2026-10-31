@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSceneStore } from '@/scene/store';
-import type { Modifier, PixelNode } from '@/scene/types';
+import type { Modifier, PixelNode, SceneNode, VectorNode } from '@/scene/types';
 import {
   insertionIndexFor,
   insertionLineY,
+  layerDrop,
+  layerMoveRealIndex,
   layerMoveTarget,
+  layerNodes,
+  layerRealIndex,
   moveTarget,
   type RowRect,
 } from './dragReorder';
@@ -212,3 +216,135 @@ describe('layer drop with the real store', () => {
     expect(useSceneStore.getState().scene.nodes.map((n) => n.id)).toEqual(['a', 'b', 'd', 'c']);
   });
 });
+
+function selectionNode(id: string): VectorNode {
+  return {
+    ...pixelNode(id),
+    type: 'vector',
+    visible: false,
+    role: 'selection',
+    paths: [],
+    fillRule: 'nonzero',
+  } as unknown as VectorNode;
+}
+
+const ids = (nodes: readonly SceneNode[]) => nodes.map((n) => n.id);
+const sceneIds = () => ids(useSceneStore.getState().scene.nodes);
+
+/** What LayerList does on a drop: display indices in, one `reorderNode` with the real index out. */
+function dropLayer(fromDisplay: number, gap: number) {
+  const to = moveTarget(fromDisplay, gap);
+  if (to === null) return false;
+  const drop = layerDrop(useSceneStore.getState().scene.nodes, fromDisplay, to);
+  if (!drop) return false;
+  useSceneStore.getState().reorderNode(drop.id, drop.toIndex);
+  return true;
+}
+
+describe('layer list with saved selections in the stack (selections-panel.md)', () => {
+  // Real order: s0 a s1 b c s2 d. The list shows a b c d.
+  const nodes = () => [
+    selectionNode('s0'),
+    pixelNode('a'),
+    selectionNode('s1'),
+    pixelNode('b'),
+    pixelNode('c'),
+    selectionNode('s2'),
+    pixelNode('d'),
+  ];
+
+  beforeEach(() => {
+    useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: nodes() } }));
+  });
+
+  it('layerNodes hides the selection nodes', () => {
+    expect(ids(layerNodes(nodes()))).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('layerRealIndex maps a display slot to the real index of the layer there', () => {
+    const all = nodes();
+    expect([0, 1, 2, 3].map((i) => layerRealIndex(all, i))).toEqual([1, 3, 4, 6]);
+    expect(layerRealIndex(all, 4)).toBeNull();
+    expect(layerRealIndex(all, -1)).toBeNull();
+  });
+
+  it('dragging a layer up lands it just above the layer it was dropped on', () => {
+    // d (display 3) dropped in gap 1: between a and b
+    expect(dropLayer(3, 1)).toBe(true);
+    expect(sceneIds()).toEqual(['s0', 'a', 's1', 'd', 'b', 'c', 's2']);
+  });
+
+  it('dragging a layer down lands it just below the layer it was dropped on', () => {
+    // a (display 0) dropped in gap 3: between c and d
+    expect(dropLayer(0, 3)).toBe(true);
+    expect(sceneIds()).toEqual(['s0', 's1', 'b', 'c', 'a', 's2', 'd']);
+  });
+
+  it('dragging to the very top and the very bottom of the layers', () => {
+    expect(dropLayer(2, 0)).toBe(true); // c to the top
+    expect(visibleIds()).toEqual(['c', 'a', 'b', 'd']);
+    expect(dropLayer(0, 4)).toBe(true); // and back to the bottom
+    expect(visibleIds()).toEqual(['a', 'b', 'd', 'c']);
+  });
+
+  it('the visible order after any drop is the order the indicator promised', () => {
+    // every (from, gap) pair: the list reads exactly like a plain splice of the displayed layers
+    for (let from = 0; from < 4; from++) {
+      for (let gap = 0; gap <= 4; gap++) {
+        useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: nodes() } }));
+        const expected = ['a', 'b', 'c', 'd'];
+        const to = moveTarget(from, gap);
+        if (to !== null) {
+          const [moved] = expected.splice(from, 1);
+          expected.splice(to, 0, moved);
+        }
+        dropLayer(from, gap);
+        expect(visibleIds(), `from ${from} gap ${gap}`).toEqual(expected);
+        // selection nodes are never lost or duplicated
+        expect([...sceneIds()].sort()).toEqual(ids(nodes()).sort());
+      }
+    }
+  });
+
+  it('own-slot drops write nothing', () => {
+    const before = useSceneStore.getState().scene;
+    expect(dropLayer(1, 1)).toBe(false);
+    expect(dropLayer(1, 2)).toBe(false);
+    expect(useSceneStore.getState().scene).toBe(before);
+  });
+
+  it('the Layer menu moves step over selection nodes', () => {
+    const all = nodes();
+    expect(layerMoveRealIndex(all, 'b', 'forward')).toBe(1); // above a, past s1
+    expect(layerMoveRealIndex(all, 'a', 'backward')).toBe(3); // below b
+    expect(layerMoveRealIndex(all, 'd', 'front')).toBe(1);
+    expect(layerMoveRealIndex(all, 'a', 'back')).toBe(6);
+  });
+
+  it('the Layer menu no-ops at the layer edges, and for a selection node or an unknown id', () => {
+    const all = nodes();
+    expect(layerMoveRealIndex(all, 'a', 'forward')).toBeNull();
+    expect(layerMoveRealIndex(all, 'd', 'backward')).toBeNull();
+    expect(layerMoveRealIndex(all, 's1', 'forward')).toBeNull();
+    expect(layerMoveRealIndex(all, 'nope', 'front')).toBeNull();
+  });
+
+  it('applying the menu targets reorders the visible layers as asked', () => {
+    const apply = (id: string, move: 'forward' | 'backward' | 'front' | 'back') => {
+      const to = layerMoveRealIndex(useSceneStore.getState().scene.nodes, id, move);
+      if (to !== null) useSceneStore.getState().reorderNode(id, to);
+    };
+    apply('c', 'forward');
+    expect(visibleIds()).toEqual(['a', 'c', 'b', 'd']);
+    apply('a', 'backward');
+    expect(visibleIds()).toEqual(['c', 'a', 'b', 'd']);
+    apply('d', 'front');
+    expect(visibleIds()).toEqual(['d', 'c', 'a', 'b']);
+    apply('d', 'back');
+    expect(visibleIds()).toEqual(['c', 'a', 'b', 'd']);
+  });
+});
+
+function visibleIds() {
+  return ids(layerNodes(useSceneStore.getState().scene.nodes));
+}

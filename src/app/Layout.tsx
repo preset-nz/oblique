@@ -13,6 +13,7 @@ import { ExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { MissingFontsDialog } from '@/panels/fonts/MissingFontsDialog';
 import { ReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
 import { NotesPanel } from '@/panels/notes/NotesPanel';
+import { SelectionsPanel } from '@/panels/SelectionsPanel';
 import { StackPanel } from '@/panels/StackPanel';
 import { SettingsDialog } from '@/panels/settings/SettingsDialog';
 import { VectorsPanel } from '@/panels/VectorsPanel';
@@ -73,6 +74,7 @@ export function Layout() {
                 <TabsList className="w-full rounded-none border-b border-neutral-800">
                   <TabsTrigger value="stack">Stack</TabsTrigger>
                   <TabsTrigger value="vectors">Vectors</TabsTrigger>
+                  <TabsTrigger value="selections">Selections</TabsTrigger>
                   <TabsTrigger value="history">History</TabsTrigger>
                   <TabsTrigger value="notes">Notes</TabsTrigger>
                 </TabsList>
@@ -81,6 +83,9 @@ export function Layout() {
                 </TabsContent>
                 <TabsContent value="vectors" className="flex-1 overflow-auto p-4">
                   <VectorsPanel />
+                </TabsContent>
+                <TabsContent value="selections" className="flex-1 overflow-auto p-4">
+                  <SelectionsPanel />
                 </TabsContent>
                 <TabsContent value="history" className="flex-1 overflow-hidden p-4">
                   <div className="text-neutral-500 text-sm">History content</div>

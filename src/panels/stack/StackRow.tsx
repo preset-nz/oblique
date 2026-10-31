@@ -5,13 +5,24 @@ import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { isMaskableMarquee, useMarqueeStateStore } from '@/scene/marquee';
+import { useActiveSelectionStore } from '@/scene/activeSelection';
+import { useMarqueeStateStore } from '@/scene/marquee';
 import { useSceneStore } from '@/scene/store';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
-import { isTextNode, isVectorNode, type Modifier, type SceneNode } from '@/scene/types';
+import {
+  isSelectionNode,
+  isTextNode,
+  isVectorNode,
+  type Modifier,
+  type SceneNode,
+} from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
 import { opLabel } from '@/sidecar/opsCache';
 import { LOCKED_HINT, stackControlsDisabled } from './lockUi';
+import {
+  maskFromSelection as bindMaskFromSelection,
+  canMaskFromSelection,
+} from './maskFromSelection';
 import { modifierScopeKey } from './modifierScope';
 import { useRowCollapseStore } from './rowCollapse';
 import type { useDragReorder } from './useDragReorder';
@@ -44,7 +55,6 @@ export function StackRow({
   const removeModifier = useSceneStore((s) => s.removeModifier);
   const addModifier = useSceneStore((s) => s.addModifier);
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
-  const applyMarqueeAsVectorMask = useSceneStore((s) => s.applyMarqueeAsVectorMask);
   const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
   const setMaskSpace = useSceneStore((s) => s.setMaskSpace);
@@ -56,7 +66,12 @@ export function StackRow({
   // returning a fresh array per call trips React 19's getSnapshot-must-be-
   // cached invariant and loops forever.
   const sceneNodes = useSceneStore((s) => s.scene.nodes);
-  const maskSourceNodes = sceneNodes.filter((n) => isVectorNode(n) || isTextNode(n));
+  // Layers first, then the saved selections under their own heading (selections-panel.md).
+  const maskSourceNodes = sceneNodes.filter(
+    (n) => (isVectorNode(n) || isTextNode(n)) && !isSelectionNode(n),
+  );
+  const selectionSourceNodes = sceneNodes.filter(isSelectionNode);
+  const activeSelectionId = useActiveSelectionStore((s) => s.id);
   const marquee = useMarqueeStateStore((s) => s.marquee);
   const maskParams = useMarqueeStateStore((s) => s.params);
   const setMaskParams = useMarqueeStateStore((s) => s.setParams);
@@ -92,22 +107,15 @@ export function StackRow({
   }
 
   /**
-   * "Mask from selection" (marquees-as-vectors.md): converts the active
-   * marquee into a hidden `VectorNode` + a live `VectorMaskRef` — the mask
-   * is node-pinned by default (mask-follows-node.md — it travels with the
-   * layer; "Follows layer" switches it off) and editable forever with the pen
-   * tool. One undo step: node creation + attach + replace-cleanup
-   * are one command (`mask.from_marquee`).
+   * "Mask from selection" (marquees-as-vectors.md, selections-panel.md): a live marquee becomes
+   * a hidden selection node + a live `VectorMaskRef` (one undo step, `mask.from_marquee`);
+   * with no marquee the active selection is bound directly, no new node. Either way the mask
+   * is node-pinned by default (mask-follows-node.md — it travels with the layer; "Follows
+   * layer" switches it off) and editable forever with the pen tool. See `maskFromSelection.ts`.
    */
   function maskFromSelection() {
     if (locked) return;
-    const state = useMarqueeStateStore.getState();
-    const active = state.marquee;
-    if (!isMaskableMarquee(active) || !active) return;
-    applyMarqueeAsVectorMask(node.id, modifier.id, active, state.params);
-    // Consumed — same "no orphaned overlay state" rule as every other
-    // marquee exit.
-    state.clear();
+    bindMaskFromSelection(node.id, modifier.id);
   }
 
   /**
@@ -250,7 +258,7 @@ export function StackRow({
             </button>
             <button
               type="button"
-              disabled={locked || !isMaskableMarquee(marquee)}
+              disabled={locked || !canMaskFromSelection(marquee, activeSelectionId)}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={maskFromSelection}
             >
@@ -259,7 +267,7 @@ export function StackRow({
             </button>
             <button
               type="button"
-              disabled={locked || maskSourceNodes.length === 0}
+              disabled={locked || maskSourceNodes.length + selectionSourceNodes.length === 0}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={() => !locked && setVectorPickerOpen((open) => !open)}
             >
@@ -315,6 +323,22 @@ export function StackRow({
                     ) : (
                       <Icons.BezierCurveIcon size={12} className="mr-1 inline" />
                     )}
+                    {v.label}
+                  </button>
+                ))}
+                {selectionSourceNodes.length > 0 && (
+                  <div className="px-2 pt-1 text-[10px] uppercase tracking-wide text-neutral-500">
+                    Selections
+                  </div>
+                )}
+                {selectionSourceNodes.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="truncate rounded px-2 py-1 text-left text-xs hover:bg-neutral-800"
+                    onClick={() => maskFromVectorNode(v.id)}
+                  >
+                    <Icons.SelectionIcon size={12} className="mr-1 inline" />
                     {v.label}
                   </button>
                 ))}

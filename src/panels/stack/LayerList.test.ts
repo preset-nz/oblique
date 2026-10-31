@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { commitLabel, fitContain, nudgeIndex } from './LayerList';
+import { fitContain, nudgeIndex } from './LayerList';
+import { commitLabel } from './nodeRename';
 
 describe('fitContain', () => {
   it('centres a square bitmap exactly filling the box', () => {

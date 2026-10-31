@@ -1,5 +1,5 @@
 import { Icons, notify } from '@preset.nz/ux-kit';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   Select,
   SelectContent,
@@ -19,13 +19,15 @@ import { useSceneStore } from '@/scene/store';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
 import type { BlendMode, SceneNode, TextNode } from '@/scene/types';
 import { isTextNode, isVectorNode } from '@/scene/types';
+import { layerDrop, layerNodes } from './dragReorder';
 import { padlockAriaLabel, padlockClickIgnored, padlockVisualState } from './lockUi';
+import { useNodeRename } from './nodeRename';
 import { useDragReorder } from './useDragReorder';
 
 /**
  * Minimal layer list (03-compositor "Minimal layer list in the Stack tab").
- * One row per `scene.nodes` entry, rendered in array order — index 0 is the
- * TOP of the stack (compositor's bottom-up walk paints array-end-first;
+ * One row per `scene.nodes` entry except the saved selections (selections-panel.md), rendered
+ * in array order — index 0 is the TOP of the stack (compositor's bottom-up walk paints array-end-first;
  * see composite.ts), so the list reads Photoshop-style top-to-bottom.
  *
  * Reorder/visibility/opacity/blend all go through `setNodeProp`/`reorderNode`
@@ -78,18 +80,6 @@ export function nudgeIndex(
   const target = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
   if (target < 0 || target >= length) return null;
   return target;
-}
-
-/**
- * Label a rename commit should write, or `null` when the commit is a no-op
- * (rename-nodes.md). Empty/whitespace-only is a cancel, not a nameless layer;
- * an unchanged name skips the store write entirely so a stray double-click
- * leaves nothing on the undo stack. Pure — no DOM, no store.
- */
-export function commitLabel(draft: string, current: string): string | null {
-  const trimmed = draft.trim();
-  if (trimmed === '' || trimmed === current) return null;
-  return trimmed;
 }
 
 function Thumbnail({ node }: { node: SceneNode }) {
@@ -172,43 +162,8 @@ function LayerRow({
   const unlockNode = useSceneStore((s) => s.unlockNode);
   const bakingNodeIds = useSceneStore((s) => s.bakingNodeIds);
 
-  // Inline rename (rename-nodes.md). The in-progress string is transient —
-  // local state, never scene state — so one setNodeProp call on commit is one
-  // undo step per rename, not one per keystroke.
-  const [editingLabel, setEditingLabel] = useState(false);
-  const [labelDraft, setLabelDraft] = useState('');
-  const labelInputRef = useRef<HTMLInputElement>(null);
-  // Both exits (Enter and Escape) unmount the input, and some browsers fire
-  // blur on removal — this flag makes the resulting stray commit a no-op.
-  // A duplicate identical write would be filtered by sceneDiff before it
-  // reached history anyway; the flag keeps the one-undo-step-per-rename
-  // guarantee from depending on that.
-  const renameSettledRef = useRef(false);
-
-  useEffect(() => {
-    if (!editingLabel) return;
-    labelInputRef.current?.focus();
-    labelInputRef.current?.select(); // typing replaces the old name
-  }, [editingLabel]);
-
-  function startRename() {
-    renameSettledRef.current = false;
-    setLabelDraft(node.label);
-    setEditingLabel(true);
-  }
-
-  function commitRename() {
-    if (renameSettledRef.current) return;
-    renameSettledRef.current = true;
-    const next = commitLabel(labelDraft, node.label);
-    if (next !== null) setNodeProp(node.id, { label: next });
-    setEditingLabel(false);
-  }
-
-  function cancelRename() {
-    renameSettledRef.current = true;
-    setEditingLabel(false);
-  }
+  // Inline rename (rename-nodes.md), shared with the Selections tab (nodeRename.tsx).
+  const rename = useNodeRename(node);
 
   const padlockState = padlockVisualState(node, node.id, bakingNodeIds);
 
@@ -291,30 +246,10 @@ function LayerRow({
         </TooltipTrigger>
         <TooltipContent>Drag to reorder</TooltipContent>
       </Tooltip>
-      {editingLabel ? (
+      {rename.editing ? (
         <div className="flex flex-1 items-center gap-2 min-w-0">
           {rowLead}
-          <input
-            ref={labelInputRef}
-            value={labelDraft}
-            onChange={(e) => setLabelDraft(e.target.value)}
-            onBlur={commitRename}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              // Escape/Enter belong to the input while it's open — the canvas
-              // Escape handler must not also clear the node selection.
-              e.stopPropagation();
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                commitRename();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelRename();
-              }
-            }}
-            aria-label="Layer name"
-            className="min-w-0 flex-1 rounded bg-neutral-900 px-1 text-xs outline-none ring-1 ring-neutral-600"
-          />
+          {rename.input}
         </div>
       ) : (
         <button
@@ -327,12 +262,12 @@ function LayerRow({
           // whole-row-selects call from the 2026-07-05 dogfood.
           onDoubleClick={(e) => {
             e.stopPropagation();
-            startRename();
+            rename.start();
           }}
           onKeyDown={(e) => {
             if (e.key === 'F2') {
               e.preventDefault();
-              startRename();
+              rename.start();
             }
           }}
           className="flex flex-1 items-center gap-2 text-left min-w-0"
@@ -492,27 +427,30 @@ export function LayerList({
   const containerRef = useRef<HTMLDivElement>(null);
   const { draggingIndex, indicatorTop, gripProps } = useDragReorder({
     containerRef,
-    // Layer display order is model order (index 0 = top), so no conversion.
+    // The rows are the layers only (saved selections have their own tab), so a row's display
+    // index is not its index in `scene.nodes`: `layerDrop` converts both ends.
     onCommit: (from, to) => {
-      const node = nodes[from];
-      if (node) reorderNode(node.id, to);
+      const drop = layerDrop(nodes, from, to);
+      if (drop) reorderNode(drop.id, drop.toIndex);
     },
   });
 
-  if (nodes.length === 0) return null;
+  const layers = layerNodes(nodes);
+  if (layers.length === 0) return null;
+  // Span roles are worked out over the whole stack and read by REAL index.
   const roles = spanRoles(nodes);
 
   return (
     // data-layer-list: Viewport's Enter-to-edit-text shortcut recognises focus
     // here (text-tool-and-inspector.md) without importing across panels/canvas.
     <div ref={containerRef} className="relative flex flex-col gap-1" data-layer-list="">
-      {nodes.map((node, index) => (
+      {layers.map((node, index) => (
         <LayerRow
           key={node.id}
           node={node}
           index={index}
           selected={node.id === selectedNodeId}
-          spanRole={roles[index] ?? 'none'}
+          spanRole={roles[nodes.indexOf(node)] ?? 'none'}
           dragging={draggingIndex === index}
           gripProps={gripProps}
           onSelect={() => onSelectNode(node.id)}

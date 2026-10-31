@@ -8,6 +8,8 @@
  * result of `moveTarget` with `invertIndex` before calling `reorderModifier`.
  */
 
+import { isSelectionNode, type SceneNode } from '@/scene/types';
+
 export interface RowRect {
   top: number;
   bottom: number;
@@ -74,4 +76,55 @@ export function layerMoveTarget(index: number, length: number, move: LayerMove):
           : length - 1;
   if (target < 0 || target >= length || target === index) return null;
   return target;
+}
+
+/**
+ * The nodes the layer list shows, in stack order: everything but the saved selections, which
+ * have their own tab (selections-panel.md). A row's position here is its DISPLAY index; its
+ * position in `scene.nodes` is its REAL index, and `reorderNode` takes real ones. The helpers
+ * below are the one place the two are converted.
+ */
+export function layerNodes(nodes: readonly SceneNode[]): SceneNode[] {
+  return nodes.filter((n) => !isSelectionNode(n));
+}
+
+/**
+ * The real `toIndex` for `reorderNode` that lands a layer in display slot `toDisplay`
+ * (`moveTarget`'s result, or `layerMoveTarget`'s), or `null` when either end is out of range.
+ * Landing in the slot of the layer currently there means taking that layer's real index: the
+ * remove-then-insert splice puts the moved node just before it going up and just after it going
+ * down, and any selection nodes between the two stay where they were relative to the others.
+ */
+export function layerRealIndex(nodes: readonly SceneNode[], toDisplay: number): number | null {
+  const target = layerNodes(nodes)[toDisplay];
+  if (!target) return null;
+  return nodes.indexOf(target);
+}
+
+/** A layer-list drop: the dragged row's display index and the display `toIndex` -> the node and its real `toIndex`. */
+export function layerDrop(
+  nodes: readonly SceneNode[],
+  fromDisplay: number,
+  toDisplay: number,
+): { id: string; toIndex: number } | null {
+  const moved = layerNodes(nodes)[fromDisplay];
+  const toIndex = layerRealIndex(nodes, toDisplay);
+  if (!moved || toIndex === null) return null;
+  return { id: moved.id, toIndex };
+}
+
+/**
+ * The Layer menu's move for node `id` as a real `reorderNode` index, counted among the layers
+ * the list shows (a hidden selection node is never a stop), or `null` for a no-op: the edge of
+ * the stack, an unknown node, or a selection node, which isn't in the layer order the menu moves.
+ */
+export function layerMoveRealIndex(
+  nodes: readonly SceneNode[],
+  id: string,
+  move: LayerMove,
+): number | null {
+  const layers = layerNodes(nodes);
+  const from = layers.findIndex((n) => n.id === id);
+  const to = layerMoveTarget(from, layers.length, move);
+  return to === null ? null : layerRealIndex(nodes, to);
 }

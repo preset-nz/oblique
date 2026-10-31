@@ -129,6 +129,9 @@ pub fn commands() -> Vec<Command> {
         // Return chord would swallow Return in text fields). Enabled only while a finished
         // marquee is up; the webview says when (`useMenuCommands`).
         select("select-save", "Save Selection").disabled(),
+        // Epic 26 story 3: clears the marquee and the active selection, as Escape does on the
+        // canvas. No accelerator (Cmd+D is Duplicate). Enabled while either is up.
+        select("select-deselect", "Deselect").disabled(),
     ]
 }
 
@@ -232,6 +235,12 @@ mod tests {
     }
 
     #[test]
+    fn deselect_has_no_accelerator() {
+        // Cmd+D is Duplicate; Escape on the canvas is the key.
+        assert!(SHORTCUTS.iter().all(|(id, _)| *id != "select-deselect"));
+    }
+
+    #[test]
     fn import_is_shift_cmd_i_and_cmd_i_is_free() {
         let import = SHORTCUTS.iter().find(|(id, _)| *id == "file-import");
         assert_eq!(import.map(|(_, a)| *a), Some("CmdOrCtrl+Shift+I"));
@@ -301,6 +310,7 @@ mod tests {
             "type-replace-font",
             "type-convert-outlines",
             "select-save",
+            "select-deselect",
         ] {
             assert!(ids.contains(&id), "{id} is gone");
         }

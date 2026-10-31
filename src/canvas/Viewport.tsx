@@ -4,6 +4,7 @@ import { destSizeFor } from '@/compositor/composite';
 import { cn } from '@/lib/utils';
 import { importFiles, tauriImportDeps } from '@/project/import';
 import { currentTransform } from '@/rhizome/rhizome';
+import { useActiveSelectionStore } from '@/scene/activeSelection';
 import { useBackgroundSourceStore } from '@/scene/backgroundSource';
 import { useCacheVersionStore } from '@/scene/cache';
 import { deleteNode } from '@/scene/deleteNode';
@@ -22,6 +23,7 @@ import { useSceneStore } from '@/scene/store';
 import { beginNewTextAt, beginReEdit, commitActiveTextEdit } from '@/scene/textEditState';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
 import { IDENTITY_TRANSFORM_2D, isTextNode, isVectorNode } from '@/scene/types';
+import { ActiveSelectionOverlay } from './ActiveSelectionOverlay';
 import { ColourSelectOverlay } from './colourSelect/ColourSelectOverlay';
 import { ColourSelectParamsPanel } from './colourSelect/ColourSelectParamsPanel';
 import { ColourSelectStatusPanel } from './colourSelect/ColourSelectStatusPanel';
@@ -201,6 +203,18 @@ export function Viewport() {
     controller.start();
     return () => controller.stop();
   }, []);
+
+  // Edit Shape in the Selections tab (selections-panel.md) asks for the Move tool: the panel
+  // can't import the tool state, so it bumps a counter in the active-selection store.
+  useEffect(
+    () =>
+      useActiveSelectionStore.subscribe((state, prev) => {
+        if (state.shapeEditRequest !== prev.shapeEditRequest) {
+          useToolStateStore.getState().setTool('move');
+        }
+      }),
+    [],
+  );
 
   // Tool-switch-away clears the marquee and the in-progress pen path (epic
   // acceptance: "no orphaned overlay state"). Reactive on `tool` rather than
@@ -384,6 +398,8 @@ export function Viewport() {
         }
         clearSelection();
         clearMarquee();
+        // The active selection goes with the marquee (selections-panel.md); the saved node stays.
+        useActiveSelectionStore.getState().clear();
         usePenStateStore.getState().cancel();
         // select-smart's own prompt (segment-to-vector.md) — same
         // "no orphaned overlay state" rule; clearMarquee() above already
@@ -1122,6 +1138,9 @@ export function Viewport() {
             only — see below) and the active marquee (Epic 05), siblings
             here per the story's "Components touched" line. */}
         <g transform={overlayMatrix}>
+          {/* The active selection (selections-panel.md): outline and tint in every tool,
+              hidden while a marquee exists. Under the anchors so they stay on top. */}
+          <ActiveSelectionOverlay viewScale={view.scale} />
           {/* Gated to the move tool: under a marquee tool the marquee's own
               handles occupy this same overlay space, and TransformBox's 8
               handles + a marquee's would otherwise overlap ambiguously.

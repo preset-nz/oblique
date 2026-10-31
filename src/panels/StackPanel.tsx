@@ -7,6 +7,7 @@ import './stack/bootstrap';
 import { Icons } from '@preset.nz/ux-kit';
 import { ImageInspector } from '@/panels/image/ImageInspector';
 import { AddModifier } from '@/panels/stack/AddModifier';
+import { layerNodes } from '@/panels/stack/dragReorder';
 import { LayerList } from '@/panels/stack/LayerList';
 import { LOCKED_HINT, stackControlsDisabled } from '@/panels/stack/lockUi';
 import { StackRow } from '@/panels/stack/StackRow';
@@ -60,10 +61,12 @@ export function StackPanel() {
     // auto-select out of it.
     if (selection.kind !== 'node') return;
     if (nodes.some((n) => n.id === selection.nodeId)) return;
-    if (nodes[0]) selectNode(nodes[0].id);
+    // The first LAYER: a saved selection can sit at the top, and it isn't in the list.
+    const top = layerNodes(nodes)[0];
+    if (top) selectNode(top.id);
   }, [nodes, selection, selectNode]);
 
-  if (nodes.length === 0) {
+  if (layerNodes(nodes).length === 0) {
     return (
       <div className="flex flex-col gap-3 text-sm text-neutral-200">
         <div className="text-neutral-500">No layers yet — import an image.</div>

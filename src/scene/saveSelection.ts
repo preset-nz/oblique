@@ -1,5 +1,5 @@
+import { useActiveSelectionStore } from './activeSelection';
 import { isMaskableMarquee, useMarqueeStateStore } from './marquee';
-import { useSelectionStore } from './selection';
 import { useSceneStore } from './store';
 
 /**
@@ -10,7 +10,8 @@ import { useSceneStore } from './store';
  * Reads the marquee store, bails (returns `undefined`, nothing touched) unless the marquee is
  * maskable, saves it as one scene edit, clears the marquee (which also drops Smart Select's
  * prompt markers through its controller's polygons subscription; the tool stays armed) and
- * selects the new node so the layer list shows where it went. Feather, expand and invert are
+ * makes the new node the active selection (selections-panel.md), so its tint and outline stay on
+ * the canvas where the marquee's were. The node selection is left alone. Feather, expand and invert are
  * not saved: they belong to a mask reference, not the shape.
  */
 export function saveActiveSelection(): string | undefined {
@@ -19,6 +20,6 @@ export function saveActiveSelection(): string | undefined {
   const id = useSceneStore.getState().saveMarqueeAsSelection(marquee);
   if (!id) return undefined;
   clear();
-  useSelectionStore.getState().selectNode(id);
+  useActiveSelectionStore.getState().activate(id);
   return id;
 }

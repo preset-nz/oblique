@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import type { VectorNode } from '@/scene/types';
 import { menuBindings } from './menu';
 
 /**
@@ -23,6 +24,7 @@ const APP_KIT_FILE = ['file-new', 'file-open', 'file-save', 'file-save-as'];
 const state = {
   replaceableImage: false,
   savableSelection: false,
+  deselectable: false,
   snapToLayers: true,
   selectionFill: true,
   leftPanel: true,
@@ -88,6 +90,32 @@ describe('the state the menu shows', () => {
     expect(useMarqueeStateStore.getState().marquee).toBeNull();
   });
 
+  it('enables Select > Deselect while a marquee or an active selection is up, with no chord', () => {
+    expect(menuBindings({ ...state, deselectable: false })['select-deselect'].enabled).toBe(false);
+    expect(menuBindings({ ...state, deselectable: true })['select-deselect'].enabled).toBe(true);
+    expect(rust).not.toMatch(/"select-deselect",\s*"CmdOrCtrl/);
+  });
+
+  it('Deselect clears the marquee and the active selection, and leaves the node selection', async () => {
+    const { useMarqueeStateStore } = await import('@/scene/marquee');
+    const { useActiveSelectionStore } = await import('@/scene/activeSelection');
+    const { useSelectionStore } = await import('@/scene/selection');
+    const { useSceneStore } = await import('@/scene/store');
+    useSceneStore.getState().resetScene();
+    const id = useSceneStore.getState().addVectorNode({
+      paths: [{ closed: true, anchors: [{ point: { x: 0, y: 0 } }] }],
+      fillRule: 'nonzero',
+      role: 'selection',
+    });
+    useActiveSelectionStore.getState().activate(id);
+    useSelectionStore.getState().selectNode(id);
+    useMarqueeStateStore.getState().setMarquee({ kind: 'rect', rect: { x: 0, y: 0, w: 5, h: 5 } });
+    menuBindings({ ...state, deselectable: true })['select-deselect'].run?.();
+    expect(useMarqueeStateStore.getState().marquee).toBeNull();
+    expect(useActiveSelectionStore.getState().id).toBeNull();
+    expect(useSelectionStore.getState().selection).toEqual({ kind: 'node', nodeId: id });
+  });
+
   it('ticks Snap to Layers from the snap store, and a click flips the store', async () => {
     const { useSnapStore } = await import('@/canvas/snapState');
     expect(menuBindings({ ...state, snapToLayers: true })['view-snap-layers'].pressed).toBe(true);
@@ -138,5 +166,75 @@ describe('the side panels', () => {
     menuBindings(state)['view-left-panel'].run?.();
     expect(useSceneStore.getState().scene).toBe(before);
     expect(usePanelStore.getState().left).toBe(true);
+  });
+});
+
+describe('the Layer menu with saved selections in the stack (selections-panel.md)', () => {
+  const run = (id: string) => menuBindings(state)[id].run?.();
+
+  /** Nodes top to bottom: ids starting `sel` are saved selections, the rest layers. */
+  async function seed(order: string[], selected: string) {
+    const { useSceneStore } = await import('@/scene/store');
+    const { useSelectionStore } = await import('@/scene/selection');
+    const nodes: VectorNode[] = order.map((id) => ({
+      id,
+      label: id.startsWith('sel') ? `Selection (${id})` : id,
+      type: 'vector',
+      state: 'active',
+      output: 'image',
+      cameraId: null,
+      modifiers: [],
+      visible: true,
+      blendMode: 'normal',
+      opacity: 1,
+      dirty: { draft: false, working: false },
+      paths: [],
+      fillRule: 'nonzero',
+      ...(id.startsWith('sel') ? { role: 'selection' as const } : {}),
+    }));
+    useSceneStore.setState({
+      scene: {
+        id: 's',
+        nodes,
+        cameras: [],
+        defaultCameraId: null,
+        resolution: 'working',
+        documentSize: [10, 10],
+      },
+    });
+    useSelectionStore.getState().selectNode(selected);
+    return () => useSceneStore.getState().scene.nodes.map((n) => n.id);
+  }
+
+  it('Bring Forward steps over a selection node instead of swapping with it', async () => {
+    const ids = await seed(['sel1', 'a', 'sel2', 'b', 'c'], 'b');
+    run('layer-forward'); // b is under a, with sel2 between: it lands above a
+    expect(ids()).toEqual(['sel1', 'b', 'a', 'sel2', 'c']);
+  });
+
+  it('Send Backward steps over a selection node', async () => {
+    const ids = await seed(['a', 'sel1', 'b', 'sel2', 'c'], 'a');
+    run('layer-backward');
+    expect(ids()).toEqual(['sel1', 'b', 'a', 'sel2', 'c']);
+  });
+
+  it('Bring to Front and Send to Back go to the ends of the layers', async () => {
+    const ids = await seed(['sel1', 'a', 'b', 'sel2'], 'b');
+    run('layer-front');
+    expect(ids()).toEqual(['sel1', 'b', 'a', 'sel2']);
+    run('layer-back'); // just under the last layer; the selection node below it stays below
+    expect(ids()).toEqual(['sel1', 'a', 'b', 'sel2']);
+  });
+
+  it('is a no-op at the edge of the layers even with a selection node beyond it', async () => {
+    const ids = await seed(['sel1', 'a', 'b'], 'a');
+    run('layer-forward');
+    expect(ids()).toEqual(['sel1', 'a', 'b']);
+  });
+
+  it('does nothing when the selected node is a saved selection (after Edit Shape)', async () => {
+    const ids = await seed(['a', 'sel1', 'b'], 'sel1');
+    for (const id of ['layer-forward', 'layer-backward', 'layer-front', 'layer-back']) run(id);
+    expect(ids()).toEqual(['a', 'sel1', 'b']);
   });
 });
