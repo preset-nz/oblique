@@ -17,7 +17,8 @@ at 518 x 518. The sameness numbers compare CoreML with the 518 x 518 CPU map, so
 provider's difference alone; the shipped-CPU column adds the squash.
 
 Writes `<out>/<input>_<config>.png` for each map, and for each CoreML one `_diff.png` and
-`_diff_vs_shipped.png`: the absolute difference from the 518 x 518 and from the shipped CPU map,
+`_diff_vs_shipped.png`: the absolute difference from the CPU map on the same input (518 x 518
+squashed, or padded) and from the shipped CPU map,
 times 8 (clipped), so a faint difference can be seen. A last CoreML configuration sets
 `ModelCacheDirectory` and opens twice, to time what a cached reload saves.
 
@@ -133,20 +134,30 @@ def make_inputs(image_path: Path) -> dict[str, np.ndarray]:
 class Config:
     """One provider configuration. `fixed`: a fixed 518 x 518 input, with the session's free
     dimensions pinned. `cache`: CoreML's ModelCacheDirectory, so it is opened twice, to time
-    the reload."""
+    the reload. `pad`: the padded-square input rather than the squashed one."""
 
     def __init__(
-        self, name: str, providers: list[Any], fixed: bool, cache: bool = False
+        self,
+        name: str,
+        providers: list[Any],
+        fixed: bool,
+        cache: bool = False,
+        pad: bool = False,
     ) -> None:
         self.name = name
         self.providers = providers
         self.fixed = fixed
         self.cache = cache
+        self.pad = pad  # aspect kept, long side 518, edge-padded to 518 x 518, padding cropped out
 
 
 def configs(cache_dir: Path | None = None) -> list[Config]:
     cpu = ["CPUExecutionProvider"]
-    out = [Config("cpu_shipped", cpu, fixed=False), Config("cpu_518", cpu, fixed=True)]
+    out = [
+        Config("cpu_shipped", cpu, fixed=False),
+        Config("cpu_518", cpu, fixed=True),
+        Config("cpu_padded", cpu, fixed=True, pad=True),
+    ]
     for model_format in ("MLProgram", "NeuralNetwork"):
         for units in ("ALL", "CPUAndGPU"):
             options = {"ModelFormat": model_format, "MLComputeUnits": units}
@@ -157,6 +168,19 @@ def configs(cache_dir: Path | None = None) -> list[Config]:
                     fixed=True,
                 )
             )
+    out.append(
+        Config(
+            "coreml_mlprogram_all_padded",
+            [
+                (
+                    "CoreMLExecutionProvider",
+                    {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"},
+                )
+            ],
+            fixed=True,
+            pad=True,
+        )
+    )
     if cache_dir is not None:
         options = {
             "ModelFormat": "MLProgram",
@@ -222,13 +246,13 @@ def open_session(config: Config) -> tuple[Any, float, str]:
     return session, load, note
 
 
-def median_ms(session: Any, rgba: np.ndarray, size: tuple[int, int] | None) -> float:
+def median_ms(session: Any, rgba: np.ndarray, **options: Any) -> float:
     for _ in range(WARMUPS):
-        estimate_depth(session, rgba, input_size=size)
+        estimate_depth(session, rgba, **options)
     times = []
     for _ in range(RUNS):
         started = time.perf_counter()
-        estimate_depth(session, rgba, input_size=size)
+        estimate_depth(session, rgba, **options)
         times.append((time.perf_counter() - started) * 1000)
     return statistics.median(times)
 
@@ -295,13 +319,17 @@ def main() -> None:
             print(f"  could not load: {exc}\n")
             rows.append(f"{config.name:<34} could not load")
             continue
-        size = FIXED if config.fixed else None
+        options: dict[str, Any] = {}
+        if config.pad:
+            options["pad_to"] = FIXED[0]
+        elif config.fixed:
+            options["input_size"] = FIXED
         print(f"  load {load:.2f} s   coverage: {note}", flush=True)
         speeds = {}
         for label, rgba in inputs.items():
-            speeds[label] = median_ms(session, rgba, size)
+            speeds[label] = median_ms(session, rgba, **options)
             maps[(config.name, label)] = quantise(
-                estimate_depth(session, rgba, input_size=size), 8
+                estimate_depth(session, rgba, **options), 8
             )
             grey_png(
                 maps[(config.name, label)],
@@ -327,13 +355,16 @@ def main() -> None:
                 continue
             visible = rgba[..., 3] > 0
             line = f"  {config.name:<34} {label:<7}"
-            for reference in ("cpu_518", "cpu_shipped"):
+            same_input = (
+                "cpu_padded" if config.pad else "cpu_518"
+            )  # the provider's difference alone
+            for reference in (same_input, "cpu_shipped"):
                 ref = maps.get((reference, label))
                 if ref is None:
                     continue
                 diff = np.abs(ours.astype(np.int16) - ref.astype(np.int16))
                 line += f"  vs {reference}: {diff[visible].max()} / {diff[visible].mean():.2f}"
-                suffix = "diff" if reference == "cpu_518" else "diff_vs_shipped"
+                suffix = "diff_vs_shipped" if reference == "cpu_shipped" else "diff"
                 grey_png(
                     np.clip(diff * DIFF_GAIN, 0, 255).astype(np.uint8),
                     rgba[..., 3],

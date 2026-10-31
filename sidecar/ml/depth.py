@@ -98,13 +98,38 @@ def model_input_size(height: int, width: int) -> tuple[int, int]:
     return _to_multiple(new_h), _to_multiple(new_w)
 
 
+def _to_tensor(rgb: np.ndarray) -> np.ndarray:
+    """(h, w, 3) uint8 -> (1, 3, h, w) float32, divided by 255 and normalised with mean and std."""
+    scaled = rgb.astype(np.float32) / 255.0
+    normalised = (scaled - IMAGE_MEAN) / IMAGE_STD
+    return np.ascontiguousarray(normalised.transpose(2, 0, 1)[None], dtype=np.float32)
+
+
 def preprocess(rgba: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     """RGBA (H, W, 4) uint8 -> the model's input: (1, 3, h, w) float32, `size` = (h, w)."""
     rgb = Image.fromarray(np.ascontiguousarray(rgba[..., :3]), "RGB")
     resized = rgb.resize((size[1], size[0]), Image.BICUBIC)
-    scaled = np.asarray(resized, dtype=np.float32) / 255.0
-    normalised = (scaled - IMAGE_MEAN) / IMAGE_STD
-    return np.ascontiguousarray(normalised.transpose(2, 0, 1)[None], dtype=np.float32)
+    return _to_tensor(np.asarray(resized))
+
+
+def preprocess_padded(
+    rgba: np.ndarray, side: int
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """For a fixed square input without squashing: the aspect ratio kept, the long side scaled
+    to `side`, the rest filled by replicating the edge pixels, the picture centred. Returns the
+    tensor (1, 3, side, side) and (top, left, height, width) of the picture inside it."""
+    height, width = rgba.shape[:2]
+    scale = side / max(height, width)
+    new_h, new_w = max(1, round(height * scale)), max(1, round(width * scale))
+    rgb = Image.fromarray(np.ascontiguousarray(rgba[..., :3]), "RGB")
+    resized = np.asarray(rgb.resize((new_w, new_h), Image.BICUBIC))
+    top, left = (side - new_h) // 2, (side - new_w) // 2
+    padded = np.pad(
+        resized,
+        ((top, side - new_h - top), (left, side - new_w - left), (0, 0)),
+        mode="edge",
+    )
+    return _to_tensor(padded), (top, left, new_h, new_w)
 
 
 def normalise_depth(depth: np.ndarray, alpha: np.ndarray | None = None) -> np.ndarray:
@@ -127,20 +152,30 @@ def estimate_depth(
     rgba: np.ndarray,
     *,
     input_size: tuple[int, int] | None = None,
+    pad_to: int | None = None,
 ) -> np.ndarray:
     """Relative depth for `rgba` (H, W, 4 uint8): float32 (H, W) in [0, 1], near is 1.
 
     `session` is anything with an onnxruntime session's `get_inputs()` and `run()`, which is how
     the tests stand in for the model. `input_size` = (h, w) overrides the aspect-preserving
-    size: the CoreML bench pins it to 518 x 518, since a dynamic shape sends CoreML to the CPU.
+    size: the CoreML bench pins it to 518 x 518, since a dynamic shape sends CoreML to the CPU,
+    which squashes a photo that isn't square. `pad_to` = 518 keeps the aspect ratio instead: the
+    long side is scaled to `pad_to`, the picture padded to a square with its edge pixels, and
+    the padded area cropped out of the output before it is resized back (bench only).
     """
     height, width = rgba.shape[:2]
-    size = input_size or model_input_size(height, width)
-    tensor = preprocess(rgba, size)
+    crop = None
+    if pad_to is not None:
+        tensor, crop = preprocess_padded(rgba, pad_to)
+    else:
+        tensor = preprocess(rgba, input_size or model_input_size(height, width))
     input_name = session.get_inputs()[0].name
     (predicted,) = session.run(None, {input_name: tensor})
     raw = np.asarray(predicted, dtype=np.float32)
     plane = raw.reshape(raw.shape[-2:])
+    if crop is not None:
+        top, left, crop_h, crop_w = crop
+        plane = plane[top : top + crop_h, left : left + crop_w]
     if plane.shape != (height, width):
         resized = Image.fromarray(plane, "F").resize((width, height), Image.BILINEAR)
         plane = np.asarray(resized, dtype=np.float32)

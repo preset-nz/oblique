@@ -22,6 +22,7 @@ from ml.depth import (
     model_input_size,
     normalise_depth,
     preprocess,
+    preprocess_padded,
     quantise,
 )
 from PIL import Image
@@ -288,3 +289,21 @@ def test_dispatch_routes_depth(fake_session, tmp_path):
     )
     assert header["ok"] is True
     assert Image.open(io.BytesIO(payload)).size == (w, h)
+
+
+def test_padded_input_keeps_the_aspect_ratio_and_crops_the_padding_out(fake_session):
+    rgba = _rgba(40, 70)
+    tensor, (top, left, height, width) = preprocess_padded(rgba, 518)
+    assert tensor.shape == (1, 3, 518, 518)
+    assert (height, width) == (round(40 * 518 / 70), 518)
+    assert left == 0 and top == (518 - height) // 2
+    # the padding replicates the picture's edge row
+    assert np.array_equal(tensor[0, :, 0, 100], tensor[0, :, top, 100])
+
+    out = estimate_depth(fake_session, rgba, pad_to=518)
+    assert fake_session.seen[0].shape == (1, 3, 518, 518)
+    assert out.shape == (40, 70)
+    assert (
+        out[:, -1].min() > out[:, 0].max()
+    )  # the ramp across the picture, no padding in it
+    assert out.min() == pytest.approx(0.0) and out.max() == pytest.approx(1.0)
