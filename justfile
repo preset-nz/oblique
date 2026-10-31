@@ -82,6 +82,15 @@ coverage files:
 licences:
     preset-compliance licences check
 
+# Depth model, CPU against CoreML (Epic 17 story 5, depth-map.md): load time, median of 10 after 2
+# warm-ups, CoreML node coverage and how far the maps differ, on three inputs made from one photo.
+# Writes the maps and diffs as PNGs. Weights are never in the repo: `--model-dir <folder>` holds
+# model.onnx and is downloaded there when missing (default ~/.cache/oblique-bench/); `--out <folder>`
+# says where the PNGs go. `just bench-depth ~/Pictures/photo.jpg`
+[group('eval')]
+bench-depth image *args:
+    PYTHONPATH=sidecar uv run --project sidecar python -m bench.depth_providers "{{absolute_path(image)}}" {{args}}
+
 # Fix lint/format issues in place (hooks only ever check; this writes).
 [group('quality')]
 fmt:
