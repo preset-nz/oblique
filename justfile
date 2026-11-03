@@ -180,7 +180,10 @@ package: build
     (cd "$outdir" && \
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
         zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-NOTICES.txt)
-    echo "Packaged: $outdir/${product}-v${version}.zip"
+    # A SHA-256 beside the zip, so a download can be checked against the
+    # sum published on the app page. Family requirement, 2026-11-03.
+    (cd "$outdir" && shasum -a 256 "${product}-v${version}.zip" > SHA256SUMS)
+    echo "Packaged: $outdir/${product}-v${version}.zip (sum in $outdir/SHA256SUMS)"
 
 # Take every dependency update the version ranges allow into the lockfiles,
 # and rescan the licence lock. `release` runs it first.
