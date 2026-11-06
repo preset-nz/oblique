@@ -30,12 +30,12 @@ ttf-parser = "0.25"
 
 rustybuzz = "0.20"
 # The document lives in rhizome (Epic 21), taken from crates.io.
-rhizome-core = "0.1.6"
-rhizome-pom = "0.1.6"
-rhizome-pom-tauri = "0.1.6"
+rhizome-core = "0.1.8"
+rhizome-pom = "0.1.8"
+rhizome-pom-tauri = "0.1.8"
 # The family's app behaviour (Epic 22): Undo/Redo titles, File commands, the close guard, and
 # (feature `models`) the machine-wide models folder with its downloads (Epic 17 story 2c).
-preset-app-kit = { version = "0.1.4", features = ["models"] }
+preset-app-kit = { version = "0.1.5", features = ["models"] }
 
 [dev-dependencies]
 # A mock app, so the host's emitted events can be heard in tests.
