@@ -3836,9 +3836,10 @@ fn the_document_host_shares_its_pom_with_the_transports_host() {
     // a command through the transport's host (what `pom_run` calls) ...
     add_layer(&transport, "a");
 
-    // ... is in the document the host reads, and the hook heard of it
+    // ... is in the document the host reads, and the hook heard of it (on the commit and on the
+    // status, which `on_status` also reports: the hook is a refresh, so hearing twice is fine)
     assert!(has_layer(&transport, "a"));
-    assert_eq!(told.load(Ordering::SeqCst), 1);
+    assert!(told.load(Ordering::SeqCst) >= 1);
 }
 
 #[test]
