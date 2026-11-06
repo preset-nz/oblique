@@ -17,7 +17,7 @@ Even, soft blur across the RGB channels — alpha stays untouched.
 | Enabled | on or off | on | Turns the effect on or off without losing its settings. |
 | Radius | 0 to 100, or more | 4 | Blur radius in document pixels. Larger is softer; 0 does nothing. |
 
-Slots: `mask`.
+Slots: `mask`, `driver`.
 <!-- generated:end -->
 
 ## Using it
@@ -25,6 +25,8 @@ Slots: `mask`.
 A soft, even blur of the colour. Radius is in document pixels and the preview scales it, so a draft and a full-size render show the same softness. At 0 nothing happens.
 
 **Alpha is not blurred.** On a picture with transparency the colour softens while the outline stays crisp. That also means Gaussian Blur on a mask layer does not feather the mask, because a mask reads only alpha. To soften a mask's edge, use Feather on the binding where a modifier is masked by a layer.
+
+**Blur follows a layer.** The modifier's driver makes the radius follow a pixel layer: each pixel is blurred by its own radius, the full Radius where the layer is white and sharp where it is black. A depth map has near as white, so turn on Invert to blur the distance. A sharp near object keeps a crisp edge against a blurred background, and a blurred near object spreads softly over what is behind it, as a lens does. This is not a masked copy of a blurred layer: there is no sharp-plus-ghost double at middle depth.
 
 ## Recipes
 

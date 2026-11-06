@@ -18,7 +18,7 @@ use tauri::Listener as _;
 use super::host::{DOCUMENT_OPENED, DOCUMENT_SAVED, HISTORY_STEPPED, NOT_READY};
 use super::{
     document_resave, fit_replaced_transform, refit_attach_transform, sidecar_catalogue, Catalogue,
-    DocumentHost, Oblique, Op, OpParam, Placement, DUPLICATE_OFFSET_PX,
+    DocumentHost, Oblique, Op, OpDriver, OpParam, Placement, DUPLICATE_OFFSET_PX,
 };
 
 fn param(name: &str, kind: &str, default: Json, min: Option<f64>, max: Option<f64>) -> OpParam {
@@ -46,6 +46,11 @@ fn catalogue() -> Arc<Catalogue> {
         label: None,
         description: None,
         category: None,
+        drivers: vec![OpDriver {
+            kind: "radius".into(),
+            label: Some("Blur follows a layer".into()),
+            description: None,
+        }],
         params: vec![
             param("radius", "float", json!(5.0), Some(0.0), Some(100.0)),
             param("steps", "int", json!(3), Some(1.0), Some(10.0)),
@@ -613,6 +618,7 @@ fn an_op_param_named_enabled_cannot_clash_with_the_modifiers_switch() {
             label: None,
             description: None,
             category: None,
+            drivers: vec![],
             params: vec![param("enabled", "bool", json!(false), None, None)],
         }])),
         MemoryStore::default(),
@@ -1941,6 +1947,7 @@ fn labelled() -> Document<Oblique> {
             label: Some("Gaussian blur".into()),
             description: None,
             category: None,
+            drivers: vec![],
             params: vec![radius],
         }])),
         MemoryStore::default(),
@@ -3709,6 +3716,7 @@ fn a_param_with_only_a_min_keeps_it_and_is_unbounded_above() {
         label: None,
         description: None,
         category: None,
+        drivers: vec![],
         params: vec![
             param("floor", "float", json!(2.0), Some(1.0), None),
             param("ceiling", "float", json!(2.0), None, Some(10.0)),
@@ -4295,6 +4303,7 @@ fn described() -> Document<Oblique> {
                 label: Some("Gaussian blur".into()),
                 description: Some("Softens the picture evenly.".into()),
                 category: Some("distort".into()),
+                drivers: vec![],
                 params: vec![radius, edge],
             },
             Op {
@@ -4302,6 +4311,7 @@ fn described() -> Document<Oblique> {
                 label: None,
                 description: None,
                 category: None,
+                drivers: vec![],
                 params: vec![bare],
             },
         ])),
@@ -4617,4 +4627,344 @@ fn a_file_from_before_drivers_loads_unchanged() {
     .unwrap();
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(doc.tree().serialise(), text);
+}
+
+// ---- driven parameters: driver.attach and driver.detach (Epic 27, blur-radius.md) ----
+
+/// `driver.attach` of the blur's `radius` driver, luminance, the given levels, not inverted.
+fn follow(
+    d: &mut Document<Oblique>,
+    at: &str,
+    source: &str,
+    low: f64,
+    high: f64,
+) -> rhizome_pom::Result<Outcome> {
+    run(
+        d,
+        "driver.attach",
+        json!({"at": at, "kind": "radius", "source": source, "channel": "luminance",
+               "low": low, "high": high, "invert": false}),
+    )
+}
+
+/// A modifier's bindings on `slot`, as (source layer, kind).
+fn driver_slot(d: &Document<Oblique>, modifier: &str) -> Vec<(String, Json)> {
+    d.tree()
+        .at(modifier)
+        .unwrap()
+        .bindings()
+        .iter()
+        .filter(|b| *b.on == On::slot("driver"))
+        .map(|b| {
+            (
+                b.source.name().to_string(),
+                b.value("kind").unwrap().to_json(),
+            )
+        })
+        .collect()
+}
+
+fn driver_value(d: &Document<Oblique>, modifier: &str, key: &str) -> Json {
+    d.tree()
+        .at(modifier)
+        .unwrap()
+        .bindings()
+        .iter()
+        .find(|b| *b.on == On::slot("driver"))
+        .unwrap()
+        .value(key)
+        .unwrap()
+        .to_json()
+}
+
+#[test]
+fn driver_attach_binds_a_pixel_layer_with_its_kind_channel_levels_and_invert() {
+    let mut d = driven_scene();
+    is_one_undo_step(&mut d, "Follow Layer", |d| {
+        run(
+            d,
+            "driver.attach",
+            json!({"at": "/layers/a/m1", "kind": "radius", "source": "/layers/depth",
+                   "channel": "alpha", "low": 0.2, "high": 0.8, "invert": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            driver_slot(d, "/layers/a/m1"),
+            [("depth".into(), json!("radius"))]
+        );
+        assert_eq!(driver_value(d, "/layers/a/m1", "channel"), json!("alpha"));
+        assert_eq!(driver_value(d, "/layers/a/m1", "low"), json!(0.2));
+        assert_eq!(driver_value(d, "/layers/a/m1", "high"), json!(0.8));
+        assert_eq!(driver_value(d, "/layers/a/m1", "invert"), json!(true));
+        // it is the driver slot, not the mask
+        assert!(masks_of_slot(d, "/layers/a/m1").is_empty());
+    });
+}
+
+/// A modifier's bindings on its mask slot, as (source layer, refId).
+fn masks_of_slot(d: &Document<Oblique>, modifier: &str) -> Vec<String> {
+    d.tree()
+        .at(modifier)
+        .unwrap()
+        .bindings()
+        .iter()
+        .filter(|b| *b.on == On::slot("mask"))
+        .map(|b| b.source.name().to_string())
+        .collect()
+}
+
+#[test]
+fn driver_attach_again_is_the_edit_of_its_numbers_and_a_scrub_is_one_step() {
+    let mut d = driven_scene();
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    let steps = d.tree().history_len();
+    let g = d.begin("Edit").unwrap();
+    for low in [0.1, 0.2, 0.3] {
+        follow(&mut d, "/layers/a/m1", "/layers/depth", low, 1.0).unwrap();
+    }
+    d.end(g).unwrap();
+    assert_eq!(d.tree().history_len(), steps + 1);
+    assert_eq!(driver_slot(&d, "/layers/a/m1").len(), 1);
+    assert_eq!(driver_value(&d, "/layers/a/m1", "low"), json!(0.3));
+    // another layer replaces it: a modifier has one driver
+    add(&mut d, node("other", "pixel")).unwrap();
+    follow(&mut d, "/layers/a/m1", "/layers/other", 0.0, 1.0).unwrap();
+    assert_eq!(
+        driver_slot(&d, "/layers/a/m1"),
+        [("other".into(), json!("radius"))]
+    );
+}
+
+#[test]
+fn a_mask_and_a_driver_sit_on_one_modifier_and_each_detaches_alone() {
+    let mut d = driven_scene();
+    add(&mut d, node("depth2", "pixel")).unwrap();
+    drive(&mut d, "/layers/a/m1", "/layers/depth2", 0.0, 1.0).unwrap();
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    assert_eq!(masks_of_slot(&d, "/layers/a/m1"), ["depth2"]);
+    assert_eq!(driver_slot(&d, "/layers/a/m1").len(), 1);
+    is_one_undo_step(&mut d, "Stop Following Layer", |d| {
+        run(d, "driver.detach", json!({"at": "/layers/a/m1"})).unwrap();
+        assert!(driver_slot(d, "/layers/a/m1").is_empty());
+        assert_eq!(
+            masks_of_slot(d, "/layers/a/m1"),
+            ["depth2"],
+            "the mask stays"
+        );
+        assert!(d.tree().at("/layers/depth").is_some(), "the layer stays");
+    });
+    // the other way: removing the mask leaves the driver
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+    run(&mut d, "mask.detach", json!({"at": "/layers/a/m1"})).unwrap();
+    assert_eq!(driver_slot(&d, "/layers/a/m1").len(), 1);
+    // nothing to detach is refused, and changes nothing
+    run(&mut d, "driver.detach", json!({"at": "/layers/a/m1"})).unwrap();
+    let steps = d.tree().history_len();
+    let e = run(&mut d, "driver.detach", json!({"at": "/layers/a/m1"})).unwrap_err();
+    assert!(e.to_string().contains("follows no layer"), "{e}");
+    assert_eq!(d.tree().history_len(), steps);
+}
+
+#[test]
+fn driver_attach_refuses_cycles_with_the_reason_mask_and_driver_edges_alike() {
+    let mut d = driven_scene();
+    // the depth layer's own blur follows the photo
+    follow(&mut d, "/layers/depth/dm", "/layers/a", 0.0, 1.0).unwrap();
+    let e = follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap_err();
+    assert!(e.to_string().contains("can't follow it"), "{e}");
+    // and the same edge made by a mask is refused too
+    let mut d = driven_scene();
+    drive(&mut d, "/layers/depth/dm", "/layers/a", 0.0, 1.0).unwrap();
+    assert!(follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).is_err());
+    // through a chain, the edges mixed: c is masked by depth, depth follows the photo
+    add(&mut d, with_blur(node("c", "pixel"), &["cm"])).unwrap();
+    drive(&mut d, "/layers/c/cm", "/layers/depth", 0.0, 1.0).unwrap(); // c: mask from depth
+    follow(&mut d, "/layers/depth/dm", "/layers/a", 0.0, 1.0).unwrap(); // depth: follows a
+    let chained = d.tree().serialise();
+    // a following c would close a -> c -> depth -> a
+    assert!(follow(&mut d, "/layers/a/m1", "/layers/c", 0.0, 1.0).is_err());
+    // and a mask from c is refused by the same graph
+    assert!(drive(&mut d, "/layers/a/m1", "/layers/c", 0.0, 1.0).is_err());
+    assert_eq!(d.tree().serialise(), chained);
+    // a layer can't follow itself
+    let e = follow(&mut d, "/layers/a/m1", "/layers/a", 0.0, 1.0).unwrap_err();
+    assert!(e.to_string().contains("its own modifiers"), "{e}");
+    assert_eq!(d.tree().serialise(), chained);
+}
+
+#[test]
+fn driver_attach_refuses_what_cannot_follow_and_what_the_op_does_not_offer() {
+    let mut d = driven_scene();
+    add(&mut d, node("v", "vector")).unwrap();
+    let before = d.tree().serialise();
+    for (args, why) in [
+        (
+            json!({"at": "/layers/a/m1", "kind": "radius", "source": "/layers/v",
+                   "channel": "luminance", "low": 0.0, "high": 1.0, "invert": false}),
+            "a vector layer",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "kind": "radius", "source": "/layers/depth",
+                   "channel": "red", "low": 0.0, "high": 1.0, "invert": false}),
+            "a channel that isn't one",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "kind": "radius", "source": "/layers/depth",
+                   "channel": "luminance", "low": 0.0, "high": 2.0, "invert": false}),
+            "a level outside 0..1",
+        ),
+        (
+            json!({"at": "/layers/a", "kind": "radius", "source": "/layers/depth",
+                   "channel": "luminance", "low": 0.0, "high": 1.0, "invert": false}),
+            "a layer, not a modifier",
+        ),
+        (
+            json!({"at": "/layers/a/m1", "kind": "amount", "source": "/layers/depth",
+                   "channel": "luminance", "low": 0.0, "high": 1.0, "invert": false}),
+            "a kind the op doesn't offer",
+        ),
+    ] {
+        assert!(run(&mut d, "driver.attach", args).is_err(), "{why}");
+    }
+    assert_eq!(d.tree().serialise(), before);
+    // a locked consumer refuses; a locked driver still drives
+    lock(&mut d, "/layers/a");
+    assert!(follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).is_err());
+    unlock(&mut d, "/layers/a");
+    lock(&mut d, "/layers/depth");
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap();
+}
+
+#[test]
+fn an_op_that_offers_no_driver_refuses_one_and_says_which() {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(Catalogue(vec![Op {
+            name: "invert".into(),
+            label: Some("Invert".into()),
+            description: None,
+            category: None,
+            drivers: vec![],
+            params: vec![],
+        }])),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    let mut n = node("a", "pixel");
+    n["modifiers"] = json!([{"id": "m1", "type": "invert", "enabled": true, "params": {}}]);
+    add(&mut d, n).unwrap();
+    add(&mut d, node("depth", "pixel")).unwrap();
+    let before = d.tree().serialise();
+    let e = follow(&mut d, "/layers/a/m1", "/layers/depth", 0.0, 1.0).unwrap_err();
+    assert!(e.to_string().contains("Invert offers no driver"), "{e}");
+    assert_eq!(d.tree().serialise(), before);
+}
+
+#[test]
+fn deleting_the_driver_layer_removes_the_driver_and_one_undo_restores_both() {
+    let mut d = driven_scene();
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.25, 0.75).unwrap();
+    is_one_undo_step(&mut d, "Delete Layer", |d| {
+        remove(d, "/layers/depth").unwrap();
+        assert!(driver_slot(d, "/layers/a/m1").is_empty());
+    });
+    d.undo().unwrap();
+    assert_eq!(
+        driver_slot(&d, "/layers/a/m1"),
+        [("depth".into(), json!("radius"))]
+    );
+    assert_eq!(driver_value(&d, "/layers/a/m1", "low"), json!(0.25));
+    assert_eq!(driver_value(&d, "/layers/a/m1", "high"), json!(0.75));
+    // hiding the driver keeps it
+    set(&mut d, "/layers/depth", "visible", json!(false)).unwrap();
+    assert_eq!(driver_slot(&d, "/layers/a/m1").len(), 1);
+}
+
+#[test]
+fn a_duplicate_keeps_its_driver_whole() {
+    let mut d = driven_scene();
+    run(
+        &mut d,
+        "driver.attach",
+        json!({"at": "/layers/a/m1", "kind": "radius", "source": "/layers/depth",
+               "channel": "alpha", "low": 0.1, "high": 0.6, "invert": true}),
+    )
+    .unwrap();
+    duplicate(&mut d, "/layers/a", "a2", &["n1"], &[None]).unwrap();
+    assert_eq!(
+        driver_slot(&d, "/layers/a2/n1"),
+        [("depth".into(), json!("radius"))]
+    );
+    for (key, want) in [
+        ("channel", json!("alpha")),
+        ("low", json!(0.1)),
+        ("high", json!(0.6)),
+        ("invert", json!(true)),
+    ] {
+        assert_eq!(driver_value(&d, "/layers/a2/n1", key), want, "{key}");
+    }
+}
+
+#[test]
+fn a_document_with_a_driver_saves_and_opens_identically() {
+    let store = MemoryStore::default();
+    let mut d =
+        Document::<Oblique>::new_in(catalogue(), store.clone(), IdSource::sequential()).unwrap();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("depth", "pixel")).unwrap();
+    set(&mut d, "/layers/depth", "visible", json!(false)).unwrap();
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.3, 0.9).unwrap();
+    d.save_as("/mem/followed").unwrap();
+    let (back, report) = Document::<Oblique>::open_in(
+        catalogue(),
+        store,
+        "/mem/followed.oblique",
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(back.tree().serialise(), d.tree().serialise());
+    assert_eq!(
+        driver_slot(&back, "/layers/a/m1"),
+        [("depth".into(), json!("radius"))]
+    );
+    assert_eq!(driver_value(&back, "/layers/a/m1", "high"), json!(0.9));
+}
+
+#[test]
+fn an_op_s_drivers_come_across_from_list_ops_and_default_to_none() {
+    let ops: Vec<Op> = serde_json::from_value(json!([
+        {"name": "gaussian_blur", "params": [],
+         "drivers": [{"kind": "radius", "label": "Blur follows a layer"}]},
+        {"name": "invert", "params": []},
+    ]))
+    .unwrap();
+    assert_eq!(ops[0].drivers.len(), 1);
+    assert_eq!(ops[0].drivers[0].kind, "radius");
+    assert_eq!(
+        ops[0].drivers[0].label.as_deref(),
+        Some("Blur follows a layer")
+    );
+    assert!(ops[1].drivers.is_empty());
+    // only the op that offers one has the slot
+    let schema = Document::<Oblique>::new_in(
+        Arc::new(Catalogue(ops)),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap()
+    .tree()
+    .registry()
+    .schema();
+    let slots = |n: &str| {
+        schema
+            .types
+            .iter()
+            .find(|t| t.name == n)
+            .unwrap()
+            .slots
+            .clone()
+    };
+    assert_eq!(slots("op.gaussian_blur"), ["mask", "driver"]);
+    assert_eq!(slots("op.invert"), ["mask"]);
 }

@@ -325,6 +325,7 @@ fn blur_catalogue() -> Catalogue {
         label: Some("Gaussian Blur".into()),
         description: None,
         category: Some("distort".into()),
+        drivers: vec![],
         params: vec![OpParam {
             name: "radius".into(),
             label: Some("Radius".into()),

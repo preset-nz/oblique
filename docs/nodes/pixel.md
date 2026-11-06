@@ -31,6 +31,7 @@ A binding from it carries:
 | Control | Range | Default | What it does |
 |---|---|---|---|
 | Mask layer | text | empty | Which layer drives the mask. |
+| Driver | text | empty | Which of the op's drivers this layer is: the setting it makes follow the layer. |
 | Channel | luminance, alpha | luminance | What the mask reads from the layer: how light it is, or how solid. |
 | Low | 0 to 1 | 0 | The level read from the layer that gives no effect; anything below it gives none either. |
 | High | 0 to 1 | 1 | The level read from the layer that gives the full effect; anything above it does too. |

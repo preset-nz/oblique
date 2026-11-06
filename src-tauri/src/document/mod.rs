@@ -10,6 +10,9 @@
 //! - A modifier mask is a binding from a vector or text layer onto the modifier's `mask`
 //!   slot, carrying the mask reference's own values. A pixel layer binds there too, as the
 //!   layer that drives the mask (layer-as-driver.md), with the values `driver_values` declares.
+//! - A modifier whose op offers a driver (`Op.drivers`) has a second slot, `driver`: a pixel layer
+//!   bound there sets that op's value per pixel (Epic 27, blur-radius.md), carrying the same
+//!   values plus the `kind` of driver it is.
 //!
 //! The webview edits only through commands (rhizome decision 46).
 
@@ -100,6 +103,23 @@ pub struct Op {
     #[serde(default)]
     pub category: Option<String>,
     pub params: Vec<OpParam>,
+    /// What a layer can drive on this op (Epic 27): each is a kind a modifier's driver may
+    /// carry. Empty, and absent on the wire, for an op that offers none.
+    #[serde(default)]
+    pub drivers: Vec<OpDriver>,
+}
+
+/// One driver an op offers, as `list_ops` reports it: `kind` is what the document's driver
+/// binding carries (`radius`); the words are the sidecar's, for the panel.
+#[derive(Clone, Debug, Deserialize)]
+pub struct OpDriver {
+    pub kind: String,
+    /// What the picker says ("Blur follows a layer"). Optional on the wire.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// One sentence on what the driver does. Optional on the wire.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -334,11 +354,16 @@ fn mask_values() -> Vec<ValueSpec> {
     ]
 }
 
-/// The values a mask driven by a pixel layer carries (`PixelMaskRef` less its layer):
-/// layer-as-driver.md.
+/// The values a pixel layer's binding carries (`PixelMaskRef` less its layer): as the layer that
+/// drives a mask (layer-as-driver.md), or the driver an op offers, which also names its `kind`
+/// (Epic 27, blur-radius.md).
 fn driver_values() -> Vec<ValueSpec> {
     vec![
         ValueSpec::text("refId", "").described("Mask layer", "Which layer drives the mask."),
+        ValueSpec::text("kind", "").described(
+            "Driver",
+            "Which of the op's drivers this layer is: the setting it makes follow the layer.",
+        ),
         ValueSpec::choice("channel", &["luminance", "alpha"], "luminance").described(
             "Channel",
             "What the mask reads from the layer: how light it is, or how solid.",
@@ -523,6 +548,10 @@ impl ObjectModel for Oblique {
                     "Turns the effect on or off without losing its settings.",
                 )
                 .slot("mask");
+            // a driver slot only on an op that offers one: binding to any other is refused
+            if !op.drivers.is_empty() {
+                t = t.slot("driver");
+            }
             for p in &op.params {
                 if let Some(spec) = param_spec(p) {
                     t = t.value(spec);
@@ -852,6 +881,45 @@ impl ObjectModel for Oblique {
                     let (source, _) = mask_of(tx, m)
                         .ok_or_else(|| structural(format!("{} has no mask", a.at)))?;
                     tx.unbind(m, On::slot("mask"), source)
+                })?;
+                Ok(commit.into())
+            },
+        );
+        // "Blur follows a layer" and its kin (Epic 27, blur-radius.md): a pixel layer's cooked
+        // raster sets one of the op's values per pixel, read as luminance or alpha through the
+        // levels `low` and `high`, then inverted or not. `kind` is one the op offers. A modifier
+        // has one driver; sent again with the same layer and new numbers it is the edit of
+        // those, so a levels scrub in a gesture is one step. A layer the consumer already
+        // follows, through a mask or a driver, is refused with the reason, as are a locked
+        // consumer and a kind the op doesn't offer. A mask and a driver may sit on one modifier.
+        c.add(
+            "driver.attach",
+            |_| "Follow Layer".into(),
+            |_, p| {
+                ["at", "kind", "source", "channel"]
+                    .iter()
+                    .all(|k| p.get(k).is_some_and(Json::is_string))
+            },
+            |d, p| {
+                let a: FollowArgs = payload(p)?;
+                offers_driver(d, &a.at, &a.kind)?;
+                let (_, commit) = d.edit("Follow Layer", |tx| attach_driver(tx, &a))?;
+                Ok(commit.into())
+            },
+        );
+        // Takes the driver off a modifier. The layer that was driving stays.
+        c.add(
+            "driver.detach",
+            |_| "Stop Following Layer".into(),
+            |_, p| p.get("at").is_some_and(Json::is_string),
+            |d, p| {
+                let a: AtArgs = payload(p)?;
+                let (_, commit) = d.edit("Stop Following Layer", |tx| {
+                    let (m, layer) = modifier_at(tx, &a.at)?;
+                    refuse_locked(tx, layer)?;
+                    let (source, _) = driver_of(tx, m)
+                        .ok_or_else(|| structural(format!("{} follows no layer", a.at)))?;
+                    tx.unbind(m, On::slot("driver"), source)
                 })?;
                 Ok(commit.into())
             },
@@ -1212,6 +1280,17 @@ struct DriverArgs {
 }
 
 #[derive(Deserialize)]
+struct FollowArgs {
+    at: String,
+    kind: String,
+    source: String,
+    channel: String,
+    low: f64,
+    high: f64,
+    invert: bool,
+}
+
+#[derive(Deserialize)]
 struct SpaceArgs {
     at: String,
     space: String,
@@ -1406,6 +1485,9 @@ const MASK_KEYS: [&str; 9] = [
     "high",
 ];
 
+/// The keys a modifier's driver binding carries (`driver_values` less `refId`).
+const DRIVER_KEYS: [&str; 5] = ["kind", "channel", "low", "high", "invert"];
+
 /// `layer.set_source`: the path always; with a different size, the fit and the mask refits.
 fn set_source(tx: &mut Edit<'_>, a: &SourceArgs) -> rhizome_core::Result<()> {
     let at = live(tx, &a.at)?;
@@ -1516,6 +1598,8 @@ struct ModifierCopy {
     values: Vec<(String, Value)>,
     /// The mask binding: its source, and its values with the new `refId` already in.
     mask: Option<(NodeId, Vec<(&'static str, Value)>)>,
+    /// The driver binding: its source and values, copied as they are (it has no ref to renew).
+    driver: Option<(NodeId, Vec<(&'static str, Value)>)>,
 }
 
 /// `layer.duplicate`: `copyNode` (src/scene/store.ts) in the tree. Label `"<label> copy"`,
@@ -1595,6 +1679,17 @@ fn duplicate_layer(tx: &mut Edit<'_>, a: &DuplicateArgs) -> rhizome_core::Result
                 Some((b.source.id(), values))
             }
         };
+        let driver = m
+            .bindings()
+            .into_iter()
+            .find(|b| *b.on == On::slot("driver"))
+            .map(|b| {
+                let values = DRIVER_KEYS
+                    .iter()
+                    .filter_map(|k| Some((*k, b.value(k)?)))
+                    .collect();
+                (b.source.id(), values)
+            });
         copies.push(ModifierCopy {
             type_name: m.type_name().to_string(),
             id: a.modifier_ids[i].clone(),
@@ -1603,6 +1698,7 @@ fn duplicate_layer(tx: &mut Edit<'_>, a: &DuplicateArgs) -> rhizome_core::Result
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
             mask,
+            driver,
         });
     }
 
@@ -1633,6 +1729,9 @@ fn duplicate_layer(tx: &mut Edit<'_>, a: &DuplicateArgs) -> rhizome_core::Result
         }
         if let Some((source, values)) = m.mask {
             tx.bind(node, On::slot("mask"), source, values)?;
+        }
+        if let Some((source, values)) = m.driver {
+            tx.bind(node, On::slot("driver"), source, values)?;
         }
     }
     if !order.is_empty() {
@@ -1852,7 +1951,8 @@ fn set_mask_space(tx: &mut Edit<'_>, a: &SpaceArgs) -> rhizome_core::Result<()> 
 }
 
 /// The pixel layers whose cooked raster `layer`'s cook reads: the drivers of its modifiers'
-/// masks (layer-as-driver.md). `pixelDriversOf` in src/scene/maskInputs.ts is the twin.
+/// masks (layer-as-driver.md) and the layers its modifiers' drivers follow (Epic 27).
+/// `pixelDriversOf` in src/scene/maskInputs.ts is the twin.
 fn drivers_of(tx: &Edit<'_>, layer: NodeId) -> Vec<NodeId> {
     let mut out = vec![];
     let Some(n) = tx.at(layer) else {
@@ -1861,7 +1961,8 @@ fn drivers_of(tx: &Edit<'_>, layer: NodeId) -> Vec<NodeId> {
     for m in n.order("modifiers") {
         for b in m.bindings() {
             let id = b.source.id();
-            if *b.on == On::slot("mask") && b.source.type_name() == "pixel" && !out.contains(&id) {
+            let reads = *b.on == On::slot("mask") || *b.on == On::slot("driver");
+            if reads && b.source.type_name() == "pixel" && !out.contains(&id) {
                 out.push(id);
             }
         }
@@ -1873,23 +1974,53 @@ fn drivers_of(tx: &Edit<'_>, layer: NodeId) -> Vec<NodeId> {
 /// consumer, or its own look already depends on the consumer, directly or through other
 /// drivers. `driverRefusal` (src/scene/maskInputs.ts) gives the panel the same answer.
 fn driver_refusal(tx: &Edit<'_>, consumer: NodeId, driver: NodeId) -> Option<String> {
+    cycle_between(tx, consumer, driver, |driver, consumer| {
+        format!("“{driver}” already takes a mask from “{consumer}”, so it can't drive one there.")
+    })
+    .map(|why| match why {
+        Cycle::Itself => "A layer can't drive a mask on its own modifiers.".to_string(),
+        Cycle::Through(text) => text,
+    })
+}
+
+/// What stops `driver` being followed by `consumer`'s modifier: the same as for a mask, worded
+/// for a driver. Mask and driver edges both count (`drivers_of`).
+fn follow_refusal(tx: &Edit<'_>, consumer: NodeId, driver: NodeId) -> Option<String> {
+    cycle_between(tx, consumer, driver, |driver, consumer| {
+        format!(
+            "“{driver}” already takes its look from “{consumer}”, so “{consumer}” can't follow it."
+        )
+    })
+    .map(|why| match why {
+        Cycle::Itself => "A layer can't drive its own modifiers.".to_string(),
+        Cycle::Through(text) => text,
+    })
+}
+
+enum Cycle {
+    Itself,
+    Through(String),
+}
+
+fn cycle_between(
+    tx: &Edit<'_>,
+    consumer: NodeId,
+    driver: NodeId,
+    through: impl Fn(&str, &str) -> String,
+) -> Option<Cycle> {
     let label = |id: NodeId| match tx.at(id).and_then(|n| n.value("label")) {
         Some(Value::Text(l)) => l,
         _ => String::new(),
     };
     if consumer == driver {
-        return Some("A layer can't drive a mask on its own modifiers.".into());
+        return Some(Cycle::Itself);
     }
     let mut seen = vec![driver];
     let mut stack = vec![driver];
     while let Some(id) = stack.pop() {
         for d in drivers_of(tx, id) {
             if d == consumer {
-                return Some(format!(
-                    "“{}” already takes a mask from “{}”, so it can't drive one there.",
-                    label(driver),
-                    label(consumer)
-                ));
+                return Some(Cycle::Through(through(&label(driver), &label(consumer))));
             }
             if !seen.contains(&d) {
                 seen.push(d);
@@ -1918,6 +2049,67 @@ fn attach_layer(tx: &mut Edit<'_>, a: &DriverArgs) -> rhizome_core::Result<()> {
         source,
         [
             ("refId", Value::Text(ref_id)),
+            ("channel", Value::Choice(a.channel.clone())),
+            ("low", Value::Float(a.low)),
+            ("high", Value::Float(a.high)),
+            ("invert", Value::Bool(a.invert)),
+        ],
+    )
+}
+
+/// A modifier's driver: its source layer and the `kind` it carries, if it has one.
+fn driver_of(tx: &Edit<'_>, modifier: NodeId) -> Option<(NodeId, String)> {
+    let n = tx.at(modifier)?;
+    let b = n
+        .bindings()
+        .into_iter()
+        .find(|b| *b.on == On::slot("driver"))?;
+    let kind = match b.value("kind") {
+        Some(Value::Text(k)) => k,
+        _ => String::new(),
+    };
+    Some((b.source.id(), kind))
+}
+
+/// Refuses a driver `kind` the modifier at `at` doesn't offer, naming the op. The catalogue
+/// is the op's home backend's own list (`list_ops`), so the words and the kinds are the
+/// sidecar's. An `at` that isn't a modifier is left to the edit, which says so.
+fn offers_driver(
+    d: &rhizome_pom::Document<Oblique>,
+    at: &str,
+    kind: &str,
+) -> rhizome_pom::Result<()> {
+    let Some(n) = d.tree().at(at) else {
+        return Ok(());
+    };
+    let Some(name) = n.type_name().strip_prefix("op.") else {
+        return Ok(());
+    };
+    let op = d.context().0.iter().find(|o| o.name == name);
+    if op.is_some_and(|o| o.drivers.iter().any(|x| x.kind == kind)) {
+        return Ok(());
+    }
+    let what = op_label(d.context(), name);
+    Err(structural(format!("{what} offers no driver called “{kind}”.")).into())
+}
+
+/// `driver.attach`.
+fn attach_driver(tx: &mut Edit<'_>, a: &FollowArgs) -> rhizome_core::Result<()> {
+    let (m, layer) = modifier_at(tx, &a.at)?;
+    refuse_locked(tx, layer)?;
+    let source = layer_at(tx, &a.source)?;
+    if tx.at(source).expect("live").type_name() != "pixel" {
+        return Err(structural(format!("{} isn't a pixel layer", a.source)));
+    }
+    if let Some(why) = follow_refusal(tx, layer, source) {
+        return Err(structural(why));
+    }
+    tx.bind(
+        m,
+        On::slot("driver"),
+        source,
+        [
+            ("kind", Value::Text(a.kind.clone())),
             ("channel", Value::Choice(a.channel.clone())),
             ("low", Value::Float(a.low)),
             ("high", Value::Float(a.high)),

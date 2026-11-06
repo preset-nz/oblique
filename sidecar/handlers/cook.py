@@ -11,6 +11,13 @@ Index 0 of the `modifiers` array applies first (left-to-right fold). The
 client already filters `enabled: false` before sending, so every modifier
 present here runs — nothing is skipped. Unknown op name -> `ok: false`
 naming the op, no partial results (validated up front, before folding).
+
+Drivers (Epic 27, `features/27-driven-params/blur-radius.md`): a modifier may
+carry a driver plane, one single-channel byte per pixel, after the mask planes.
+The header entry is `{modifierIndex, kind, driver_bytes}`; `kind` must be one
+the op offers. The op receives it as `drivers={kind: float32 0..1 plane}`
+beside `params`. Ops with no driver attached are called as they always were,
+and a frame with no `drivers` key is the pre-driver frame, byte for byte.
 """
 
 from __future__ import annotations
@@ -19,7 +26,20 @@ import time
 from typing import Any
 
 import numpy as np
-from ops import OPS
+from ops import OPS, Op
+
+
+def _run(
+    entry: Op,
+    img: np.ndarray,
+    params: dict[str, Any],
+    driven: dict[str, np.ndarray] | None,
+) -> np.ndarray:
+    """One op call. An op with no driver attached is called exactly as before
+    drivers existed: `fn(img, params)`."""
+    if driven is None:
+        return entry.fn(img, params)
+    return entry.fn(img, params, driven)
 
 
 def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any], bytes]:
@@ -78,8 +98,48 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
                 ),
             }, b""
 
+    # Optional per-modifier drivers: planes appended after the mask planes, in
+    # header order, one per entry. A modifier has at most one.
+    driver_entries = header.get("drivers", [])
+    seen_drivers: set[int] = set()
+    for entry in driver_entries:
+        index = entry.get("modifierIndex")
+        kind = entry.get("kind")
+        size = entry.get("driver_bytes")
+        if not isinstance(index, int) or not 0 <= index < len(modifiers):
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": f"driver modifierIndex {index!r} out of range",
+            }, b""
+        op_name = modifiers[index]["type"]
+        if kind not in {d.kind for d in OPS[op_name].drivers}:
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": f"op '{op_name}' offers no driver {kind!r}",
+            }, b""
+        if index in seen_drivers:
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": f"modifier {index} has more than one driver",
+            }, b""
+        seen_drivers.add(index)
+        if size != mask_plane_bytes:
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": (
+                    f"driver for modifier {index} must be {mask_plane_bytes} bytes "
+                    f"({width}x{height} single-channel), got {size!r}"
+                ),
+            }, b""
+
     image_bytes = width * height * 4
-    expected_bytes = image_bytes + mask_plane_bytes * len(mask_entries)
+    expected_bytes = image_bytes + mask_plane_bytes * (
+        len(mask_entries) + len(driver_entries)
+    )
     if len(payload) != expected_bytes:
         return (
             {
@@ -87,8 +147,8 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
                 "ok": False,
                 "error": (
                     f"expected {expected_bytes} payload bytes for "
-                    f"{width}x{height} RGBA8 + {len(mask_entries)} mask(s), "
-                    f"got {len(payload)}"
+                    f"{width}x{height} RGBA8 + {len(mask_entries)} mask(s)"
+                    f" + {len(driver_entries)} driver(s), got {len(payload)}"
                 ),
             },
             b"",
@@ -110,6 +170,17 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
         masks_by_index[entry["modifierIndex"]] = plane.reshape(height, width)
         offset += mask_plane_bytes
 
+    # And each driver plane: 0..1 float32 (k / 255), keyed by modifier.
+    drivers_by_index: dict[int, dict[str, np.ndarray]] = {}
+    for entry in driver_entries:
+        plane = np.frombuffer(
+            payload[offset : offset + mask_plane_bytes], dtype=np.uint8
+        ).reshape(height, width)
+        drivers_by_index[entry["modifierIndex"]] = {
+            entry["kind"]: plane.astype(np.float32) / np.float32(255.0)
+        }
+        offset += mask_plane_bytes
+
     # Per-op wall time in ms, returned in the header for client-side debug
     # logging. perf_counter reads cost ~ns against ops that cost ms, so the
     # measurement can't skew what it measures.
@@ -118,8 +189,10 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
         entry = OPS[modifier["type"]]
         started = time.perf_counter()
         mask = masks_by_index.get(index)
+        driven = drivers_by_index.get(index)
+        params = modifier.get("params", {})
         if mask is None:
-            img = entry.fn(img, modifier.get("params", {}))
+            img = _run(entry, img, params, driven)
         else:
             # Masked modifier: blend the op's output against the buffer that
             # ENTERED it — mask*out + (1-mask)*before, all four channels.
@@ -128,7 +201,7 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
             # wraps the op call; the op itself stays pure and mask-unaware,
             # and the run is not split (selection-to-mask.md §Decision).
             before = img
-            out = entry.fn(img, modifier.get("params", {}))
+            out = _run(entry, img, params, driven)
             weight = (mask.astype(np.float32) / 255.0)[..., None]
             blended = weight * out.astype(np.float32) + (1.0 - weight) * before.astype(
                 np.float32

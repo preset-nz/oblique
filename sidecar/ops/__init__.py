@@ -18,7 +18,7 @@ alongside its Rust-side twin).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 ParamScale = Literal["spatial", "none"]
@@ -104,6 +104,30 @@ class ParamSpec:
 
 P = ParamSpec
 """Short alias used at op-registration call sites (`P("radius", "float", ...)`)."""
+
+
+@dataclass(frozen=True)
+class DriverSpec:
+    """One driver an op offers (Epic 27, `design/driven-params.md`): a layer
+    sets one of the op's values per pixel instead of one number for the whole
+    image. `kind` is the stable name a document's driver binding carries
+    (`"radius"`); `label` is what the picker says ("Blur follows a layer").
+    Like params, the words live with the op's home backend, never in TypeScript.
+    """
+
+    kind: str
+    label: str
+    description: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": self.kind, "label": self.label}
+        if self.description is not None:
+            d["description"] = self.description
+        return d
+
+
+D = DriverSpec
+"""Short alias used at op-registration call sites (`D("radius", label=...)`)."""
 
 
 # Rec. 709 luma weights — the one definition of "what grey means" shared by
@@ -208,6 +232,10 @@ class Op:
     # An id from `CATEGORIES`; None only for the `debug_` canaries, which no
     # picker shows (a test holds every other op to having one).
     category: str | None = None
+    # What a layer can drive on this op (Epic 27). Empty for almost every op;
+    # `to_dict` leaves the key out then, so an undriven op's wire entry is
+    # exactly what it was before drivers.
+    drivers: list[DriverSpec] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -221,6 +249,8 @@ class Op:
             d["description"] = self.description
         if self.category:
             d["category"] = self.category
+        if self.drivers:
+            d["drivers"] = [driver.to_dict() for driver in self.drivers]
         return d
 
 
@@ -310,6 +340,7 @@ def op(
     description: str = "",
     writes_alpha: bool = False,
     category: str | None = None,
+    drivers: list[DriverSpec] | None = None,
 ) -> Callable[[OpFn], OpFn]:
     """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray.
 
@@ -319,6 +350,13 @@ def op(
     from `name` at serialisation time (see `default_label`). `category` is an
     id from `CATEGORIES`, which groups the op in the Add modifier picker; an
     unknown id raises at registration.
+
+    `drivers` lists what a layer can drive on this op (`D("radius", label=...)`).
+    A driven modifier's fn is called as `fn(img, params, drivers)` with
+    `drivers = {kind: float32 plane in 0..1, shape (h, w)}`, at the cook's size,
+    white meaning the full effect, as masks do. A modifier with no driver
+    attached is called as `fn(img, params)`, exactly as an op that offers none;
+    so a driver-capable fn takes `drivers=None` as its third parameter.
 
     Ops are pure, deterministic (seeded randomness only), same-size RGBA8
     in and out, and never mutate their input. By default they also leave
@@ -331,6 +369,11 @@ def op(
         raise ValueError(
             f"{name}: unknown category {category!r}; known: {[c.id for c in CATEGORIES]}"
         )
+
+    driver_list = list(drivers or [])
+    kinds = [driver.kind for driver in driver_list]
+    if len(set(kinds)) != len(kinds):
+        raise ValueError(f"{name}: duplicate driver kind in {kinds}")
 
     def decorator(fn: OpFn) -> OpFn:
         param_list = params or []
@@ -348,6 +391,7 @@ def op(
             description=description,
             writes_alpha=writes_alpha,
             category=category,
+            drivers=driver_list,
         )
         return fn
 
