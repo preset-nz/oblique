@@ -3,7 +3,13 @@
 //! Reference and statement of the maths: `sidecar/ops/_driven_blur.py`
 //! (module docstring and `driven_blur_reference`). This file replicates it
 //! expression by expression in plain IEEE `f32` (no FMA, no fast-math), so
-//! the bytes match the reference (architecture decision 11a).
+//! the bytes match the reference today. The reference is the reference for the
+//! look; byte identity is a convenience, not a requirement (Georg, 2026-11-07).
+//!
+//! **Boundary.** RGBA in, RGBA out (alpha passes through), and the plane as
+//! the cook's `k / 255` float32, quantised here; no RGB copy, no write-back.
+//! A speckled plane is median-filtered first (`looks_noisy`, `median3`), so
+//! noise cannot spread the pixels over every pyramid level.
 //!
 //! **Method, briefly.** Scatter-as-gather with the min-CoC depth test:
 //! `w(p, q) = G_{min(sigma_p, sigma_q)}(p - q)`. A nearer sample scatters with
@@ -60,6 +66,9 @@ struct Level {
 
 struct Spec {
     levels: usize,
+    noise_step: i32,
+    noise_share: f64,
+    denoise_passes: usize,
     klass: [u8; 256],
     fade: [f32; 256],
     unfade: [f32; 256],
@@ -419,8 +428,89 @@ where
     vals
 }
 
-fn run(rgb: ArrayView3<u8>, v: ArrayView2<u8>, spec: &Spec) -> Array3<u8> {
-    let (h, w) = (v.shape()[0], v.shape()[1]);
+
+/// `rint(p * 255)` clamped, the plane's 8-bit value (the cook sends `k / 255`).
+fn quantise(plane: &[f32]) -> Vec<u8> {
+    plane
+        .par_iter()
+        .map(|&p| (p * 255.0).round_ties_even().clamp(0.0, 255.0) as u8)
+        .collect()
+}
+
+/// Whether the plane is speckled rather than a map: a pixel counts when it
+/// differs by more than `NOISE_STEP` from its right and its lower neighbour at
+/// once. An edge steps along one axis, so it does not count; noise does, on
+/// most pixels. Sampled on every 5th row.
+fn looks_noisy(v: &[u8], w: usize, h: usize, step: i32, share: f64) -> bool {
+    if w < 2 || h < 2 {
+        return false;
+    }
+    let (hits, total) = (0..h - 1)
+        .into_par_iter()
+        .step_by(5)
+        .map(|y| {
+            let (a, b) = (&v[y * w..(y + 1) * w], &v[(y + 1) * w..(y + 2) * w]);
+            let mut n = 0usize;
+            for x in 0..w - 1 {
+                let p = a[x] as i32;
+                if (p - a[x + 1] as i32).abs() > step && (p - b[x] as i32).abs() > step {
+                    n += 1;
+                }
+            }
+            (n, w - 1)
+        })
+        .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    hits as f64 > share * total as f64
+}
+
+/// 3x3 median, edges replicated. A median keeps a step edge where it is, so
+/// a near object stays as sharp as it was drawn; it drops single-pixel speckle.
+fn median3(v: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let r0 = &v[y.saturating_sub(1) * w..][..w];
+        let r1 = &v[y * w..][..w];
+        let r2 = &v[(y + 1).min(h - 1) * w..][..w];
+        for (x, o) in row.iter_mut().enumerate() {
+            let (xl, xr) = (x.saturating_sub(1), (x + 1).min(w - 1));
+            let mut t = [
+                r0[xl], r0[x], r0[xr], r1[xl], r1[x], r1[xr], r2[xl], r2[x], r2[xr],
+            ];
+            // Paeth's 19-exchange network for the median of nine.
+            macro_rules! s {
+                ($i:expr, $j:expr) => {{
+                    let (a, b) = (t[$i], t[$j]);
+                    t[$i] = a.min(b);
+                    t[$j] = a.max(b);
+                }};
+            }
+            s!(1, 2);
+            s!(4, 5);
+            s!(7, 8);
+            s!(0, 1);
+            s!(3, 4);
+            s!(6, 7);
+            s!(1, 2);
+            s!(4, 5);
+            s!(7, 8);
+            s!(0, 3);
+            s!(5, 8);
+            s!(4, 7);
+            s!(3, 6);
+            s!(1, 4);
+            s!(2, 5);
+            s!(4, 7);
+            s!(4, 2);
+            s!(6, 4);
+            s!(4, 2);
+            *o = t[4];
+        }
+    });
+    out
+}
+
+fn run(rgba: ArrayView3<u8>, plane: ArrayView2<f32>, spec: &Spec) -> Array3<u8> {
+    let (h, w) = (plane.shape()[0], plane.shape()[1]);
     let levels = spec.levels;
     let trace = std::env::var_os("OBLIQUE_TRACE").is_some();
     let t0 = std::time::Instant::now();
@@ -430,17 +520,25 @@ fn run(rgb: ArrayView3<u8>, v: ArrayView2<u8>, spec: &Spec) -> Array3<u8> {
         }
     };
 
-    let rgb = rgb.as_standard_layout();
+    let rgb = rgba.as_standard_layout();
     let rgb = rgb.as_slice().expect("contiguous");
-    let v = v.as_standard_layout();
-    let vs: &[u8] = v.as_slice().expect("contiguous");
+    let plane = plane.as_standard_layout();
+    let plane = plane.as_slice().expect("contiguous");
+    let mut v_owned = quantise(plane);
+    for _ in 0..spec.denoise_passes {
+        if !looks_noisy(&v_owned, w, h, spec.noise_step, spec.noise_share) {
+            break;
+        }
+        v_owned = median3(&v_owned, w, h);
+    }
+    let vs: &[u8] = &v_owned;
     let kl_owned: Vec<u8> = vs.par_iter().map(|&x| spec.klass[x as usize]).collect();
     let kl: &[u8] = &kl_owned;
     let col0 = |i: usize| -> Px4 {
         [
-            rgb[3 * i] as f32,
-            rgb[3 * i + 1] as f32,
-            rgb[3 * i + 2] as f32,
+            rgb[4 * i] as f32,
+            rgb[4 * i + 1] as f32,
+            rgb[4 * i + 2] as f32,
             1.0,
         ]
     };
@@ -672,8 +770,8 @@ fn run(rgb: ArrayView3<u8>, v: ArrayView2<u8>, spec: &Spec) -> Array3<u8> {
         [acc[0] / den, acc[1] / den, acc[2] / den]
     };
 
-    let mut out = vec![0u8; w * h * 3];
-    out.par_chunks_mut(w * 3).enumerate().for_each(|(y, orow)| {
+    let mut out = vec![0u8; w * h * 4];
+    out.par_chunks_mut(w * 4).enumerate().for_each(|(y, orow)| {
         for x in 0..w {
             let i = y * w + x;
             let k = kl[i] as usize;
@@ -686,12 +784,13 @@ fn run(rgb: ArrayView3<u8>, v: ArrayView2<u8>, spec: &Spec) -> Array3<u8> {
                 }
             }
             for ch in 0..3 {
-                orow[3 * x + ch] = c[ch].round_ties_even().clamp(0.0, 255.0) as u8;
+                orow[4 * x + ch] = c[ch].round_ties_even().clamp(0.0, 255.0) as u8;
             }
+            orow[4 * x + 3] = rgb[4 * i + 3];
         }
     });
     lap("compose");
-    Array3::from_shape_vec((h, w, 3), out).expect("shape")
+    Array3::from_shape_vec((h, w, 4), out).expect("shape")
 }
 
 // --- Python boundary ---------------------------------------------------------
@@ -709,6 +808,9 @@ fn arr256<T: Copy + numpy::Element>(a: PyReadonlyArray1<T>, name: &str) -> PyRes
 
 fn parse_spec(d: &Bound<'_, PyDict>) -> PyResult<Spec> {
     let levels: usize = get(d, "levels")?.extract()?;
+    let noise_step: i32 = get(d, "noise_step")?.extract()?;
+    let noise_share: f64 = get(d, "noise_share")?.extract()?;
+    let denoise_passes: usize = get(d, "denoise_passes")?.extract()?;
     let klass = arr256(get(d, "klass")?.extract::<PyReadonlyArray1<u8>>()?, "klass")?;
     let fade = arr256(get(d, "fade")?.extract::<PyReadonlyArray1<f32>>()?, "fade")?;
     let unfade = arr256(
@@ -760,6 +862,9 @@ fn parse_spec(d: &Bound<'_, PyDict>) -> PyResult<Spec> {
     }
     Ok(Spec {
         levels,
+        noise_step,
+        noise_share,
+        denoise_passes,
         klass,
         fade,
         unfade,
@@ -768,22 +873,25 @@ fn parse_spec(d: &Bound<'_, PyDict>) -> PyResult<Spec> {
     })
 }
 
-/// `driven_blur(rgb, v, spec) -> rgb`: `rgb` (h, w, 3) uint8, `v` (h, w)
-/// uint8 plane values, `spec` from `ops/_driven_blur.py::build_spec`.
+/// `driven_blur(rgba, plane, spec) -> rgba`: `rgba` (h, w, 4) uint8, `plane`
+/// (h, w) float32 in 0..1 (the cook's driver plane, `k / 255`), `spec` from
+/// `ops/_driven_blur.py::build_spec`. Alpha passes through.
 #[pyfunction]
 fn driven_blur<'py>(
     py: Python<'py>,
-    rgb: PyReadonlyArray3<'py, u8>,
-    v: PyReadonlyArray2<'py, u8>,
+    rgba: PyReadonlyArray3<'py, u8>,
+    plane: PyReadonlyArray2<'py, f32>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyArray3<u8>>> {
     let spec = parse_spec(spec)?;
-    let rgb_v = rgb.as_array();
-    let v_v = v.as_array();
-    if rgb_v.shape()[2] != 3 || rgb_v.shape()[..2] != *v_v.shape() {
-        return Err(PyValueError::new_err("rgb must be (h, w, 3) and v (h, w)"));
+    let rgba_v = rgba.as_array();
+    let plane_v = plane.as_array();
+    if rgba_v.shape()[2] != 4 || rgba_v.shape()[..2] != *plane_v.shape() {
+        return Err(PyValueError::new_err(
+            "rgba must be (h, w, 4) and plane (h, w)",
+        ));
     }
-    let out = py.detach(|| run(rgb_v, v_v, &spec));
+    let out = py.detach(|| run(rgba_v, plane_v, &spec));
     Ok(out.into_pyarray(py))
 }
 

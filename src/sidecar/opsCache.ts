@@ -49,6 +49,18 @@ export interface OpDescriptor {
    * browsing (`colour`, `film`). Groups the Add modifier picker. Absent for
    * ops the sidecar hasn't categorised; the picker lists those under "Other". */
   category?: string;
+  /** What a layer can drive on this op (Epic 27): each is one `kind` a modifier's driver may
+   * carry. Absent for an op that offers none. */
+  drivers?: OpDriverSpec[];
+}
+
+/** One driver an op offers, as `list_ops` reports it. */
+export interface OpDriverSpec {
+  /** What a document's driver binding carries (`radius`). */
+  kind: string;
+  /** What the options popover says ("Blur follows a layer"). */
+  label?: string;
+  description?: string;
 }
 
 /** One op category as `list_ops` reports it. The sidecar's list is in picker

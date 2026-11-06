@@ -18,7 +18,8 @@
  * - **Modifiers and masks** (story 4): `removeModifier`, `reorderModifier`, `setModifierParam`,
  *   `setModifierEnabled`, `setModifierVectorMask`, `setModifierPixelMask` (layer-as-driver.md,
  *   `mask.attach_layer`), `removeModifierMask` and `setMaskSpace` are
- *   commands-first (`modifier.*`, `mask.*`); a param or mask-number scrub inside a gesture is
+ *   commands-first (`modifier.*`, `mask.*`), and so are `setModifierDriver` and
+ *   `removeModifierDriver` (Epic 27, `driver.attach`, `driver.detach`); a param or mask-number scrub inside a gesture is
  *   latest-wins, so one drag is one undo step. Their update changes the store through the
  *   original actions (`applyModifierEcho`), so the dirty rules hold. `addModifier`,
  *   `applyMarqueeAsVectorMask` and `saveMarqueeAsSelection` are local first: the caller uses the id, or the new layer, at once.
@@ -74,7 +75,7 @@
  */
 import { notify, type SnackbarOptions } from '@preset.nz/ux-kit';
 import { bindProjectMeta } from '@/project/projectMeta';
-import { driverRefusal } from '@/scene/maskInputs';
+import { driverRefusal, followRefusal } from '@/scene/maskInputs';
 import { restoreScene } from '@/scene/restore';
 import { useSceneStore } from '@/scene/store';
 import { setTransactionBackend } from '@/scene/transaction';
@@ -196,21 +197,35 @@ const REPEAT_TOAST_MS = 2000;
  * object model needs, with absent fields left out rather than null.
  */
 function catalogue(ops: unknown[]): unknown[] {
-  return (ops as { name: string; label?: string; params?: Record<string, unknown>[] }[]).map(
-    (op) => ({
-      name: op.name,
-      label: op.label ?? undefined,
-      params: (op.params ?? []).map((p) => ({
-        name: p.name,
-        label: p.label ?? undefined,
-        type: p.type,
-        default: p.default ?? undefined,
-        min: p.min ?? undefined,
-        max: p.max ?? undefined,
-        choices: p.choices ?? undefined,
-      })),
-    }),
-  );
+  return (
+    ops as {
+      name: string;
+      label?: string;
+      params?: Record<string, unknown>[];
+      drivers?: Record<string, unknown>[];
+    }[]
+  ).map((op) => ({
+    name: op.name,
+    label: op.label ?? undefined,
+    // what a layer can drive (Epic 27): without it the op has no `driver` slot in the tree,
+    // `driver.attach` refuses, and a saved driver binding is dropped on open
+    drivers: op.drivers?.length
+      ? op.drivers.map((d) => ({
+          kind: d.kind,
+          label: d.label ?? undefined,
+          description: d.description ?? undefined,
+        }))
+      : undefined,
+    params: (op.params ?? []).map((p) => ({
+      name: p.name,
+      label: p.label ?? undefined,
+      type: p.type,
+      default: p.default ?? undefined,
+      min: p.min ?? undefined,
+      max: p.max ?? undefined,
+      choices: p.choices ?? undefined,
+    })),
+  }));
 }
 
 const isCommitted = (ran: Ran): ran is { committed: { seq: number; label: string } } =>
@@ -368,6 +383,8 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     setModifierVectorMask: stateNow().setModifierVectorMask,
     setModifierPixelMask: stateNow().setModifierPixelMask,
     removeModifierMask: stateNow().removeModifierMask,
+    setModifierDriver: stateNow().setModifierDriver,
+    removeModifierDriver: stateNow().removeModifierDriver,
     setMaskSpace: stateNow().setMaskSpace,
     applyMarqueeAsVectorMask: stateNow().applyMarqueeAsVectorMask,
     saveMarqueeAsSelection: stateNow().saveMarqueeAsSelection,
@@ -596,6 +613,40 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       if (!editable(nodeId, modId)?.maskId) return;
       sendCommand('mask.detach', { at: modifierPath(nodeId, modId) });
     },
+    setModifierDriver: (nodeId, modId, driverNodeId, driver) => {
+      if (!editable(nodeId, modId)) return false;
+      // Refused here with the reason, as the mask is; Rust refuses the same
+      const s = scene();
+      const refusal = followRefusal(
+        nodeId,
+        driverNodeId,
+        (id) => s.nodes.find((n) => n.id === id),
+        (id) => s.maskRefs?.[id],
+      );
+      if (refusal) {
+        deps.notify({
+          kind: 'warning',
+          message: "That layer can't drive this setting",
+          description: refusal,
+        });
+        return false;
+      }
+      // its own scrub key, so a mask scrub and a driver scrub on one modifier stay two steps
+      sendScrub(`driver:${nodeId}:${modId}`, 'driver.attach', {
+        at: modifierPath(nodeId, modId),
+        kind: driver.kind,
+        source: layerPath(driverNodeId),
+        channel: driver.channel,
+        low: driver.low,
+        high: driver.high,
+        invert: driver.invert,
+      });
+      return true;
+    },
+    removeModifierDriver: (nodeId, modId) => {
+      if (!editable(nodeId, modId)?.driver) return;
+      sendCommand('driver.detach', { at: modifierPath(nodeId, modId) });
+    },
     setMaskSpace: (nodeId, modId, space) => {
       const maskId = editable(nodeId, modId)?.maskId;
       const ref = maskId ? scene().maskRefs?.[maskId] : undefined;
@@ -776,6 +827,13 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
           const { id: _id, nodeId: source, ...numbers } = ref;
           original.setModifierVectorMask(nodeId, w.id, source, numbers);
         }
+      }
+      // the driver (Epic 27): taken off, put on, or its numbers changed
+      if (!w.driver) {
+        if (have.driver) original.removeModifierDriver(nodeId, w.id);
+      } else if (firstDifference(have.driver, w.driver) !== null) {
+        const { nodeId: layer, ...numbers } = w.driver;
+        original.setModifierDriver(nodeId, w.id, layer, numbers);
       }
     }
   }

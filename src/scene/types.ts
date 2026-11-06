@@ -19,6 +19,12 @@ export interface Modifier {
   enabled: boolean;
   params: Record<string, number | string | boolean>;
   maskId?: string; // resolves against Scene.maskRefs (vector-modifier-masks.md); per-MODIFIER scope, deliberately not per-node
+  /**
+   * A layer that sets one of the op's values per pixel (Epic 27, blur-radius.md): "Blur follows a
+   * layer". Held on the modifier itself, not in `maskRefs`: a modifier has at most one, and it
+   * may sit beside a mask. See `ModifierDriver`.
+   */
+  driver?: ModifierDriver;
 }
 
 /**
@@ -93,6 +99,19 @@ export interface PixelMaskRef {
   space?: never;
   attachTransform?: never;
 }
+
+/**
+ * A modifier's driver (Epic 27): the layer `nodeId`'s cooked raster, read as `channel` through
+ * `low` and `high` and then inverted or not, the same reading as a `PixelMaskRef`'s. `kind`
+ * names which of the op's drivers it is (`OpDescriptor.drivers`, `radius` for Gaussian Blur).
+ * Always document-space, like a pixel mask.
+ */
+export type ModifierDriver = Pick<
+  PixelMaskRef,
+  'nodeId' | 'channel' | 'low' | 'high' | 'invert'
+> & {
+  kind: string;
+};
 
 /** What `Modifier.maskId` resolves to: a shape (vector or text layer) or a pixel layer. */
 export type MaskRef = VectorMaskRef | PixelMaskRef;

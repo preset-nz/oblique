@@ -547,6 +547,31 @@ describe('starting', () => {
   });
 });
 
+describe('starting: drivers', () => {
+  it('forwards what an op lets a layer drive, so the tree has its driver slot', async () => {
+    await setup([], false);
+    await rhizome.start([
+      {
+        name: 'blur',
+        label: 'Blur',
+        backend: 'python',
+        params: [],
+        drivers: [{ kind: 'radius', label: 'Blur follows a layer', description: null }],
+      },
+      { name: 'invert', label: 'Invert', backend: 'python', params: [] },
+    ] as never);
+    expect(JSON.parse(JSON.stringify(host.inited))).toEqual([
+      {
+        name: 'blur',
+        label: 'Blur',
+        params: [],
+        drivers: [{ kind: 'radius', label: 'Blur follows a layer' }],
+      },
+      { name: 'invert', label: 'Invert', params: [] },
+    ]);
+  });
+});
+
 describe('gestures and undo', () => {
   it('a transaction is a rhizome gesture, and the drag inside it one undo step', async () => {
     await setup([pixel('a')]);
@@ -1289,6 +1314,7 @@ describe('modifiers and masks (modifier.*, mask.*)', () => {
       name: 'blur',
       label: 'Blur',
       backend: 'python',
+      drivers: [{ kind: 'radius', label: 'Blur follows a layer' }],
       params: [
         { name: 'radius', type: 'float', default: 5, min: 0, max: 100, scale: 'none' },
         { name: 'mode', type: 'enum', default: 'soft', choices: ['soft', 'hard'], scale: 'none' },
@@ -1801,6 +1827,178 @@ describe('modifiers and masks (modifier.*, mask.*)', () => {
       expect(node('d')).toBeDefined();
       expect(maskRefs().mod2).toEqual({ id: 'mod2', kind: 'pixel', nodeId: 'd', ...numbers });
       await agrees();
+    });
+  });
+
+  describe('Blur follows a layer (driver.attach, Epic 27)', () => {
+    /** Photo `m` with a blur `mod1` and a sharpen `mod2`, and a depth layer `d`. */
+    const scene = () => ({
+      nodes: [
+        pixel('d', {
+          label: 'Depth',
+          visible: false,
+          modifiers: [{ id: 'dm', type: 'blur', enabled: true, params: { radius: 2 } }],
+        }),
+        pixel('m', {
+          label: 'Photo',
+          modifiers: [
+            { id: 'mod1', type: 'blur', enabled: true, params: { radius: 12 } },
+            { id: 'mod2', type: 'sharpen', enabled: true, params: {} },
+          ],
+        }),
+      ],
+      extra: {},
+    });
+    const numbers = { channel: 'luminance' as const, low: 0.2, high: 0.8, invert: true };
+    const radius = { kind: 'radius', ...numbers };
+
+    it('commands first: sends driver.attach, the store follows the update, and agrees', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      expect(state().setModifierDriver('m', 'mod1', 'd', radius)).toBe(true);
+      expect(modifiers('m')[0].driver).toBeUndefined(); // nothing local yet
+      await settle();
+      expect(sent()).toEqual(['driver.attach']);
+      expect(host.runs[0].payload).toEqual({
+        at: '/layers/m/mod1',
+        source: '/layers/d',
+        ...radius,
+      });
+      expect(modifiers('m')[0].driver).toEqual({ nodeId: 'd', ...radius });
+      expect(modifiers('m')[0].maskId).toBeUndefined(); // a driver is not a mask
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+      await undo();
+      expect(modifiers('m')[0].driver).toBeUndefined();
+      await agrees();
+      await redo();
+      expect(modifiers('m')[0].driver).toEqual({ nodeId: 'd', ...radius });
+      await agrees();
+    });
+
+    it('a Low scrub inside a gesture is one undo step', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      transaction.beginTransaction();
+      for (const low of [0.3, 0.4, 0.5]) {
+        state().setModifierDriver('m', 'mod1', 'd', { ...radius, low });
+      }
+      transaction.endTransaction();
+      await settle();
+      expect(modifiers('m')[0].driver).toMatchObject({ low: 0.5 });
+      await agrees();
+      await undo();
+      expect(modifiers('m')[0].driver).toMatchObject({ low: 0.2 });
+      await agrees();
+    });
+
+    it('refuses a cycle with the reason and sends nothing', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('d', 'dm', 'm', radius); // Depth's blur follows Photo
+      await settle();
+      host.runs.length = 0;
+      expect(state().setModifierDriver('m', 'mod1', 'd', radius)).toBe(false);
+      expect(state().setModifierDriver('m', 'mod1', 'm', radius)).toBe(false);
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'warning',
+          description: expect.stringContaining('already takes its look from'),
+        }),
+      );
+    });
+
+    it('Rust refuses a kind the op does not offer, and the store stays as it was', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('m', 'mod2', 'd', radius); // Sharpen offers none
+      await settle();
+      expect(modifiers('m')[1].driver).toBeUndefined();
+      await agrees();
+    });
+
+    it('sits beside a mask on one modifier, and each comes off alone', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierPixelMask('m', 'mod1', 'd', numbers);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      expect(modifiers('m')[0].maskId).toBe('mod1');
+      expect(modifiers('m')[0].driver).toBeDefined();
+      await agrees();
+      state().removeModifierDriver('m', 'mod1');
+      await settle();
+      expect(modifiers('m')[0].driver).toBeUndefined();
+      expect(maskRefs().mod1).toMatchObject({ kind: 'pixel', nodeId: 'd' });
+      await agrees();
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      state().removeModifierMask('m', 'mod1');
+      await settle();
+      expect(modifiers('m')[0].maskId).toBeUndefined();
+      expect(modifiers('m')[0].driver).toBeDefined();
+      await agrees();
+    });
+
+    it('Stop following sends driver.detach, one undo step, and nothing for a modifier that follows none', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().removeModifierDriver('m', 'mod1');
+      await settle();
+      expect(host.runs).toHaveLength(0);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      state().removeModifierDriver('m', 'mod1');
+      await settle();
+      expect(sent()).toEqual(['driver.attach', 'driver.detach']);
+      expect(modifiers('m')[0].driver).toBeUndefined();
+      await undo();
+      expect(modifiers('m')[0].driver).toEqual({ nodeId: 'd', ...radius });
+      await agrees();
+    });
+
+    it('deleting the driver layer drops the driver; one undo brings both back', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      state().removeNode('d');
+      await settle();
+      expect(node('d')).toBeUndefined();
+      expect(modifiers('m')[0].driver).toBeUndefined();
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
+      await agrees();
+      await undo();
+      expect(node('d')).toBeDefined();
+      expect(modifiers('m')[0].driver).toEqual({ nodeId: 'd', ...radius });
+      await agrees();
+    });
+
+    it('a duplicate keeps the driver, and a mask beside it keeps its own ref', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      const copy = state().duplicateNode('m') as string;
+      await settle();
+      expect(modifiers(copy)[0].driver).toEqual({ nodeId: 'd', ...radius });
+      await agrees();
+    });
+
+    it('moving the driver layer recooks the consumer', async () => {
+      const { nodes, extra } = scene();
+      await withOps(nodes, extra);
+      state().setModifierDriver('m', 'mod1', 'd', radius);
+      await settle();
+      state().clearDirty('m', 'draft');
+      state().clearDirty('m', 'working');
+      state().setNodeTransform('d', T(40));
+      await settle();
+      expect(node('m')?.dirty).toEqual({ draft: true, working: true });
     });
   });
 

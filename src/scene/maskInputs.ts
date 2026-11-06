@@ -5,6 +5,7 @@ import {
   isVectorNode,
   type MaskRef,
   type Modifier,
+  type ModifierDriver,
   type SceneNode,
 } from '@/scene/types';
 
@@ -44,6 +45,35 @@ export function resolvedMaskInput(
   rasterKey?: DriverRasterKey,
 ): unknown {
   return resolveIn(maskId, getRef, getNode, rasterKey, new Set());
+}
+
+/**
+ * What a modifier's driver (Epic 27) resolves to, as cook inputs: its numbers plus everything
+ * its layer's raster comes from, as for a pixel mask (`driverInputs`). Folded into the same
+ * three places `resolvedMaskInput` is: the prefix descriptors, cook.ts's race guard and
+ * `restore.ts`'s `cookAffectingChanged`. `null` for a modifier with no driver.
+ */
+export function resolvedDriverInput(
+  driver: ModifierDriver | undefined,
+  getRef: GetRef,
+  getNode: GetNode,
+  rasterKey?: DriverRasterKey,
+): unknown {
+  return resolveDriverIn(driver, getRef, getNode, rasterKey, new Set());
+}
+
+function resolveDriverIn(
+  driver: ModifierDriver | undefined,
+  getRef: GetRef,
+  getNode: GetNode,
+  rasterKey: DriverRasterKey | undefined,
+  seen: Set<string>,
+): unknown {
+  if (!driver) return null;
+  return {
+    driver,
+    layer: driverInputs(getNode(driver.nodeId), getRef, getNode, rasterKey, seen),
+  };
 }
 
 function resolveIn(
@@ -98,6 +128,10 @@ function driverInputs(
     state: driver.state,
     modifiers: driver.modifiers,
     masks: driver.modifiers.map((m) => resolveIn(m.maskId, getRef, getNode, rasterKey, inner)),
+    // the driver's own drivers (Epic 27): its raster comes from them too
+    drivers: driver.modifiers.map((m) =>
+      resolveDriverIn(m.driver, getRef, getNode, rasterKey, inner),
+    ),
     raster: rasterKey ? (rasterKey(driver.id) ?? null) : undefined,
   };
 }
@@ -114,6 +148,8 @@ function driverInputs(
  */
 export function hasDocumentPinnedMask(modifiers: Modifier[], getRef: GetRef): boolean {
   return modifiers.some((m) => {
+    // a driver (Epic 27) is a pixel layer, always sampled where it sits on the page
+    if (m.driver) return true;
     const ref = m.maskId ? getRef(m.maskId) : undefined;
     if (ref === undefined) return false;
     return isPixelMaskRef(ref) || ref.space !== 'node';
@@ -123,8 +159,9 @@ export function hasDocumentPinnedMask(modifiers: Modifier[], getRef: GetRef): bo
 // ---------------------------------------------------------------- the driver graph
 
 /**
- * The pixel layers whose cooked raster `node`'s cook reads (layer-as-driver.md): one per
- * modifier masked by a pixel driver, in modifier order, no repeats. Disabled modifiers count:
+ * The pixel layers whose cooked raster `node`'s cook reads (layer-as-driver.md, Epic 27): one
+ * per modifier masked by a pixel driver, and one per modifier a layer drives, in modifier
+ * order, no repeats. Disabled modifiers count:
  * enabling one must not be able to close a cycle, and waiting on a driver a disabled modifier
  * names only costs order.
  */
@@ -133,6 +170,7 @@ export function pixelDriversOf(node: SceneNode, getRef: GetRef): string[] {
   for (const m of node.modifiers) {
     const ref = m.maskId ? getRef(m.maskId) : undefined;
     if (isPixelMaskRef(ref) && !out.includes(ref.nodeId)) out.push(ref.nodeId);
+    if (m.driver && !out.includes(m.driver.nodeId)) out.push(m.driver.nodeId);
   }
   return out;
 }
@@ -180,6 +218,28 @@ export function driverRefusal(
   if (driverId === consumerId) return "A layer can't drive a mask on its own modifiers.";
   if (dependsOnLayer(driverId, consumerId, getNode, getRef)) {
     return `“${driver.label}” already takes a mask from this layer, so it can't drive one here.`;
+  }
+  return null;
+}
+
+/**
+ * Why `driverId` can't be followed by one of `consumerId`'s modifiers (Epic 27), or `null` when
+ * it can: the same cycle check as `driverRefusal`, worded for a driver. Rust's `driver.attach`
+ * refuses the same cases (`follow_refusal` in document/mod.rs); this copy is what the panel
+ * shows beside the layer before anything is sent.
+ */
+export function followRefusal(
+  consumerId: string,
+  driverId: string,
+  getNode: GetNode,
+  getRef: GetRef,
+): string | null {
+  const driver = getNode(driverId);
+  if (!driver || !isPixelNode(driver)) return 'Only a pixel layer can drive a setting.';
+  if (driverId === consumerId) return "A layer can't drive its own modifiers.";
+  if (dependsOnLayer(driverId, consumerId, getNode, getRef)) {
+    const consumer = getNode(consumerId);
+    return `“${driver.label}” already takes its look from “${consumer?.label ?? ''}”, so “${consumer?.label ?? ''}” can't follow it.`;
   }
   return null;
 }

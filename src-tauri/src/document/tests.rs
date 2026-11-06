@@ -4968,3 +4968,45 @@ fn an_op_s_drivers_come_across_from_list_ops_and_default_to_none() {
     assert_eq!(slots("op.gaussian_blur"), ["mask", "driver"]);
     assert_eq!(slots("op.invert"), ["mask"]);
 }
+
+/// The trap behind Epic 27's webview half: the tree has a `driver` slot only for an op the
+/// catalogue says offers one. A saved driver binding opened under a catalogue that doesn't (the
+/// webview forgot to forward `drivers`, or the sidecar is older) is dropped with a reason, the
+/// layer and its modifier still load, and the document is otherwise as it was.
+#[test]
+fn a_saved_driver_is_dropped_with_a_reason_when_the_op_has_no_driver_slot() {
+    let store = MemoryStore::default();
+    let mut d =
+        Document::<Oblique>::new_in(catalogue(), store.clone(), IdSource::sequential()).unwrap();
+    with_modifiers(&mut d, &["m1"]);
+    add(&mut d, node("depth", "pixel")).unwrap();
+    follow(&mut d, "/layers/a/m1", "/layers/depth", 0.3, 0.9).unwrap();
+    d.save_as("/mem/followed").unwrap();
+
+    let without = Arc::new(Catalogue(vec![Op {
+        name: "blur".into(),
+        label: None,
+        description: None,
+        category: None,
+        drivers: vec![],
+        params: catalogue().0[0].params.clone(),
+    }]));
+    let (back, report) = Document::<Oblique>::open_in(
+        without,
+        store,
+        "/mem/followed.oblique",
+        IdSource::sequential(),
+    )
+    .unwrap();
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| i.path.ends_with("/m1") && i.message.contains("driver")),
+        "{:?}",
+        report.issues
+    );
+    assert!(driver_slot(&back, "/layers/a/m1").is_empty());
+    assert!(back.tree().at("/layers/a/m1").is_some());
+    assert!(back.tree().at("/layers/depth").is_some());
+}

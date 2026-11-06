@@ -36,6 +36,8 @@ export const ON_RHIZOME = [
   'setModifierVectorMask',
   'setModifierPixelMask',
   'removeModifierMask',
+  'setModifierDriver',
+  'removeModifierDriver',
   'setMaskSpace',
   'applyMarqueeAsVectorMask',
   'saveMarqueeAsSelection',

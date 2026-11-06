@@ -2,67 +2,60 @@ import { Icons } from '@preset.nz/ux-kit';
 import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { driverRefusal } from '@/scene/maskInputs';
 import { useSceneStore } from '@/scene/store';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
-import {
-  isPixelMaskRef,
-  isPixelNode,
-  type Modifier,
-  type PixelMaskRef,
-  type SceneNode,
-} from '@/scene/types';
+import { isPixelNode, type PixelMaskRef } from '@/scene/types';
+
+/** How a driver layer is read: the channel, the levels and Invert. A mask's and a driver's alike. */
+export type LayerReading = Pick<PixelMaskRef, 'channel' | 'low' | 'high' | 'invert'>;
 
 /** What a new layer mask starts with: luminance, the full range, not inverted. */
-export const DEFAULT_LAYER_MASK: Omit<PixelMaskRef, 'id' | 'nodeId' | 'kind'> = {
+export const DEFAULT_LAYER_MASK: LayerReading = {
   channel: 'luminance',
   low: 0,
   high: 1,
   invert: false,
 };
 
-interface Props {
-  node: SceneNode;
-  modifier: Modifier;
+interface PickerProps {
+  /** Why a layer can't be picked (the cycle rule, worded for what is being attached), or null. */
+  refusal: (layerId: string) => string | null;
+  /** The reading already in place, kept when another layer is picked; else `DEFAULT_LAYER_MASK`. */
+  current: LayerReading | undefined;
   locked: boolean;
+  onPick: (layerId: string, reading: LayerReading) => void;
   onPicked: () => void;
 }
 
 /**
- * "Mask from layer" (layer-as-driver.md): every pixel layer, hidden ones too (a hidden layer
- * still drives). A layer that would close a cycle stays in the list, disabled, with the reason
- * under it. Picking one keeps the channel, levels and invert of the layer mask the modifier
- * already has, else starts from `DEFAULT_LAYER_MASK`.
+ * The layer picker behind "Mask from layer" and "Blur follows a layer" (layer-as-driver.md,
+ * Epic 27): every pixel layer, hidden ones too (a hidden layer still drives). A layer that would
+ * close a cycle stays in the list, disabled, with the reason under it. Picking one keeps the
+ * channel, levels and invert already in place, else starts from `DEFAULT_LAYER_MASK`. What is
+ * attached, and the cycle rule's wording, come from the caller.
  */
-export function LayerMaskPicker({ node, modifier, locked, onPicked }: Props) {
-  const setModifierPixelMask = useSceneStore((s) => s.setModifierPixelMask);
+export function LayerMaskPicker({ refusal, current, locked, onPick, onPicked }: PickerProps) {
   const scene = useSceneStore((s) => s.scene);
-  const current = modifier.maskId ? scene.maskRefs?.[modifier.maskId] : undefined;
-  const getNode = (id: string) => scene.nodes.find((n) => n.id === id);
-  const getRef = (id: string) => scene.maskRefs?.[id];
 
-  function pick(driverId: string) {
+  function pick(layerId: string) {
     if (locked) return;
-    const numbers = isPixelMaskRef(current)
-      ? { channel: current.channel, low: current.low, high: current.high, invert: current.invert }
-      : DEFAULT_LAYER_MASK;
-    setModifierPixelMask(node.id, modifier.id, driverId, numbers);
+    onPick(layerId, current ?? DEFAULT_LAYER_MASK);
     onPicked();
   }
 
   return (
     <div className="ml-4 flex flex-col gap-1 border-l border-neutral-800 pl-2">
       {scene.nodes.filter(isPixelNode).map((layer) => {
-        const refusal = driverRefusal(node.id, layer.id, getNode, getRef);
+        const why = refusal(layer.id);
         return (
           <button
             key={layer.id}
             type="button"
-            disabled={refusal !== null}
+            disabled={why !== null}
             className="flex flex-col rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:hover:bg-transparent"
             onClick={() => pick(layer.id)}
           >
-            <span className={`truncate ${refusal ? 'opacity-40' : ''}`}>
+            <span className={`truncate ${why ? 'opacity-40' : ''}`}>
               {layer.visible ? (
                 <Icons.ImageIcon size={12} className="mr-1 inline" />
               ) : (
@@ -70,7 +63,7 @@ export function LayerMaskPicker({ node, modifier, locked, onPicked }: Props) {
               )}
               {layer.label}
             </span>
-            {refusal && <span className="text-[10px] text-neutral-500">{refusal}</span>}
+            {why && <span className="text-[10px] text-neutral-500">{why}</span>}
           </button>
         );
       })}
@@ -79,45 +72,43 @@ export function LayerMaskPicker({ node, modifier, locked, onPicked }: Props) {
 }
 
 /**
- * The live settings of a layer mask: which channel of the driver is read, the levels that map
- * to no effect (Low) and full effect (High), and Invert. Each edits the ref in place, so the
- * consumer recooks as the value moves; a scrub is one undo step.
+ * The live settings of a driver layer, a mask's or an op's: which channel is read, the levels
+ * that map to no effect (Low) and full effect (High), and Invert. Each edits the binding in
+ * place through `onChange`, so the consumer recooks as the value moves; a scrub is one undo step.
+ * `caption` is the line over the controls ("Driven by ...").
  */
 export function LayerMaskSettings({
-  node,
-  modifier,
-  maskRef,
+  idPrefix,
+  layerId,
+  reading,
   locked,
+  caption,
+  onChange,
 }: {
-  node: SceneNode;
-  modifier: Modifier;
-  maskRef: PixelMaskRef;
+  /** Keeps the Invert checkbox's id apart from another reading on the same modifier. */
+  idPrefix: string;
+  layerId: string;
+  reading: LayerReading;
   locked: boolean;
+  caption: string;
+  onChange: (next: LayerReading) => void;
 }) {
-  const setModifierPixelMask = useSceneStore((s) => s.setModifierPixelMask);
-  const driver = useSceneStore((s) => s.scene.nodes.find((n) => n.id === maskRef.nodeId));
+  const driver = useSceneStore((s) => s.scene.nodes.find((n) => n.id === layerId));
 
-  function set(patch: Partial<Omit<PixelMaskRef, 'id' | 'nodeId' | 'kind'>>) {
+  function set(patch: Partial<LayerReading>) {
     if (locked) return;
-    const { channel, low, high, invert } = maskRef;
-    setModifierPixelMask(node.id, modifier.id, maskRef.nodeId, {
-      channel,
-      low,
-      high,
-      invert,
-      ...patch,
-    });
+    onChange({ ...reading, ...patch });
   }
 
   return (
     <div className={`flex flex-col gap-1 px-2 py-1 ${locked ? 'opacity-40' : ''}`}>
       <span className="truncate text-xs text-neutral-400">
-        Driven by {driver ? `“${driver.label}”` : 'a missing layer'}
+        {caption} {driver ? `“${driver.label}”` : 'a missing layer'}
       </span>
       <ToggleGroup
         size="sm"
         spacing={0}
-        value={[maskRef.channel]}
+        value={[reading.channel]}
         disabled={locked}
         onValueChange={([next]) => {
           if (next === 'luminance' || next === 'alpha') set({ channel: next });
@@ -133,7 +124,7 @@ export function LayerMaskSettings({
       <InputNumber
         label="Low"
         description="The level of the driver that gives no effect."
-        value={maskRef.low}
+        value={reading.low}
         min={0}
         max={1}
         step={0.01}
@@ -145,7 +136,7 @@ export function LayerMaskSettings({
       <InputNumber
         label="High"
         description="The level of the driver that gives the full effect."
-        value={maskRef.high}
+        value={reading.high}
         min={0}
         max={1}
         step={0.01}
@@ -154,15 +145,12 @@ export function LayerMaskSettings({
         onDragEnd={endTransaction}
         onChange={(high) => set({ high })}
       />
-      <label
-        htmlFor={`layer-mask-invert-${modifier.id}`}
-        className="flex items-center gap-2 text-xs"
-      >
+      <label htmlFor={`${idPrefix}-invert`} className="flex items-center gap-2 text-xs">
         <Checkbox
-          id={`layer-mask-invert-${modifier.id}`}
+          id={`${idPrefix}-invert`}
           className="border-neutral-500"
           disabled={locked}
-          checked={maskRef.invert}
+          checked={reading.invert}
           onCheckedChange={(checked) => set({ invert: checked === true })}
         />
         Invert

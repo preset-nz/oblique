@@ -15,6 +15,7 @@
 //!
 //! - `depth-map`: Create Depth Map (Epic 17 story 5).
 //! - `layer-as-driver`: a depth layer drives a blur on the photo (Epic 17 story 6).
+//! - `blur-radius`: the same scene twice, masked and driven (Epic 27 story 1).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -25,7 +26,7 @@ use rhizome_core::IdSource;
 use rhizome_pom::{Document, MemoryStore};
 use serde_json::{json, Value as Json};
 
-use super::{Catalogue, Oblique, Op, OpParam};
+use super::{Catalogue, Oblique, Op, OpDriver, OpParam};
 
 const SIZE: (u32, u32) = (640, 480);
 
@@ -407,6 +408,136 @@ fn layer_as_driver_fixture() {
     }
 }
 
+// ---- blur radius ----
+
+const BLUR_RADIUS_NOTES: &str = "\
+Blur radius window check (Epic 27 story 1). `just fixtures blur-radius` writes this file again.
+
+0. Open a fresh copy (`just window-check blur-radius`). The scene is there twice, 640 px each. On the left, Photo (masked) has a Gaussian Blur (radius 24) with its mask from Depth (masked): the old way, one blurred copy faded in. On the right, Photo (driven) has the same blur, but its radius follows Depth (driven) (Blur follows a layer). Both depth layers are hidden, near white, and both have Invert on.
+a. Compare the hills behind the sphere. On the left the middle distance is half sharp and half blurred, a ghost. On the right the radius grows smoothly with distance: the hills are less blurred than the sky, with no sharp-plus-ghost double.
+b. Look at the red box at the front on each side. On the right its edge is crisp against the blurred ground behind it, with no halo of background spreading over it.
+c. Open the options (the three dots) of the right blur. Its Blur follows a layer section reads Following “Depth (driven)”, Luminance, Low 0, High 1, Invert on. Scrub Low up: more of the far scene gets the full radius, live. Scrub High down: more of the near scene goes fully sharp. Untick Invert: the box blurs and the sky goes sharp. One undo takes back each scrub whole. Put them back (Low 0, High 1, Invert on).
+d. Select Depth (driven) and add an Invert modifier to it, with it still hidden. The right picture flips (box blurred, sky sharp) with no change to Photo (driven)'s own stack. Remove the Invert modifier: it flips back.
+e. Show Depth (driven), move it right a good distance, hide it again. The sharp region on the right moves with it. Undo the move: it comes back.
+f. Change the right blur's Radius: the radius scales the whole result, and a mask on it (Mask from layer, from any layer) blends the driven result.
+g. In the options, Blur follows a layer lists Photo (driven) greyed, with the reason (a layer can't drive its own modifiers). Add a Gaussian Blur to Depth (driven) and choose Blur follows a layer on it: Photo (driven) is greyed there, with the reason (it already takes its look from Depth (driven)). Remove Depth (driven)'s blur.
+h. Choose Stop following in the right blur's options: the whole right picture takes the full radius. One undo brings the driver back.
+i. Delete Depth (driven): the right picture takes the full radius and the blur's options no longer show a followed layer. One undo brings back Depth (driven) and the driver together.
+j. Save, close and reopen the file: both pictures, the driver and its numbers are as they were.";
+
+/// `list_ops`' `gaussian_blur` as the sidecar declares it now, drivers and all
+/// (sidecar/ops/gaussian_blur.py). `blur_catalogue` stays as it was, so `layer-as-driver.oblique`
+/// does not change.
+fn driven_blur_catalogue() -> Catalogue {
+    let mut op = blur_catalogue().0.remove(0);
+    op.drivers = vec![OpDriver {
+        kind: "radius".into(),
+        label: Some("Blur follows a layer".into()),
+        description: None,
+    }];
+    Catalogue(vec![op])
+}
+
+/// A layer `x` px to the right of the origin.
+fn layer_at(id: &str, label: &str, source: &str, visible: bool, x: f64) -> Json {
+    let mut l = layer(id, label, source, visible);
+    l["transform2d"] = json!({"x": x, "y": 0.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0});
+    l
+}
+
+fn blur_radius_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(driven_blur_catalogue()),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run(
+        "document.set_size",
+        &json!({"size": [(SIZE.0 * 2) as f64, SIZE.1 as f64]}),
+    )
+    .unwrap();
+    d.run("document.set_note", &json!({"note": BLUR_RADIUS_NOTES}))
+        .unwrap();
+    let photo_path = "blur-radius.assets/photo.png";
+    let depth_path = "blur-radius.assets/depth.png";
+    let blur = |id: &str| {
+        json!([{"id": id, "type": "gaussian_blur", "enabled": true, "params": {"radius": 24.0}}])
+    };
+    let mut masked = layer_at("photo-masked", "Photo (masked)", photo_path, true, 0.0);
+    masked["modifiers"] = blur("blur-masked");
+    let mut driven = layer_at(
+        "photo-driven",
+        "Photo (driven)",
+        photo_path,
+        true,
+        SIZE.0 as f64,
+    );
+    driven["modifiers"] = blur("blur-driven");
+    // each new layer lands on top, so the bottom one is added first
+    for node in [
+        masked,
+        layer_at("depth-masked", "Depth (masked)", depth_path, false, 0.0),
+        driven,
+        layer_at(
+            "depth-driven",
+            "Depth (driven)",
+            depth_path,
+            false,
+            SIZE.0 as f64,
+        ),
+    ] {
+        d.run("layer.add", &json!({ "node": node })).unwrap();
+    }
+    d.run(
+        "mask.attach_layer",
+        &json!({"at": "/layers/photo-masked/blur-masked", "source": "/layers/depth-masked",
+                "channel": "luminance", "low": 0.0, "high": 1.0, "invert": true}),
+    )
+    .unwrap();
+    d.run(
+        "driver.attach",
+        &json!({"at": "/layers/photo-driven/blur-driven", "kind": "radius",
+                "source": "/layers/depth-driven",
+                "channel": "luminance", "low": 0.0, "high": 1.0, "invert": true}),
+    )
+    .unwrap();
+    d.tree().serialise()
+}
+
+fn write_blur_radius_pictures() {
+    let dir = fixtures_dir();
+    encode(
+        &dir.join("blur-radius.assets/photo.png"),
+        png::ColorType::Rgb,
+        png::BitDepth::Eight,
+        &photo(),
+    )
+    .unwrap();
+    encode(
+        &dir.join("blur-radius.assets/depth.png"),
+        png::ColorType::Grayscale,
+        png::BitDepth::Eight,
+        &depth8(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn blur_radius_fixture() {
+    let text = blur_radius_project();
+    check_or_write("blur-radius", &text);
+    if wanted("blur-radius") {
+        write_blur_radius_pictures();
+    }
+    for file in ["blur-radius.assets/photo.png", "blur-radius.assets/depth.png"] {
+        assert!(
+            fixtures_dir().join(file).is_file(),
+            "tests/window/fixtures/{file} is missing: write it with `just fixtures blur-radius`"
+        );
+    }
+}
+
 #[test]
 fn depth_map_fixture() {
     let text = depth_map_project();
@@ -430,6 +561,7 @@ fn depth_map_fixture() {
 fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(depth_map_project(), depth_map_project());
     assert_eq!(layer_as_driver_project(), layer_as_driver_project());
+    assert_eq!(blur_radius_project(), blur_radius_project());
 }
 
 #[test]

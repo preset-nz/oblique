@@ -20,6 +20,7 @@
 import type {
   MaskRef,
   Modifier,
+  ModifierDriver,
   PixelMaskRef,
   Scene,
   SceneBackground,
@@ -94,6 +95,11 @@ function modifierFrom(rows: Map<string, Row>, m: Row, maskRefs: Record<string, M
     enabled: val(m, 'enabled') as boolean,
     params,
   };
+  const driver = m.bindings?.find((b) => b.on.slot === 'driver');
+  if (driver) {
+    const source = rows.get(driver.source);
+    mod.driver = driverFrom(source, driver.values ?? {});
+  }
   const mask = m.bindings?.find((b) => b.on.slot === 'mask');
   if (mask) {
     const v = mask.values ?? {};
@@ -130,6 +136,23 @@ function pixelRef(source: Row, v: Record<string, unknown>): PixelMaskRef {
     high: v.high as number,
     invert: v.invert as boolean,
   };
+}
+
+/** A modifier's driver (Epic 27): the binding's own values, less the `refId` a mask needs. */
+function driverFrom(source: Row | undefined, v: Record<string, unknown>): ModifierDriver {
+  return {
+    kind: v.kind as string,
+    nodeId: source?.name ?? '',
+    channel: v.channel as ModifierDriver['channel'],
+    low: v.low as number,
+    high: v.high as number,
+    invert: v.invert as boolean,
+  };
+}
+
+/** A driver as the values its binding carries (Rust's `driver_values`, less `refId`). */
+export function driverBindingValues(d: ModifierDriver): Record<string, unknown> {
+  return { kind: d.kind, channel: d.channel, low: d.low, high: d.high, invert: d.invert };
 }
 
 /** A mask ref as the values its binding carries (Rust's `mask_values` / `driver_values`). */
@@ -273,15 +296,22 @@ export function layerRows(node: SceneNode, scene: Scene): Row[] {
     valued(row, 'enabled', m.enabled);
     for (const [k, v] of Object.entries(m.params)) valued(row, `${PARAM_PREFIX}${k}`, v);
     const ref = m.maskId ? scene.maskRefs?.[m.maskId] : undefined;
+    const bindings: NonNullable<Row['bindings']> = [];
     if (ref) {
-      row.bindings = [
-        {
-          on: { slot: 'mask' },
-          source: rowId.layer(ref.nodeId),
-          values: maskBindingValues(ref),
-        },
-      ];
+      bindings.push({
+        on: { slot: 'mask' },
+        source: rowId.layer(ref.nodeId),
+        values: maskBindingValues(ref),
+      });
     }
+    if (m.driver) {
+      bindings.push({
+        on: { slot: 'driver' },
+        source: rowId.layer(m.driver.nodeId),
+        values: driverBindingValues(m.driver),
+      });
+    }
+    if (bindings.length > 0) row.bindings = bindings;
     return row;
   });
   if (modifiers.length > 0) layer.orders = { modifiers: modifiers.map((m) => m.id) };

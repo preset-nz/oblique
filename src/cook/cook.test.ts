@@ -1909,3 +1909,220 @@ describe('cookNode — pixel drivers (layer-as-driver.md)', () => {
     ).toHaveBeenCalled();
   });
 });
+
+describe('modifier drivers (Epic 27, blur-radius.md)', () => {
+  const drivenOps: OpDescriptor[] = opsFixture.map((o) =>
+    o.name === 'gaussian_blur'
+      ? { ...o, drivers: [{ kind: 'radius', label: 'Blur follows a layer' }] }
+      : o,
+  );
+  const driver = {
+    kind: 'radius',
+    nodeId: 'depth',
+    channel: 'luminance' as const,
+    low: 0.1,
+    high: 0.9,
+    invert: true,
+  };
+  const blur = (extra: Partial<Modifier> = {}): Modifier => ({
+    id: 'm1',
+    type: 'gaussian_blur',
+    enabled: true,
+    params: { radius: 8 },
+    ...extra,
+  });
+
+  describe('buildCookModifiers', () => {
+    it('attaches the rasterised driver plane to a modifier whose op offers the kind', () => {
+      const plane = new Uint8Array(16);
+      const rasterizeDriver = vi.fn(() => plane);
+      const built = buildCookModifiers(
+        [blur({ driver })],
+        1,
+        drivenOps,
+        undefined,
+        rasterizeDriver,
+      );
+      expect(built[0].driver).toEqual({ kind: 'radius', plane });
+      expect(rasterizeDriver).toHaveBeenCalledWith(driver);
+    });
+
+    it('leaves a driver out when the op does not offer it, or the ops are not known yet', () => {
+      const rasterizeDriver = vi.fn(() => new Uint8Array(16));
+      expect(
+        buildCookModifiers([blur({ driver })], 1, opsFixture, undefined, rasterizeDriver)[0].driver,
+      ).toBeUndefined();
+      expect(
+        buildCookModifiers([blur({ driver })], 1, [], undefined, rasterizeDriver)[0].driver,
+      ).toBeUndefined();
+      expect(
+        buildCookModifiers(
+          [blur({ driver: { ...driver, kind: 'amount' } })],
+          1,
+          drivenOps,
+          undefined,
+          rasterizeDriver,
+        )[0].driver,
+      ).toBeUndefined();
+      expect(rasterizeDriver).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'amount' }));
+    });
+
+    it('a modifier without a driver is built exactly as before', () => {
+      const built = buildCookModifiers(
+        [blur()],
+        1 / 2,
+        drivenOps,
+        undefined,
+        () => new Uint8Array(1),
+      );
+      expect(built[0]).toEqual({
+        type: 'gaussian_blur',
+        backend: 'python',
+        params: { radius: 4 },
+        mask: undefined,
+      });
+      expect('driver' in built[0]).toBe(false);
+    });
+  });
+
+  describe('packMaskedPayload', () => {
+    const image = Uint8Array.from([1, 2, 3, 4]);
+
+    it('puts the driver planes after every mask plane, with a drivers header', () => {
+      const mask = Uint8Array.from([10, 11]);
+      const plane = Uint8Array.from([30, 31]);
+      const packed = packMaskedPayload(image, [
+        { type: 'gaussian_blur', backend: 'python', params: {}, driver: { kind: 'radius', plane } },
+        { type: 'levels', backend: 'python', params: {}, mask },
+      ]);
+      expect(packed.masks).toEqual([{ modifierIndex: 1, mask_bytes: 2 }]);
+      expect(packed.drivers).toEqual([{ modifierIndex: 0, kind: 'radius', driver_bytes: 2 }]);
+      expect(Array.from(packed.payload)).toEqual([1, 2, 3, 4, 10, 11, 30, 31]);
+    });
+
+    it('a frame with a driver and no mask has no masks array; one with neither is the image itself', () => {
+      const plane = Uint8Array.from([30, 31]);
+      const driven = packMaskedPayload(image, [
+        { type: 'gaussian_blur', backend: 'python', params: {}, driver: { kind: 'radius', plane } },
+      ]);
+      expect(driven.masks).toBeUndefined();
+      expect(Array.from(driven.payload)).toEqual([1, 2, 3, 4, 30, 31]);
+      const none = packMaskedPayload(image, [{ type: 'levels', backend: 'python', params: {} }]);
+      expect(none.payload).toBe(image);
+      expect(none.drivers).toBeUndefined();
+    });
+  });
+
+  describe('cookNode', () => {
+    function setup() {
+      const depth = makeNode({
+        id: 'depth',
+        sourceSize: [400, 200],
+        transform2d: { x: 12, y: -4, scaleX: 1, scaleY: 1, rotation: 0.1 },
+      }) as PixelNode;
+      const nodeRef = { current: makeNode({ modifiers: [blur({ driver })] }) };
+      const raster = { current: { bitmap: fakeBitmap(), key: 'draft:1' } };
+      const plane = new Uint8Array(100 * 50);
+      const deps = makeDeps(nodeRef, {
+        getOps: vi.fn(() => drivenOps),
+        getNode: vi.fn((id: string) =>
+          id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+        ),
+        getDriverRaster: vi.fn(() => raster.current),
+        rasterizePixelMask: vi.fn(() => plane),
+      });
+      return { depth, nodeRef, raster, plane, deps };
+    }
+
+    it("reads the driver layer's raster at this level and sends it as the modifier's driver", async () => {
+      const { deps, plane, raster, depth } = setup();
+      await cookNode('node-1', 'draft', deps);
+      expect(deps.getDriverRaster).toHaveBeenCalledWith('depth', 'draft');
+      expect(deps.rasterizePixelMask).toHaveBeenCalledWith(
+        raster.current.bitmap,
+        driver,
+        depth.transform2d,
+        [400, 200],
+        expect.anything(),
+        [800, 400],
+        100,
+        50,
+        1 / 8,
+      );
+      const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(runModifiers[0].driver).toEqual({ kind: 'radius', plane });
+      expect(runModifiers[0].mask).toBeUndefined();
+      expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
+    });
+
+    it('race guard: the driver recooking mid-cook leaves the consumer dirty', async () => {
+      const { deps, raster } = setup();
+      deps.runPython = vi.fn(
+        async (_w: number, _h: number, _m: CookModifier[], payload: Uint8Array) => {
+          raster.current = { bitmap: fakeBitmap(), key: 'draft:2' };
+          return payload;
+        },
+      );
+      await cookNode('node-1', 'draft', deps);
+      expect(deps.setCache).toHaveBeenCalledTimes(1);
+      expect(deps.clearDirty).not.toHaveBeenCalled();
+    });
+
+    it("a driver's numbers are part of the prefix key: a Low scrub misses a stored prefix", async () => {
+      const { deps, nodeRef } = setup();
+      await cookNode('node-1', 'draft', deps);
+      const first = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls.length;
+      nodeRef.current = makeNode({ modifiers: [blur({ driver: { ...driver, low: 0.3 } })] });
+      await cookNode('node-1', 'draft', deps);
+      expect((deps.runPython as ReturnType<typeof vi.fn>).mock.calls.length).toBe(first + 1);
+      const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(runModifiers).toHaveLength(1);
+      expect(deps.rasterizePixelMask).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({ low: 0.3 }),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        100,
+        50,
+        1 / 8,
+      );
+    });
+
+    it('cookNodeFullRes cooks the driver layer at full res first and samples that', async () => {
+      const { depth, nodeRef } = setup();
+      const driverBitmap = { close: vi.fn() } as unknown as ImageBitmap;
+      const consumerBitmap = fakeBitmap();
+      const encode = vi.fn(async (_b: Uint8Array, w: number) =>
+        w === 400 ? driverBitmap : consumerBitmap,
+      );
+      const rasterizePixelMask = vi.fn(
+        (_r, _ref, _dt, _ds, _ct, _cs, w: number, h: number) => new Uint8Array(w * h),
+      );
+      const deps = {
+        ...makeDeps(nodeRef, {
+          getOps: vi.fn(() => drivenOps),
+          getNode: vi.fn((id: string) =>
+            id === 'node-1' ? nodeRef.current : id === 'depth' ? depth : undefined,
+          ),
+        }),
+        encode,
+        rasterizePixelMask,
+      } as unknown as FullResCookDeps;
+      await cookNodeFullRes('node-1', deps);
+      expect(encode.mock.calls.map((c) => c[1])).toEqual([400, 800]);
+      expect(rasterizePixelMask).toHaveBeenCalledWith(
+        driverBitmap,
+        driver,
+        depth.transform2d,
+        [400, 200],
+        expect.anything(),
+        [800, 400],
+        800,
+        400,
+        1,
+      );
+    });
+  });
+});

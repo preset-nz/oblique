@@ -1,0 +1,228 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "documentSize": [
+          1280.0,
+          480.0
+        ],
+        "note": "Blur radius window check (Epic 27 story 1). `just fixtures blur-radius` writes this file again.\n\n0. Open a fresh copy (`just window-check blur-radius`). The scene is there twice, 640 px each. On the left, Photo (masked) has a Gaussian Blur (radius 24) with its mask from Depth (masked): the old way, one blurred copy faded in. On the right, Photo (driven) has the same blur, but its radius follows Depth (driven) (Blur follows a layer). Both depth layers are hidden, near white, and both have Invert on.\na. Compare the hills behind the sphere. On the left the middle distance is half sharp and half blurred, a ghost. On the right the radius grows smoothly with distance: the hills are less blurred than the sky, with no sharp-plus-ghost double.\nb. Look at the red box at the front on each side. On the right its edge is crisp against the blurred ground behind it, with no halo of background spreading over it.\nc. Open the options (the three dots) of the right blur. Its Blur follows a layer section reads Following “Depth (driven)”, Luminance, Low 0, High 1, Invert on. Scrub Low up: more of the far scene gets the full radius, live. Scrub High down: more of the near scene goes fully sharp. Untick Invert: the box blurs and the sky goes sharp. One undo takes back each scrub whole. Put them back (Low 0, High 1, Invert on).\nd. Select Depth (driven) and add an Invert modifier to it, with it still hidden. The right picture flips (box blurred, sky sharp) with no change to Photo (driven)'s own stack. Remove the Invert modifier: it flips back.\ne. Show Depth (driven), move it right a good distance, hide it again. The sharp region on the right moves with it. Undo the move: it comes back.\nf. Change the right blur's Radius: the radius scales the whole result, and a mask on it (Mask from layer, from any layer) blends the driven result.\ng. In the options, Blur follows a layer lists Photo (driven) greyed, with the reason (a layer can't drive its own modifiers). Add a Gaussian Blur to Depth (driven) and choose Blur follows a layer on it: Photo (driven) is greyed there, with the reason (it already takes its look from Depth (driven)). Remove Depth (driven)'s blur.\nh. Choose Stop following in the right blur's options: the whole right picture takes the full radius. One undo brings the driver back.\ni. Delete Depth (driven): the right picture takes the full radius and the blur's options no longer show a followed layer. One undo brings back Depth (driven) and the driver together.\nj. Save, close and reopen the file: both pictures, the driver and its numbers are as they were.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "0000000000000000000000000B",
+          "00000000000000000000000009",
+          "00000000000000000000000008",
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/depth-driven",
+      "id": "0000000000000000000000000B",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Depth (driven)",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "transform2d.position": [
+          640.0,
+          0.0
+        ],
+        "transform2d.rotation": 0.0,
+        "transform2d.scale": [
+          1.0,
+          1.0
+        ],
+        "visible": false
+      },
+      "refs": {
+        "source": {
+          "file": "blur-radius.assets/depth.png"
+        }
+      }
+    },
+    {
+      "path": "/layers/depth-masked",
+      "id": "00000000000000000000000008",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Depth (masked)",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "transform2d.position": [
+          0.0,
+          0.0
+        ],
+        "transform2d.rotation": 0.0,
+        "transform2d.scale": [
+          1.0,
+          1.0
+        ],
+        "visible": false
+      },
+      "refs": {
+        "source": {
+          "file": "blur-radius.assets/depth.png"
+        }
+      }
+    },
+    {
+      "path": "/layers/photo-driven",
+      "id": "00000000000000000000000009",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo (driven)",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "transform2d.position": [
+          640.0,
+          0.0
+        ],
+        "transform2d.rotation": 0.0,
+        "transform2d.scale": [
+          1.0,
+          1.0
+        ],
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "blur-radius.assets/photo.png"
+        }
+      },
+      "orders": {
+        "modifiers": [
+          "0000000000000000000000000A"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo-driven/blur-driven",
+      "id": "0000000000000000000000000A",
+      "type": "op.gaussian_blur",
+      "values": {
+        "enabled": true,
+        "params.radius": 24.0
+      },
+      "bindings": [
+        {
+          "on": {
+            "slot": "driver"
+          },
+          "source": "0000000000000000000000000B",
+          "values": {
+            "channel": "luminance",
+            "high": 1.0,
+            "invert": true,
+            "kind": "radius",
+            "low": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "path": "/layers/photo-masked",
+      "id": "00000000000000000000000006",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo (masked)",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "transform2d.position": [
+          0.0,
+          0.0
+        ],
+        "transform2d.rotation": 0.0,
+        "transform2d.scale": [
+          1.0,
+          1.0
+        ],
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "blur-radius.assets/photo.png"
+        }
+      },
+      "orders": {
+        "modifiers": [
+          "00000000000000000000000007"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo-masked/blur-masked",
+      "id": "00000000000000000000000007",
+      "type": "op.gaussian_blur",
+      "values": {
+        "enabled": true,
+        "params.radius": 24.0
+      },
+      "bindings": [
+        {
+          "on": {
+            "slot": "mask"
+          },
+          "source": "00000000000000000000000008",
+          "values": {
+            "channel": "luminance",
+            "high": 1.0,
+            "invert": true,
+            "low": 0.0,
+            "refId": "blur-masked"
+          }
+        }
+      ]
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

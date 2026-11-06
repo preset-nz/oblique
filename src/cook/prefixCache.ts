@@ -10,7 +10,12 @@
  * and anything doubtful is simply included (an extra field can only cause a
  * miss, never a wrong hit).
  */
-import { type DriverRasterKey, hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
+import {
+  type DriverRasterKey,
+  hasDocumentPinnedMask,
+  resolvedDriverInput,
+  resolvedMaskInput,
+} from '@/scene/maskInputs';
 import { textCookKey } from '@/scene/textGeometryCache';
 import type { MaskRef, PixelNode, SceneNode, TextNode, VectorNode } from '@/scene/types';
 import type { OpDescriptor } from '@/sidecar/opsCache';
@@ -95,12 +100,15 @@ export function descriptorsFor(
     .filter((m) => m.enabled)
     .map((m) => {
       const mask = resolvedMaskInput(m.maskId, deps.getMaskRef, deps.getNode, rasterKey);
+      // a driver (Epic 27) is read like a pixel mask: its numbers, its layer's inputs, the raster
+      const driver = resolvedDriverInput(m.driver, deps.getMaskRef, deps.getNode, rasterKey);
       const op = ops.get(m.type);
       return JSON.stringify({
         modifier: m,
         mask,
+        driver,
         maskFrame:
-          mask === null
+          mask === null && driver === null
             ? undefined
             : {
                 documentSize: deps.getDocumentSize(),
@@ -113,6 +121,8 @@ export function descriptorsFor(
           ? {
               backend: op.backend,
               spatial: op.params.filter((p) => p.scale === 'spatial').map((p) => p.name),
+              // which drivers the op offers decides whether a driver's plane is sent at all
+              drivers: op.drivers?.length ? op.drivers.map((d) => d.kind) : undefined,
             }
           : null,
       });

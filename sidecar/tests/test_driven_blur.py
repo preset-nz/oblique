@@ -35,7 +35,21 @@ def _ramp_plane(h: int, w: int) -> np.ndarray:
 def _kernel() -> object:
     # `require` raises when the extension is missing, so a broken build fails
     # these tests instead of letting the reference stand in (decision 11a).
-    return _kernels.require()
+    _kernels.require()
+    return _Blur()
+
+
+class _Blur:
+    """The kernel as these tests think of it: RGB and 8-bit plane values in
+    and out. The kernel itself takes RGBA and the cook's float32 plane."""
+
+    @staticmethod
+    def driven_blur(rgb: np.ndarray, v: np.ndarray, spec: dict) -> np.ndarray:
+        h, w = v.shape
+        rgba = np.full((h, w, 4), 255, dtype=np.uint8)
+        rgba[..., :3] = rgb
+        plane = v.astype(np.float32) / np.float32(255.0)
+        return _kernels.require().driven_blur(rgba, plane, spec)[..., :3]
 
 
 # --- kernel against the NumPy reference --------------------------------------
@@ -238,6 +252,93 @@ def test_the_pyramid_stays_within_a_few_levels_of_the_exact_weighting(plane):
 
     got = _kernel().driven_blur(rgb, v, db.build_spec(radius)).astype(int)
     exact = _exact(rgb, v, radius).astype(int)
+
+    assert np.abs(got - exact).max() <= 4
+
+
+# --- speckled planes -----------------------------------------------------------
+# A plane with per-pixel noise would put every pixel at a different pyramid
+# level, so the kernel (and the reference) median-filter a speckled plane first.
+# These hold what that must not cost: a map is left alone, a near object stays
+# crisp, and the noisy map looks like its clean self.
+
+
+def _noisy(plane: np.ndarray, sd: float, seed: int) -> np.ndarray:
+    n = np.random.default_rng(seed).normal(0, sd, plane.shape)
+    return np.clip(plane + n, 0, 255).astype(np.uint8)
+
+
+def _smooth_depth(h: int, w: int) -> np.ndarray:
+    yy, xx = np.mgrid[0:h, 0:w]
+    return np.clip(255 - np.hypot(yy - h / 2, xx - w / 2) * 2.2, 0, 255).astype(
+        np.uint8
+    )
+
+
+def test_a_map_is_left_alone_and_speckle_is_filtered():
+    spec = db.build_spec(30.0)
+    for v in (
+        _ramp_plane(60, 90),
+        _smooth_depth(80, 80),
+        _object_plane(80, 80, 20, 50, 20, 60),
+    ):
+        np.testing.assert_array_equal(db.denoise_plane(v, spec), v)
+
+    base = _smooth_depth(120, 120)
+    for sd in (24.0, 100.0):
+        speckled = _noisy(base, sd, 2)
+        cleaned = db.denoise_plane(speckled, spec).astype(int)
+        before = np.abs(speckled.astype(int) - base).mean()
+        after = np.abs(cleaned - base).mean()
+        assert after < before / 2, (sd, before, after)
+
+
+@pytest.mark.parametrize("sd", [6.0, 24.0, 120.0])
+def test_a_sharp_near_object_stays_crisp_in_a_speckled_map(sd):
+    h, w = 160, 200
+    rng = np.random.default_rng(4)
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb[..., 2] = rng.integers(60, 256, (h, w), dtype=np.uint8)
+    near = np.zeros((h, w), dtype=bool)
+    near[40:120, 60:140] = True
+    rgb[near] = (255, 0, 0)
+    plane = _noisy(np.full((h, w), 200, dtype=np.uint8), sd, 5)
+    plane[near] = 0
+
+    out = _kernel().driven_blur(rgb, plane, db.build_spec(24.0))
+
+    # The median keeps a step edge where it is; only the object's four corner
+    # pixels, which have more far neighbours than near, can fall to the far side.
+    inner = near.copy()
+    for y, x in ((40, 60), (40, 139), (119, 60), (119, 139)):
+        inner[y, x] = False
+    np.testing.assert_array_equal(out[inner], rgb[inner])
+    # a corner pixel that fell to the far side may leave a trace, not a halo
+    assert out[~near][:, 0].max() <= 2, "red leaked into the background"
+
+
+@pytest.mark.parametrize(("sd", "bound"), [(6.0, 1.0), (24.0, 3.0)])
+def test_a_speckled_map_looks_like_its_clean_map(sd, bound):
+    h = w = 256
+    rgb = np.kron(_rgb(h // 8, w // 8, seed=2), np.ones((8, 8, 1), dtype=np.uint8))
+    clean = _smooth_depth(h, w)
+    spec = db.build_spec(30.0)
+
+    a = _kernel().driven_blur(rgb, clean, spec).astype(int)
+    b = _kernel().driven_blur(rgb, _noisy(clean, sd, 3), spec).astype(int)
+
+    assert np.abs(a - b).mean() <= bound
+
+
+@pytest.mark.parametrize("sd", [24.0, 120.0])
+def test_a_speckled_map_stays_near_the_exact_weighting_of_its_filtered_self(sd):
+    h, w, radius = 40, 64, 14.0
+    rgb = _rgb(h, w, seed=9)
+    v = _noisy(_ramp_plane(h, w), sd, 7)
+    spec = db.build_spec(radius)
+
+    got = _kernel().driven_blur(rgb, v, spec).astype(int)
+    exact = _exact(rgb, db.denoise_plane(v, spec), radius).astype(int)
 
     assert np.abs(got - exact).max() <= 4
 

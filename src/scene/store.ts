@@ -9,7 +9,7 @@ import {
   selectionLabel,
   useMarqueeStateStore,
 } from './marquee';
-import { driverRefusal, hasDocumentPinnedMask, pixelDriversOf } from './maskInputs';
+import { driverRefusal, followRefusal, hasDocumentPinnedMask, pixelDriversOf } from './maskInputs';
 import {
   type BlendMode,
   IDENTITY_TRANSFORM_2D,
@@ -20,6 +20,7 @@ import {
   isVectorNode,
   type MaskRef,
   type Modifier,
+  type ModifierDriver,
   type NodeOutput,
   type PixelMaskRef,
   type PixelNode,
@@ -310,6 +311,21 @@ interface SceneState {
   /** Detach and delete a modifier's mask (either kind). */
   removeModifierMask: (nodeId: string, modId: string) => void;
   /**
+   * "Blur follows a layer" and its kin (Epic 27): `driverNodeId`'s cooked raster sets the op's
+   * value of `kind` per pixel. Sent again with the same kind and layer and new numbers it is
+   * the edit of those. Refused (`false`, nothing mutated) for a locked consumer, a layer that
+   * isn't a pixel layer, or one that would close a cycle (`followRefusal`). The caller checks
+   * the op offers `kind`; Rust refuses one that doesn't.
+   */
+  setModifierDriver: (
+    nodeId: string,
+    modId: string,
+    driverNodeId: string,
+    driver: Omit<ModifierDriver, 'nodeId'>,
+  ) => boolean;
+  /** Takes the driver off a modifier. The layer that was driving stays. */
+  removeModifierDriver: (nodeId: string, modId: string) => void;
+  /**
    * "Follows layer" (mask-follows-node.md): switches a modifier's mask ref
    * between `'node'` (snapshots the consumer's CURRENT transform2d into
    * `attachTransform`) and `'document'` (clears both fields). One `set`, so one
@@ -448,10 +464,19 @@ function pruneMaskState(
   const clearedNodes = nodes.map((n) => {
     let changed = false;
     const modifiers = n.modifiers.map((m) => {
-      if (!m.maskId || prunedRefs?.[m.maskId]) return m;
-      changed = true;
-      const { maskId: _dropped, ...rest } = m;
-      return rest;
+      let next = m;
+      if (next.maskId && !prunedRefs?.[next.maskId]) {
+        changed = true;
+        const { maskId: _dropped, ...rest } = next;
+        next = rest;
+      }
+      // a driver whose layer is gone (Epic 27) goes with it, as a mask does
+      if (next.driver && !nodeIds.has(next.driver.nodeId)) {
+        changed = true;
+        const { driver: _gone, ...rest } = next;
+        next = rest;
+      }
+      return next;
     });
     // A modifier that lost its mask cooks unmasked from now on: dirty, so the masked cache
     // doesn't keep painting (a locked consumer keeps its bake and its clean flags).
@@ -508,6 +533,7 @@ function copyNode(
       };
       copy.maskId = newMaskId;
     }
+    if (m.driver) copy.driver = { ...m.driver };
     return copy; // a dangling maskId is dropped, as pruneMaskState does
   });
 
@@ -550,8 +576,11 @@ function copyNode(
  * stands, dirty rule for locks). Returns `scene` itself when nothing changes.
  */
 export function withDriverDirty(scene: Scene): Scene {
-  const refs = scene.maskRefs;
-  if (!refs || !Object.values(refs).some(isPixelMaskRef)) return scene;
+  const refs = scene.maskRefs ?? {};
+  const anyDriver =
+    Object.values(refs).some(isPixelMaskRef) ||
+    scene.nodes.some((n) => n.modifiers.some((m) => m.driver));
+  if (!anyDriver) return scene;
   const getRef = (id: string) => refs[id];
   const dirty = new Map(scene.nodes.map((n) => [n.id, n.dirty]));
   let changed = false;
@@ -908,7 +937,7 @@ export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
               : { ...n, transform2d };
           }
           const consumesMovedShape = n.modifiers.some(
-            (m) => m.maskId && refsAtMovedNode.has(m.maskId),
+            (m) => (m.maskId && refsAtMovedNode.has(m.maskId)) || m.driver?.nodeId === id,
           );
           return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
         });
@@ -1145,6 +1174,63 @@ export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
         const pruned = pruneMaskState(nodes, s.scene.maskRefs);
         return {
           scene: { ...s.scene, nodes: pruned.nodes, maskRefs: pruned.maskRefs },
+        };
+      });
+    },
+
+    setModifierDriver: (nodeId, modId, driverNodeId, driver) => {
+      const scene = get().scene;
+      const consumer = scene.nodes.find((n) => n.id === nodeId);
+      const modifier = consumer?.modifiers.find((m) => m.id === modId);
+      if (!consumer || !modifier || consumer.state === 'locked') return false;
+      const refusal = followRefusal(
+        nodeId,
+        driverNodeId,
+        (id) => scene.nodes.find((n) => n.id === id),
+        (id) => scene.maskRefs?.[id],
+      );
+      if (refusal) return false;
+      const next: ModifierDriver = {
+        kind: driver.kind,
+        nodeId: driverNodeId,
+        channel: driver.channel,
+        low: driver.low,
+        high: driver.high,
+        invert: driver.invert,
+      };
+      set((s) => ({
+        scene: {
+          ...s.scene,
+          nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+            ...n,
+            modifiers: n.modifiers.map((m) => (m.id === modId ? { ...m, driver: next } : m)),
+            dirty: dirtyBoth(),
+          })),
+        },
+      }));
+      return true;
+    },
+
+    removeModifierDriver: (nodeId, modId) => {
+      set((s) => {
+        if (isLocked(s.scene.nodes, nodeId)) return s; // guarded (lock-state-machine.md)
+        const has = s.scene.nodes
+          .find((n) => n.id === nodeId)
+          ?.modifiers.some((m) => m.id === modId && m.driver);
+        if (!has) return s;
+        return {
+          scene: {
+            ...s.scene,
+            nodes: updateNode(s.scene.nodes, nodeId, (n) => ({
+              ...n,
+              modifiers: n.modifiers.map((m) => {
+                if (m.id !== modId) return m;
+                const { driver: _dropped, ...rest } = m;
+                return rest;
+              }),
+              dirty: dirtyBoth(),
+            })),
+          },
         };
       });
     },

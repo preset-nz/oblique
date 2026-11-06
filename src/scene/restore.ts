@@ -2,13 +2,14 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
-import { hasDocumentPinnedMask, resolvedMaskInput } from '@/scene/maskInputs';
+import { hasDocumentPinnedMask, resolvedDriverInput, resolvedMaskInput } from '@/scene/maskInputs';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import {
   isPixelNode,
   isTextNode,
   isVectorNode,
+  type Modifier,
   type PixelNode,
   type Scene,
   type SceneNode,
@@ -72,6 +73,14 @@ function resolvedMaskInputIn(maskId: string | undefined, scene: Scene): unknown 
   );
 }
 
+function resolvedDriverInputIn(driver: Modifier['driver'], scene: Scene): unknown {
+  return resolvedDriverInput(
+    driver,
+    (id) => scene.maskRefs?.[id],
+    (id) => scene.nodes.find((n) => n.id === id),
+  );
+}
+
 function hasDocumentPinnedMaskIn(node: SceneNode, scene: Scene): boolean {
   return hasDocumentPinnedMask(node.modifiers, (id) => scene.maskRefs?.[id]);
 }
@@ -96,6 +105,10 @@ function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB:
   const refA = a.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneA));
   const refB = b.modifiers.map((m) => resolvedMaskInputIn(m.maskId, sceneB));
   if (JSON.stringify(refA) !== JSON.stringify(refB)) return true;
+  // the layer a driver follows (Epic 27): an undo that only changes its stack or place recooks
+  const driverA = a.modifiers.map((m) => resolvedDriverInputIn(m.driver, sceneA));
+  const driverB = b.modifiers.map((m) => resolvedDriverInputIn(m.driver, sceneB));
+  if (JSON.stringify(driverA) !== JSON.stringify(driverB)) return true;
   // Document-pinned vector masks rasterise through the consumer's CURRENT
   // transform2d (store.ts setNodeTransform's rule-4 exception), so for a
   // node with such a mask the transform IS a cook input — an undo that only

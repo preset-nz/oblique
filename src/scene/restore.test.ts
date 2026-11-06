@@ -637,3 +637,59 @@ describe('undo/redo of the document background image (background-image.md)', () 
     expect(backgroundSource.useBackgroundSourceStore.getState().missing).toBe(true);
   });
 });
+
+describe('a modifier driver (Epic 27)', () => {
+  const driver = {
+    kind: 'radius',
+    channel: 'luminance' as const,
+    low: 0,
+    high: 1,
+    invert: true,
+  };
+
+  function followed() {
+    const depth = pixelNode('depth', {
+      modifiers: [{ id: 'dm', type: 'blur', enabled: true, params: { radius: 2 } }],
+    });
+    const photo = pixelNode('photo', {
+      modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 9 } }],
+    });
+    useSceneStore.setState({ scene: emptyScene([depth, photo]) });
+    sources.set('depth', fakeBitmap());
+    sources.set('photo', fakeBitmap());
+    useSceneStore.getState().setModifierDriver('photo', 'm1', 'depth', driver);
+    useSceneStore.getState().clearDirty('photo', 'draft');
+    useSceneStore.getState().clearDirty('photo', 'working');
+    reset();
+  }
+
+  const photo = () => useSceneStore.getState().scene.nodes.find((n) => n.id === 'photo');
+
+  it("undoing an edit to the followed layer's own stack recooks the consumer", async () => {
+    followed();
+    useSceneStore.getState().setModifierParam('depth', 'dm', 'radius', 20);
+    useSceneStore.getState().clearDirty('photo', 'draft');
+    useSceneStore.getState().clearDirty('photo', 'working');
+    useSceneStore.getState().clearDirty('depth', 'draft');
+    useSceneStore.getState().clearDirty('depth', 'working');
+    await undo(fakeDeps());
+    expect(photo()?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('undoing the attach itself recooks the consumer, and redoing it does too', async () => {
+    followed();
+    useSceneStore.getState().removeModifierDriver('photo', 'm1');
+    useSceneStore.getState().clearDirty('photo', 'draft');
+    useSceneStore.getState().clearDirty('photo', 'working');
+    await undo(fakeDeps());
+    expect(photo()?.modifiers[0].driver).toMatchObject({ nodeId: 'depth' });
+    expect(photo()?.dirty).toEqual({ draft: true, working: true });
+  });
+
+  it('a pure compositing change to the followed layer leaves the consumer clean', async () => {
+    followed();
+    useSceneStore.getState().setNodeProp('depth', { visible: false });
+    await undo(fakeDeps());
+    expect(photo()?.dirty).toEqual({ draft: false, working: false });
+  });
+});

@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useActiveSelectionStore } from '@/scene/activeSelection';
 import { useMarqueeStateStore } from '@/scene/marquee';
+import { driverRefusal, followRefusal } from '@/scene/maskInputs';
 import { useSceneStore } from '@/scene/store';
 import { beginTransaction, endTransaction } from '@/scene/transaction';
 import {
@@ -59,6 +60,12 @@ export function StackRow({
   const setModifierParam = useSceneStore((s) => s.setModifierParam);
   const setModifierVectorMask = useSceneStore((s) => s.setModifierVectorMask);
   const removeModifierMask = useSceneStore((s) => s.removeModifierMask);
+  const setModifierPixelMask = useSceneStore((s) => s.setModifierPixelMask);
+  const setModifierDriver = useSceneStore((s) => s.setModifierDriver);
+  const removeModifierDriver = useSceneStore((s) => s.removeModifierDriver);
+  const scene = useSceneStore((s) => s.scene);
+  const getNode = (id: string) => scene.nodes.find((n) => n.id === id);
+  const getRef = (id: string) => scene.maskRefs?.[id];
   const setMaskSpace = useSceneStore((s) => s.setMaskSpace);
   // The resolved ref (undefined when unmasked/dangling) — drives "Follows layer".
   const maskRef = useSceneStore((s) =>
@@ -85,6 +92,8 @@ export function StackRow({
   const toggleExpanded = useRowCollapseStore((s) => s.toggle);
   const [vectorPickerOpen, setVectorPickerOpen] = useState(false);
   const [layerPickerOpen, setLayerPickerOpen] = useState(false);
+  /** Which of the op's drivers has its layer picker open (Epic 27). */
+  const [driverPickerOpen, setDriverPickerOpen] = useState<string | null>(null);
 
   const descriptor = ops.find((o) => o.name === modifier.type);
   // Param-less ops (e.g. invert) have nothing to expand. An UNKNOWN op stays
@@ -227,6 +236,22 @@ export function StackRow({
               </TooltipContent>
             </Tooltip>
           )}
+          {modifier.driver && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Icons.ImageIcon
+                    size={12}
+                    className="shrink-0 text-neutral-500"
+                    aria-label="Follows a layer"
+                  />
+                }
+              />
+              <TooltipContent>
+                {`Follows “${sceneNodes.find((n) => n.id === modifier.driver?.nodeId)?.label ?? 'a missing layer'}” — editing that layer recooks this modifier`}
+              </TooltipContent>
+            </Tooltip>
+          )}
         </button>
 
         <Popover>
@@ -364,20 +389,75 @@ export function StackRow({
             </button>
             {layerPickerOpen && !locked && (
               <LayerMaskPicker
-                node={node}
-                modifier={modifier}
                 locked={locked}
+                current={isPixelMaskRef(maskRef) ? maskRef : undefined}
+                refusal={(layerId) => driverRefusal(node.id, layerId, getNode, getRef)}
+                onPick={(layerId, reading) =>
+                  setModifierPixelMask(node.id, modifier.id, layerId, reading)
+                }
                 onPicked={() => setLayerPickerOpen(false)}
               />
             )}
             {isPixelMaskRef(maskRef) && (
               <LayerMaskSettings
-                node={node}
-                modifier={modifier}
-                maskRef={maskRef}
+                idPrefix={`layer-mask-${modifier.id}`}
+                layerId={maskRef.nodeId}
+                reading={maskRef}
                 locked={locked}
+                caption="Driven by"
+                onChange={(reading) =>
+                  setModifierPixelMask(node.id, modifier.id, maskRef.nodeId, reading)
+                }
               />
             )}
+            {(descriptor?.drivers ?? []).map((offer) => {
+              const bound = modifier.driver?.kind === offer.kind ? modifier.driver : undefined;
+              const label = offer.label ?? `${offer.kind} follows a layer`;
+              return (
+                <div key={offer.kind}>
+                  <button
+                    type="button"
+                    disabled={locked || pixelLayers.length === 0}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+                    onClick={() =>
+                      !locked &&
+                      setDriverPickerOpen((open) => (open === offer.kind ? null : offer.kind))
+                    }
+                  >
+                    <Icons.ImageIcon size={12} /> {label}
+                  </button>
+                  {driverPickerOpen === offer.kind && !locked && (
+                    <LayerMaskPicker
+                      locked={locked}
+                      current={bound}
+                      refusal={(layerId) => followRefusal(node.id, layerId, getNode, getRef)}
+                      onPick={(layerId, reading) =>
+                        setModifierDriver(node.id, modifier.id, layerId, {
+                          kind: offer.kind,
+                          ...reading,
+                        })
+                      }
+                      onPicked={() => setDriverPickerOpen(null)}
+                    />
+                  )}
+                  {bound && (
+                    <LayerMaskSettings
+                      idPrefix={`driver-${offer.kind}-${modifier.id}`}
+                      layerId={bound.nodeId}
+                      reading={bound}
+                      locked={locked}
+                      caption="Following"
+                      onChange={(reading) =>
+                        setModifierDriver(node.id, modifier.id, bound.nodeId, {
+                          kind: offer.kind,
+                          ...reading,
+                        })
+                      }
+                    />
+                  )}
+                </div>
+              );
+            })}
             {maskRef && !isPixelMaskRef(maskRef) && (
               <label
                 htmlFor={`vector-mask-follows-${modifier.id}`}
@@ -404,6 +484,16 @@ export function StackRow({
                 onClick={() => !locked && removeModifierMask(node.id, modifier.id)}
               >
                 <Icons.CircleHalfIcon size={12} className="opacity-40" /> Remove mask
+              </button>
+            )}
+            {modifier.driver && (
+              <button
+                type="button"
+                disabled={locked}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={() => !locked && removeModifierDriver(node.id, modifier.id)}
+              >
+                <Icons.ImageIcon size={12} className="opacity-40" /> Stop following
               </button>
             )}
             <button

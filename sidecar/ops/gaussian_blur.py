@@ -57,22 +57,28 @@ def gaussian_blur(
 ) -> np.ndarray:
     radius = float(params.get("radius", 4.0))
 
-    out = img.copy()
     if radius <= 0.0:
-        return out
+        return img.copy()
 
     plane = drivers.get("radius") if drivers else None
     if plane is not None:
-        # The plane is k/255 in float32; rint(plane * 255) gives k back exactly.
-        v = np.rint(plane * np.float32(255.0)).astype(np.uint8)
-        rgb8 = np.ascontiguousarray(out[..., :3])
         spec = build_spec(radius)
         if _kernels.available():
-            out[..., :3] = _kernels.require().driven_blur(rgb8, v, spec)
-        else:  # the reference: same bytes, minutes at real sizes
-            out[..., :3] = driven_blur_reference(rgb8, v, spec)
+            # RGBA in, RGBA out, alpha carried through: no RGB copy, no
+            # strided write-back. The kernel takes the plane as it came.
+            return _kernels.require().driven_blur(
+                np.ascontiguousarray(img), plane, spec
+            )
+        # The reference: the look, in minutes at real sizes.
+        # The plane is k/255 in float32; rint(plane * 255) gives k back exactly.
+        v = np.rint(plane * np.float32(255.0)).astype(np.uint8)
+        out = img.copy()
+        out[..., :3] = driven_blur_reference(
+            np.ascontiguousarray(img[..., :3]), v, spec
+        )
         return out
 
+    out = img.copy()
     rgb = Image.fromarray(out[..., :3], mode="RGB")
     blurred = rgb.filter(ImageFilter.GaussianBlur(radius=radius))
     out[..., :3] = np.asarray(blurred, dtype=np.uint8)

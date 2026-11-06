@@ -3,9 +3,13 @@
 Private module: `gaussian_blur` calls `driven_blur` when a radius driver is
 attached. This file is the statement of the maths and its NumPy reference;
 the shipping path is the Rust kernel `oblique_kernels.driven_blur`
-(`sidecar/kernels/src/driven_blur.rs`), which must produce the same bytes
-(architecture decision 11a). The reference is a direct, slow implementation:
-use it on small images only (tests run it at 64x48).
+(`sidecar/kernels/src/driven_blur.rs`). The reference is the reference for the
+look. The kernel matches it byte for byte today and the tests hold it to that,
+but that is a convenience, not a requirement (Georg, 2026-11-07: "if it looks
+right it is right"): a kernel change that keeps the look may relax it to a
+tolerance against this file and against the exact weighting. The reference is
+a direct, slow implementation: use it on small images only (tests run it at
+64x48).
 
 ## The look it has to give
 
@@ -40,6 +44,15 @@ centre's circle" test used in Jimenez 2014 and in single-pass bokeh
 filters). A plain gather (`G_{sigma_p}` for every `q`) leaks a sharp
 foreground into the blurred background; a plain scatter (`G_{sigma_q}`)
 haloes the background over a sharp foreground.
+
+## A speckled plane is filtered first
+
+Per-pixel noise in the plane would put every pixel at a different pyramid
+level, and every level would then compute everything (seconds at 4096 px).
+So a plane that is speckled rather than a map, by `NOISE_STEP` and
+`NOISE_SHARE` below, gets a 3x3 median, up to `DENOISE_PASSES` times
+(`denoise_plane`). A median keeps a step edge where it is, so a near object
+stays crisp, and it drops speckle. A map is not touched.
 
 ## Doing it fast: a pyramid that changes resolution, not sigma
 
@@ -76,6 +89,7 @@ pixel; the kernel replicates that order with plain IEEE float32 (no FMA).
 
 from __future__ import annotations
 
+import functools
 import math
 from typing import Any
 
@@ -88,6 +102,15 @@ LEVEL_LOW = 2.0
 # Pixels whose sigma is within this factor above their level's floor are
 # also computed one level finer and crossfaded across the band.
 FADE_BAND = 1.25
+# A plane that is speckled rather than a map is median-filtered first (see
+# `denoise_plane`). A pixel is speckle when it differs by more than NOISE_STEP
+# from its right and its lower neighbour at once (an edge steps along one axis
+# only); the plane is speckled when more than NOISE_SHARE of the pixels on
+# every 5th row are. Real depth maps measure under 0.01 % here, Gaussian noise
+# of sd 6 about 4 %. At most DENOISE_PASSES passes.
+NOISE_STEP = 12
+NOISE_SHARE = 0.005
+DENOISE_PASSES = 4
 # Gaussian tables are cut at 3 sigma, as a circle.
 SUPPORT = 3.0
 # Variance (in a level's own pixels) the pyramid adds on its own: the
@@ -130,8 +153,10 @@ def _gauss_table(sigma: float) -> tuple[np.ndarray, int]:
     return t, r
 
 
+@functools.lru_cache(maxsize=8)
 def build_spec(radius: float) -> dict[str, Any]:
-    """Everything the kernel and the reference share, for one radius.
+    """Everything the kernel and the reference share, for one radius. Cached
+    by radius (a scrub repeats it); the result is read-only.
 
     Plane values are 8-bit (the driver plane arrives as u8 / 255), so every
     per-pixel quantity is a lookup by plane value `v` in 0..255.
@@ -190,6 +215,9 @@ def build_spec(radius: float) -> dict[str, Any]:
 
     return {
         "levels": levels,
+        "noise_step": NOISE_STEP,
+        "noise_share": NOISE_SHARE,
+        "denoise_passes": DENOISE_PASSES,
         "klass": klass,
         "fade": fade,
         "unfade": unfade,
@@ -200,6 +228,40 @@ def build_spec(radius: float) -> dict[str, Any]:
 
 
 # --- reference ---------------------------------------------------------------
+
+
+def _looks_noisy(v: np.ndarray, step: int, share: float) -> bool:
+    h, w = v.shape
+    if w < 2 or h < 2:
+        return False
+    rows = np.arange(0, h - 1, 5)
+    a = v[rows, :-1].astype(np.int32)
+    right = v[rows, 1:].astype(np.int32)
+    below = v[rows + 1, :-1].astype(np.int32)
+    hits = int(((np.abs(a - right) > step) & (np.abs(a - below) > step)).sum())
+    return hits > share * (len(rows) * (w - 1))
+
+
+def _median3(v: np.ndarray) -> np.ndarray:
+    """3x3 median, edges replicated."""
+    h, w = v.shape
+    p = np.pad(v, 1, mode="edge")
+    stack = [p[dy : dy + h, dx : dx + w] for dy in range(3) for dx in range(3)]
+    return np.median(np.stack(stack), axis=0).astype(np.uint8)
+
+
+def denoise_plane(v: np.ndarray, spec: dict[str, Any]) -> np.ndarray:
+    """What the kernel does to the plane before anything else: while it looks
+    speckled, up to `denoise_passes` times, a 3x3 median. A median keeps a step
+    edge where it is, so a near object stays as sharp as drawn, and it drops
+    single-pixel speckle, which would otherwise put every pixel of the picture
+    at a different pyramid level. A map without speckle is left alone."""
+    for _ in range(spec["denoise_passes"]):
+        if not _looks_noisy(v, spec["noise_step"], spec["noise_share"]):
+            break
+        v = _median3(v)
+    return v
+
 
 _F32 = np.float32
 _THREE = np.float32(3.0)
@@ -340,6 +402,7 @@ def driven_blur_reference(
 ) -> np.ndarray:
     """NumPy reference: (h, w, 3) uint8 RGB and (h, w) uint8 plane values
     -> blurred (h, w, 3) uint8. Same maths and float32 order as the kernel."""
+    v = denoise_plane(v, spec)
     h, w = v.shape
     levels = spec["levels"]
     klass_of = spec["klass"]

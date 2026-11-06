@@ -46,6 +46,25 @@ const EMPTY_SCENE: Scene = {
   documentSize: [0, 0],
 };
 
+type Binding = NonNullable<Row['bindings']>[number];
+
+/** A modifier's binding on one slot (`mask` or `driver`): each has its own, side by side. */
+const slotOf = (row: Row, slot: string): Binding | undefined =>
+  row.bindings?.find((b) => b.on.slot === slot);
+
+/** Binds a slot, replacing what was on it and leaving the other slot alone. */
+function setSlot(row: Row, binding: Binding): void {
+  const others = (row.bindings ?? []).filter((b) => b.on.slot !== binding.on.slot);
+  row.bindings = [...others, binding];
+}
+
+/** Takes one slot's binding off, and the list with it when nothing is left. */
+function dropSlot(row: Row, slot: string): void {
+  const kept = (row.bindings ?? []).filter((b) => b.on.slot !== slot);
+  if (kept.length > 0) row.bindings = kept;
+  else delete row.bindings;
+}
+
 /** What a saved fake document starts with: anything else (an old JSON project) is refused. */
 const MARK = 'fake-rhizome';
 
@@ -59,7 +78,11 @@ export class FakeHost implements RhizomeBackend {
   runs: { id: string; payload: unknown; coalesce?: string }[] = [];
   inited: unknown[] | null = null;
   /** The op catalogue `init` was given: where `modifier.add` takes its defaults, as Rust does. */
-  catalogue: { name: string; params?: { name: string; default?: unknown }[] }[] = [];
+  catalogue: {
+    name: string;
+    params?: { name: string; default?: unknown }[];
+    drivers?: { kind: string }[];
+  }[] = [];
   messages: string[] = [];
   /** The files, by path: what `saveAs` writes and `open` reads. Shared between hosts in a test. */
   disk = new Map<string, string>();
@@ -114,7 +137,7 @@ export class FakeHost implements RhizomeBackend {
   async init(ops: unknown[]): Promise<boolean> {
     this.trace.push('init');
     this.inited = ops;
-    this.catalogue = ops as { name: string; params?: { name: string; default?: unknown }[] }[];
+    this.catalogue = ops as typeof this.catalogue;
     const held = this.heldOpen;
     this.heldOpen = null;
     if (!held) return false;
@@ -414,26 +437,61 @@ export class FakeHost implements RhizomeBackend {
           if (!['luminance', 'alpha'].includes(p.channel as string)) {
             throw new Error(`${p.channel} isn't a channel`);
           }
-          const refId = (row.bindings?.[0]?.values?.refId as string | undefined) || row.name;
-          row.bindings = [
-            {
-              on: { slot: 'mask' },
-              source: source.id,
-              values: { refId, channel: p.channel, low: p.low, high: p.high, invert: p.invert },
+          const refId = (slotOf(row, 'mask')?.values?.refId as string | undefined) || row.name;
+          setSlot(row, {
+            on: { slot: 'mask' },
+            source: source.id,
+            values: { refId, channel: p.channel, low: p.low, high: p.high, invert: p.invert },
+          });
+        });
+      case 'driver.attach':
+        return this.commit('Follow Layer', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          const op = this.catalogue.find((o) => `op.${o.name}` === row.type);
+          if (!op?.drivers?.some((d) => d.kind === p.kind)) {
+            throw new Error(`${row.type} offers no driver called ${String(p.kind)}`);
+          }
+          const source = this.at(p.source as string);
+          if (source.parent !== 'row:layers' || source.type !== 'pixel') {
+            throw new Error(`${p.source} isn't a pixel layer`);
+          }
+          if (source.id === layer.id || this.drives(layer.id, source.id)) {
+            throw new Error(`${p.source} already takes its look from ${layer.path}`);
+          }
+          if (!['luminance', 'alpha'].includes(p.channel as string)) {
+            throw new Error(`${p.channel} isn't a channel`);
+          }
+          setSlot(row, {
+            on: { slot: 'driver' },
+            source: source.id,
+            values: {
+              kind: p.kind,
+              channel: p.channel,
+              low: p.low,
+              high: p.high,
+              invert: p.invert,
             },
-          ];
+          });
+        });
+      case 'driver.detach':
+        return this.commit('Stop Following Layer', () => {
+          const { row, layer } = this.modifier(p.at as string);
+          this.unlocked(layer);
+          if (!slotOf(row, 'driver')) throw new Error(`${p.at} follows no layer`);
+          dropSlot(row, 'driver');
         });
       case 'mask.detach':
         return this.commit('Remove Mask', () => {
           const { row, layer } = this.modifier(p.at as string);
           this.unlocked(layer);
-          if (!row.bindings?.length) throw new Error(`${p.at} has no mask`);
-          delete row.bindings;
+          if (!slotOf(row, 'mask')) throw new Error(`${p.at} has no mask`);
+          dropSlot(row, 'mask');
         });
       case 'mask.set_space': {
         const { row, layer } = this.modifier(p.at as string);
         this.unlocked(layer);
-        const b = row.bindings?.[0];
+        const b = slotOf(row, 'mask');
         if (!b) throw new Error(`${p.at} has no mask`);
         if (this.rows.get(b.source)?.type === 'pixel')
           throw new Error(`${p.at} is driven by a layer`);
@@ -614,10 +672,13 @@ export class FakeHost implements RhizomeBackend {
       mc.id = `row:modifier:${id}:${modifierIds[i]}`;
       mc.path = `${copy.path}/${modifierIds[i]}`;
       mc.parent = copyId;
-      if (mc.bindings) {
+      if (slotOf(mc, 'mask')) {
         const fresh = maskIds[i];
         if (!fresh) throw new Error(`${m.path}: a masked modifier came with no mask id`);
-        mc.bindings = mc.bindings.map((b) => ({ ...b, values: { ...b.values, refId: fresh } }));
+        // only the mask has a ref to renew: a driver binding is copied as it is
+        mc.bindings = mc.bindings?.map((b) =>
+          b.on.slot === 'mask' ? { ...b, values: { ...b.values, refId: fresh } } : b,
+        );
       }
       return mc;
     });
@@ -774,21 +835,19 @@ export class FakeHost implements RhizomeBackend {
     [featherPx, expand, invert]: [number, number, boolean],
     { space, attach }: { space?: string; attach?: unknown },
   ): void {
-    const refId = (modifier.bindings?.[0]?.values?.refId as string | undefined) || modifier.name;
-    modifier.bindings = [
-      {
-        on: { slot: 'mask' },
-        source: source.id,
-        values: {
-          refId,
-          featherPx,
-          expand,
-          invert,
-          ...(space ? { space } : {}),
-          ...(attach ? { attachTransform: attach } : {}),
-        },
+    const refId = (slotOf(modifier, 'mask')?.values?.refId as string | undefined) || modifier.name;
+    setSlot(modifier, {
+      on: { slot: 'mask' },
+      source: source.id,
+      values: {
+        refId,
+        featherPx,
+        expand,
+        invert,
+        ...(space ? { space } : {}),
+        ...(attach ? { attachTransform: attach } : {}),
       },
-    ];
+    });
   }
 
   /** The hidden selection layer `mask.from_marquee` and `selection.save` both make, on top. */
@@ -827,7 +886,7 @@ export class FakeHost implements RhizomeBackend {
   private maskFromMarquee(p: Record<string, unknown>): void {
     const { row, layer } = this.modifier(p.at as string);
     this.unlocked(layer);
-    const previous = row.bindings?.[0]?.source;
+    const previous = slotOf(row, 'mask')?.source;
     const vector = this.addSelectionLayer(p);
     this.bindMask(row, vector, [p.featherPx, p.expand, p.invert] as never, {
       space: 'node',

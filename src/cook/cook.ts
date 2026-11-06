@@ -8,6 +8,7 @@ import {
   type DriverRasterKey,
   hasDocumentPinnedMask,
   pixelDriversOf,
+  resolvedDriverInput,
   resolvedMaskInput,
 } from '@/scene/maskInputs';
 import { rasterizePixelMask, rasterizeVectorMask } from '@/scene/maskRasterize';
@@ -23,6 +24,7 @@ import {
   isVectorNode,
   type MaskRef,
   type Modifier,
+  type ModifierDriver,
   type PixelNode,
   type SceneNode,
   type TextNode,
@@ -59,6 +61,12 @@ export interface CookModifier {
   params: Modifier['params'];
   /** Rasterised mask plane (1 byte/px, cook target size) when the modifier carries a maskId — attached by `cookNode`, consumed by the frame packing (selection-to-mask.md). */
   mask?: Uint8Array;
+  /**
+   * The plane of the layer driving one of the op's values (Epic 27, blur-radius.md): one byte per
+   * pixel at the cook target size, white meaning the full effect, as a mask plane is. Only on a
+   * modifier whose op offers `kind`: the sidecar refuses the whole cook otherwise.
+   */
+  driver?: { kind: string; plane: Uint8Array };
 }
 
 /**
@@ -75,6 +83,8 @@ export function buildCookModifiers(
   ops: OpDescriptor[],
   /** Rasterises a modifier's mask at the cook target size — injected so this stays pure/testable; absent = masks ignored (export paths pass it, tests may not). */
   rasterizeFor?: (maskId: string) => Uint8Array | undefined,
+  /** Rasterises a modifier's driver (Epic 27) at the cook target size; absent = drivers ignored. */
+  rasterizeDriver?: (driver: ModifierDriver) => Uint8Array | undefined,
 ): CookModifier[] {
   const opByName = new Map(ops.map((o) => [o.name, o]));
   return modifiers
@@ -84,6 +94,12 @@ export function buildCookModifiers(
       const descriptor = opByName.get(m.type);
       const backend = descriptor?.backend ?? 'python';
       if (!descriptor) return { type: m.type, backend, params: m.params, mask };
+      // a driver the op doesn't offer (an older sidecar, a file from elsewhere) cooks undriven
+      const plane =
+        m.driver && rasterizeDriver && descriptor.drivers?.some((d) => d.kind === m.driver?.kind)
+          ? rasterizeDriver(m.driver)
+          : undefined;
+      const driver = m.driver && plane ? { kind: m.driver.kind, plane } : undefined;
 
       const paramSpecByName = new Map(descriptor.params.map((p) => [p.name, p]));
       const params: Modifier['params'] = {};
@@ -92,8 +108,16 @@ export function buildCookModifiers(
         params[key] =
           spec?.scale === 'spatial' && typeof value === 'number' ? value * factor : value;
       }
-      return { type: m.type, backend, params, mask };
+      return { type: m.type, backend, params, mask, ...(driver ? { driver } : {}) };
     });
+}
+
+export interface DriverHeaderEntry {
+  /** Index into THIS request's `modifiers` array. */
+  modifierIndex: number;
+  /** Which of the op's drivers the plane is (`radius`). */
+  kind: string;
+  driver_bytes: number;
 }
 
 export interface MaskHeaderEntry {
@@ -113,8 +137,9 @@ export interface MaskHeaderEntry {
 export function packMaskedPayload(
   image: Uint8Array,
   modifiers: CookModifier[],
-): { masks?: MaskHeaderEntry[]; payload: Uint8Array } {
+): { masks?: MaskHeaderEntry[]; drivers?: DriverHeaderEntry[]; payload: Uint8Array } {
   const entries: MaskHeaderEntry[] = [];
+  const driverEntries: DriverHeaderEntry[] = [];
   const planes: Uint8Array[] = [];
   modifiers.forEach((m, i) => {
     if (m.mask) {
@@ -122,7 +147,18 @@ export function packMaskedPayload(
       planes.push(m.mask);
     }
   });
-  if (entries.length === 0) return { payload: image };
+  // driver planes (Epic 27) follow every mask plane, in modifier order
+  modifiers.forEach((m, i) => {
+    if (m.driver) {
+      driverEntries.push({
+        modifierIndex: i,
+        kind: m.driver.kind,
+        driver_bytes: m.driver.plane.byteLength,
+      });
+      planes.push(m.driver.plane);
+    }
+  });
+  if (entries.length === 0 && driverEntries.length === 0) return { payload: image };
 
   const total = image.byteLength + planes.reduce((n, p) => n + p.byteLength, 0);
   const payload = new Uint8Array(total);
@@ -132,7 +168,11 @@ export function packMaskedPayload(
     payload.set(plane, offset);
     offset += plane.byteLength;
   }
-  return { masks: entries, payload };
+  return {
+    ...(entries.length > 0 ? { masks: entries } : {}),
+    ...(driverEntries.length > 0 ? { drivers: driverEntries } : {}),
+    payload,
+  };
 }
 
 export interface CookRun {
@@ -301,6 +341,7 @@ async function realRunPython(
       // request byte-identical to the pre-mask frame format (story
       // acceptance).
       ...(packed.masks ? { masks: packed.masks } : {}),
+      ...(packed.drivers ? { drivers: packed.drivers } : {}),
     },
     packed.payload,
   );
@@ -413,6 +454,38 @@ function makeRasterizeFor(
       );
     }
     return undefined;
+  };
+}
+
+/**
+ * A modifier's driver as a plane at the cook target size (Epic 27): the same reading of the
+ * driver layer's raster as a pixel mask's (`rasterizePixelMask`), through the same document
+ * space. A driver whose layer is gone or isn't a pixel layer is left out, so the op cooks
+ * undriven rather than throwing, as `makeRasterizeFor` does for a mask.
+ */
+function makeRasterizeDriverFor(
+  deps: Pick<CookDeps, 'getNode' | 'rasterizePixelMask'>,
+  driverRaster: (driverId: string) => ImageBitmap | undefined,
+  nodeExtent: [number, number],
+  consumerTransform2d: Transform2D,
+  width: number,
+  height: number,
+  factor: number,
+): (driver: ModifierDriver) => Uint8Array | undefined {
+  return (driver) => {
+    const target = deps.getNode(driver.nodeId);
+    if (!target || !isPixelNode(target)) return undefined;
+    return deps.rasterizePixelMask(
+      driverRaster(target.id),
+      driver,
+      target.transform2d ?? IDENTITY_TRANSFORM_2D,
+      target.sourceSize,
+      consumerTransform2d,
+      nodeExtent,
+      width,
+      height,
+      factor,
+    );
   };
 }
 
@@ -592,7 +665,22 @@ export async function cookNodeFullRes(
     height,
     factor,
   );
-  const cookModifiers = buildCookModifiers(node.modifiers, factor, deps.getOps(), rasterizeFor);
+  const rasterizeDriver = makeRasterizeDriverFor(
+    deps,
+    (id) => drivers.get(id),
+    nodeExtent,
+    node.transform2d ?? IDENTITY_TRANSFORM_2D,
+    width,
+    height,
+    factor,
+  );
+  const cookModifiers = buildCookModifiers(
+    node.modifiers,
+    factor,
+    deps.getOps(),
+    rasterizeFor,
+    rasterizeDriver,
+  );
   // The masks are rasterised (synchronously, above): the drivers' bitmaps are done with.
   for (const bitmap of drivers.values()) (bitmap as { close?: () => void }).close?.();
 
@@ -638,14 +726,18 @@ function maskInputsKey(
   const refs = node.modifiers.map((m) =>
     resolvedMaskInput(m.maskId, deps.getMaskRef, deps.getNode, rasterKey),
   );
-  if (refs.every((r) => r === null)) return '';
+  // a driver (Epic 27) is a cook input the same way: its numbers, its layer and the raster read
+  const drivers = node.modifiers.map((m) =>
+    resolvedDriverInput(m.driver, deps.getMaskRef, deps.getNode, rasterKey),
+  );
+  if (refs.every((r) => r === null) && drivers.every((r) => r === null)) return '';
   // Only document-pinned refs read the consumer's current transform2d
   // (mask-follows-node.md): a node-pinned mask rasterises through its own
   // attachTransform, so moving the consumer must not look like a change.
   const transform2d = hasDocumentPinnedMask(node.modifiers, deps.getMaskRef)
     ? node.transform2d
     : undefined;
-  return JSON.stringify({ refs, transform2d });
+  return JSON.stringify({ refs, drivers, transform2d });
 }
 
 /**
@@ -823,7 +915,22 @@ export async function cookNode(
     // rasterised). The enabled-only 1:1 mapping between modifiers, descriptors
     // and CookModifiers is what makes the index arithmetic below sound.
     const pending = enabled.slice(start);
-    const cookModifiers = buildCookModifiers(pending, factor, deps.getOps(), rasterizeFor);
+    const rasterizeDriver = makeRasterizeDriverFor(
+      deps,
+      (id) => deps.getDriverRaster(id, level)?.bitmap,
+      nodeExtent,
+      node.transform2d ?? IDENTITY_TRANSFORM_2D,
+      width,
+      height,
+      factor,
+    );
+    const cookModifiers = buildCookModifiers(
+      pending,
+      factor,
+      deps.getOps(),
+      rasterizeFor,
+      rasterizeDriver,
+    );
     if (cookModifiers.length !== pending.length) {
       throw new Error('buildCookModifiers no longer maps enabled modifiers 1:1');
     }
