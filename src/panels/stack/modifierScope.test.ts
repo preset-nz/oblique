@@ -1,13 +1,25 @@
-import { PropertyPanel, registerBuiltinRenderers, registerScope } from '@preset.nz/facets';
+import {
+  type FieldDef,
+  PropertyPanel,
+  registerBuiltinRenderers,
+  registerScope,
+} from '@preset.nz/facets';
+import { gammaCurve, gammaLine } from '@preset.nz/ux-kit/graphics';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSceneStore } from '@/scene/store';
 import type { Modifier, PixelNode } from '@/scene/types';
 import type { OpDescriptor, OpParamSpec } from '@/sidecar/opsCache';
-import { registerModifierFieldRenderers } from './modifierFieldRenderers';
+import {
+  gammaFromCurve,
+  gammaToDraw,
+  registerModifierFieldRenderers,
+  roundGamma,
+} from './modifierFieldRenderers';
 import {
   buildModifierScope,
+  type ModifierCurveFieldDef,
   type ModifierNumberFieldDef,
   type ModifierSliderFieldDef,
   modifierScopeKey,
@@ -466,5 +478,158 @@ describe('paramToField label and description', () => {
     expect(markup).toContain('>Cell size<');
     expect(markup).not.toContain('>cell_size<');
     expect(markup).toContain('>plain_param<');
+  });
+});
+
+// --- Levels' curve (levels-curve.md, phase 1) ---
+
+// Levels as the sidecar declares it (sidecar/ops/levels.py): gamma asks for the curve widget.
+const LEVELS_LIKE_OP: OpDescriptor = {
+  name: 'levels_curve_test',
+  backend: 'python',
+  histogram: true,
+  params: [
+    {
+      name: 'black',
+      type: 'float',
+      default: 0,
+      min: 0,
+      max: 255,
+      step: 1,
+      scale: 'none',
+      label: 'Black point',
+    },
+    {
+      name: 'white',
+      type: 'float',
+      default: 255,
+      min: 0,
+      max: 255,
+      step: 1,
+      scale: 'none',
+      label: 'White point',
+    },
+    {
+      name: 'gamma',
+      type: 'float',
+      default: 1,
+      min: 0.1,
+      max: 5,
+      step: 0.05,
+      scale: 'none',
+      label: 'Gamma',
+      description: 'Midtone brightness.',
+      widget: 'curve',
+    },
+  ],
+};
+
+describe('widget: curve', () => {
+  const rows = opParamsToSchema(LEVELS_LIKE_OP).groups[0].rows as FieldDef[];
+
+  it("maps the param to a curve field with the param's own range, and leaves its neighbours as numbers", () => {
+    expect(rows.map((r) => r.kind)).toEqual(['number', 'number', 'curve']);
+    const curve = rows[2] as unknown as ModifierCurveFieldDef;
+    expect(curve).toMatchObject({
+      id: 'gamma',
+      path: 'gamma',
+      label: 'Gamma',
+      description: 'Midtone brightness.',
+      min: 0.1,
+      max: 5,
+      step: 0.05,
+    });
+  });
+
+  it('keeps an int param with the curve hint a number field (a curve is a float)', () => {
+    const field = opParamsToSchema({
+      name: 'x',
+      backend: 'python',
+      params: [{ name: 'a', type: 'int', default: 1, scale: 'none', widget: 'curve' }],
+    }).groups[0].rows[0] as FieldDef;
+    expect(field.kind).toBe('number');
+  });
+
+  function renderLevels(gamma: number): string {
+    const scopeKey = modifierScopeKey(LEVELS_LIKE_OP.name);
+    registerScope(scopeKey, buildModifierScope(LEVELS_LIKE_OP));
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        nodes: [
+          pixelNode('node-1', {
+            modifiers: [modifier('mod-1', { type: LEVELS_LIKE_OP.name, params: { gamma } })],
+          }),
+        ],
+      },
+    }));
+    return renderToStaticMarkup(
+      createElement(PropertyPanel, {
+        scopeKey,
+        selection: { nodeId: 'node-1', modId: 'mod-1' },
+        ctx: 'node-1/mod-1',
+      }),
+    );
+  }
+
+  // The editor reads its colours from CSS custom properties on mount; a render pass has no DOM.
+  beforeAll(() => {
+    vi.stubGlobal('document', { documentElement: {} });
+    vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
+  });
+  afterAll(() => vi.unstubAllGlobals());
+
+  it('shows the curve in addition to the Black point, White point and Gamma number fields', () => {
+    const markup = renderLevels(2);
+    expect(markup).toContain('aria-label="Gamma curve"');
+    expect(markup).toContain('>Black point<');
+    expect(markup).toContain('>White point<');
+    // the Gamma number field is still there, with its value
+    expect(markup).toMatch(/>Gamma<[\s\S]*value="2"/);
+  });
+});
+
+describe('gamma curve helpers', () => {
+  it('a drag of the point writes the gamma it shows, to three places', () => {
+    expect(gammaFromCurve(gammaCurve(2))).toBe(2);
+    expect(gammaFromCurve(gammaCurve(0.1))).toBe(0.1);
+    expect(gammaFromCurve(gammaCurve(5))).toBe(5);
+    expect(gammaFromCurve(gammaCurve(1.23456))).toBe(1.235);
+  });
+
+  it('refuses a curve that is not a gamma curve', () => {
+    expect(
+      gammaFromCurve({
+        points: [
+          { x: 0, y: 0, basis: 'linear' },
+          { x: 1, y: 1, basis: 'linear' },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it('the field moves the point: value to curve to value is the identity, to rounding', () => {
+    for (const g of [0.1, 0.5, 1, 1.7, 5])
+      expect(gammaFromCurve(gammaCurve(gammaToDraw(g)))).toBe(g);
+  });
+
+  it('a value that is not a usable number draws the diagonal', () => {
+    for (const bad of [undefined, null, 'x', 0, -2, Number.NaN]) expect(gammaToDraw(bad)).toBe(1);
+  });
+
+  it('roundGamma keeps three places', () => {
+    expect(roundGamma(1.00049)).toBe(1);
+    expect(roundGamma(1.0005)).toBe(1.001);
+  });
+
+  it('the line is x^(1/g) at every pixel column, at gamma 0.1, 1 and 5', () => {
+    const width = 400;
+    for (const g of [0.1, 1, 5]) {
+      const curve = gammaCurve(g);
+      for (let col = 0; col <= width; col++) {
+        const x = col / width;
+        expect(gammaLine(x, curve)).toBeCloseTo(x ** (1 / g), 12);
+      }
+    }
   });
 });

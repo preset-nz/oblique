@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 ParamScale = Literal["spatial", "none"]
 ParamType = Literal["float", "int", "bool", "enum", "color"]
-ParamWidget = Literal["slider"]
+ParamWidget = Literal["slider", "curve"]
 
 # Pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray, same shape, uint8 in/out,
 # must not mutate its input. `debug_echo` is the exception grandfathered from
@@ -44,9 +44,9 @@ class ParamSpec:
     step: float | None = None
     scale: ParamScale = "none"
     choices: tuple[str, ...] | None = None  # enum type only
-    widget: ParamWidget | None = (
-        None  # UI hint, e.g. "slider" over the default number field
-    )
+    # UI hint: "slider" over the default number field, or "curve" (levels' gamma
+    # drawn as a curve, beside the number field)
+    widget: ParamWidget | None = None
     # Disables this param in the panel when another of the same op's params
     # matches a condition — presentation only, the cook still receives and
     # ignores the value. Wire keys verbatim (`path`, plus exactly one of
@@ -236,6 +236,10 @@ class Op:
     # `to_dict` leaves the key out then, so an undriven op's wire entry is
     # exactly what it was before drivers.
     drivers: list[DriverSpec] = field(default_factory=list)
+    # The op's panel draws a histogram of the op's input (levels, over its curve). The
+    # webview asks per modifier on a draft cook; see `handlers/cook.py`. False for
+    # almost every op, and `to_dict` leaves the key out then.
+    histogram: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -251,6 +255,8 @@ class Op:
             d["category"] = self.category
         if self.drivers:
             d["drivers"] = [driver.to_dict() for driver in self.drivers]
+        if self.histogram:
+            d["histogram"] = True
         return d
 
 
@@ -341,6 +347,7 @@ def op(
     writes_alpha: bool = False,
     category: str | None = None,
     drivers: list[DriverSpec] | None = None,
+    histogram: bool = False,
 ) -> Callable[[OpFn], OpFn]:
     """Decorator; registers a pure fn (RGBA8 ndarray, params dict) -> RGBA8 ndarray.
 
@@ -357,6 +364,10 @@ def op(
     white meaning the full effect, as masks do. A modifier with no driver
     attached is called as `fn(img, params)`, exactly as an op that offers none;
     so a driver-capable fn takes `drivers=None` as its third parameter.
+
+    `histogram=True` marks an op whose panel shows a histogram of the op's own input
+    (levels). The cook can then return 256-bin counts of the picture as it reaches that
+    modifier (`handlers/cook.py`); the op's fn is unchanged.
 
     Ops are pure, deterministic (seeded randomness only), same-size RGBA8
     in and out, and never mutate their input. By default they also leave
@@ -392,6 +403,7 @@ def op(
             writes_alpha=writes_alpha,
             category=category,
             drivers=driver_list,
+            histogram=histogram,
         )
         return fn
 

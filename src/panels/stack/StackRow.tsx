@@ -5,6 +5,7 @@ import { InputNumber } from '@/components/InputNumber';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useActiveSelectionStore } from '@/scene/activeSelection';
+import { histogramKey } from '@/scene/histograms';
 import { useMarqueeStateStore } from '@/scene/marquee';
 import { driverRefusal, followRefusal } from '@/scene/maskInputs';
 import { useSceneStore } from '@/scene/store';
@@ -513,7 +514,8 @@ export function StackRow({
           <PropertyPanel
             scopeKey={modifierScopeKey(modifier.type)}
             selection={{ nodeId: node.id, modId: modifier.id }}
-            ctx={null}
+            // the key of what is cooked for this modifier, for a field that draws it (levels' histogram)
+            ctx={histogramKey(node.id, modifier.id)}
             readOnly={locked}
             emptyState={
               <div className="px-3 py-2 text-xs text-neutral-500">

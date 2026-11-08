@@ -30,6 +30,7 @@ import {
   partitionRuns,
   resetCookErrorBurst,
   resolutionFactor,
+  withHistograms,
 } from './cook';
 import { useLastCookStore } from './lastCook';
 import type { PrefixEntry } from './prefixCache';
@@ -2124,5 +2125,45 @@ describe('modifier drivers (Epic 27, blur-radius.md)', () => {
         1,
       );
     });
+  });
+});
+
+describe('levels histogram (levels-curve.md)', () => {
+  const histogramOps: OpDescriptor[] = opsFixture.map((o) =>
+    o.name === 'levels' ? { ...o, histogram: true } : o,
+  );
+  const stack: Modifier[] = [
+    { id: 'blur-1', type: 'gaussian_blur', enabled: true, params: { radius: 2 } },
+    { id: 'levels-1', type: 'levels', enabled: true, params: { black: 3 } },
+  ];
+
+  it('withHistograms marks the modifiers whose op asks, with the scene modifier id', () => {
+    const built = buildCookModifiers(stack, 1, histogramOps);
+    const marked = withHistograms('node-1', built, stack, histogramOps);
+    expect(marked.map((m) => m.histogramFor)).toEqual([undefined, 'node-1/levels-1']);
+    // the inputs are left alone, and an op that does not ask is the object it was
+    expect(built[1].histogramFor).toBeUndefined();
+    expect(marked[0]).toBe(built[0]);
+  });
+
+  it('withHistograms marks nothing when no op asks, or the registry is not known yet', () => {
+    const built = buildCookModifiers(stack, 1, opsFixture);
+    expect(withHistograms('node-1', built, stack, opsFixture)).toEqual(built);
+    expect(withHistograms('node-1', built, stack, [])).toEqual(built);
+  });
+
+  it('the draft cook asks for the histogram; the working cook does not', async () => {
+    for (const [level, asked] of [
+      ['draft', ['node-1/levels-1']],
+      ['working', []],
+    ] as const) {
+      const nodeRef = { current: makeNode({ modifiers: stack }) };
+      const deps = makeDeps(nodeRef, { getOps: vi.fn(() => histogramOps) });
+      await cookNode('node-1', level, deps);
+      const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(
+        (runModifiers as CookModifier[]).flatMap((m) => (m.histogramFor ? [m.histogramFor] : [])),
+      ).toEqual(asked);
+    }
   });
 });

@@ -123,6 +123,9 @@ export function descriptorsFor(
               spatial: op.params.filter((p) => p.scale === 'spatial').map((p) => p.name),
               // which drivers the op offers decides whether a driver's plane is sent at all
               drivers: op.drivers?.length ? op.drivers.map((d) => d.kind) : undefined,
+              // an op that draws a histogram of its input: a stored prefix past it was built
+              // without asking (registry not answered yet), so it must not stand in for a cook
+              histogram: op.histogram ? true : undefined,
             }
           : null,
       });

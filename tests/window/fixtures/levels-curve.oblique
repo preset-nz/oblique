@@ -1,0 +1,90 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "documentSize": [
+          640.0,
+          480.0
+        ],
+        "note": "Levels curve window check (Epic 27, levels-curve, phase 1). `just fixtures levels-curve` writes this file again.\n\n0. Open a fresh copy (`just window-check levels-curve`). Photo has two modifiers: Invert (switched off) and, above it in the stack, Levels with Black point 0, White point 255, Gamma 1.6. Under Levels' three number fields there is a square curve over a histogram, about as wide as the panel. The curve bows up from the diagonal, the point sits at the middle of it, and the Gamma field reads 1.6.\na. The histogram is of the picture as it arrives at Levels: grey for brightness, with red, green and blue overlaid. The photo is mostly mid tones (sky, grass), so most of the histogram sits in the middle.\nb. Drag the point up: the midtones lighten on the canvas as you drag, and the Gamma field climbs with it, live. Drag it down: the picture darkens and Gamma falls. The point only moves up and down; the two ends stay in their corners; double-click on the curve adds no point.\nc. Drag it as far up as it will go: Gamma stops at 5. As far down: it stops at 0.1. Neither goes further.\nd. Type 3 in the Gamma field and press Enter: the point jumps up to match. Scrub the Gamma label: the point follows the scrub.\ne. The drawn line is the power curve: at Gamma 1 it is the straight diagonal, at 0.1 it hugs the bottom and right edges, at 5 it hugs the top and left edges, with no kinks.\nf. One drag, then undo (Cmd+Z): Gamma goes back to where it was before the drag, in one step. The Edit menu names the step after Gamma. Redo puts it back.\ng. Start a drag and press Escape without letting go: the point and the Gamma field go back to where they were, the picture too, and there is nothing to undo from that drag.\nh. Tick Invert (the lower row) on: the picture goes negative and the histogram flips left to right, because a modifier below Levels changed what reaches it. Untick it: it flips back. The curve doesn't move.\ni. Set Black point to 80: the picture's shadows crush, but the curve and its histogram don't change. The curve shows the gamma alone, not the black and white points. Put Black point back to 0.\nj. Lock the layer: the curve greys and can't be dragged. Unlock it.\nk. Collapse the Levels row and open it again: the curve and histogram are there at once. Save, close and reopen the file: Gamma and the other numbers are as you left them.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo",
+      "id": "00000000000000000000000006",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "levels-curve.assets/photo.png"
+        }
+      },
+      "orders": {
+        "modifiers": [
+          "00000000000000000000000007",
+          "00000000000000000000000008"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo/invert",
+      "id": "00000000000000000000000007",
+      "type": "op.invert",
+      "values": {
+        "enabled": false
+      }
+    },
+    {
+      "path": "/layers/photo/levels",
+      "id": "00000000000000000000000008",
+      "type": "op.levels",
+      "values": {
+        "enabled": true,
+        "params.black": 0.0,
+        "params.gamma": 1.6,
+        "params.white": 255.0
+      }
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

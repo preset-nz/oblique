@@ -14,6 +14,7 @@ from ops import P, op
     category="colour",
     label="Levels",
     description="Classic black/white/gamma tonal remap via a single LUT.",
+    histogram=True,
     params=[
         P(
             "black",
@@ -43,6 +44,7 @@ from ops import P, op
             default=1.0,
             step=0.05,
             label="Gamma",
+            widget="curve",
             description="Midtone brightness. Above 1 lightens the midtones; below 1 darkens them.",
         ),
     ],

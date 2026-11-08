@@ -1,8 +1,9 @@
 @import "tailwindcss";
 /* @preset.nz packages ship unbuilt source into node_modules, which Tailwind
    never scans on its own. Without these lines their classes are missing
-   from the build. */
-@source "../node_modules/@preset.nz/ux-kit/src";
+   from the build. ux-kit is path-linked while it carries Histogram and the
+   gamma curve (unpublished), so its real path is scanned. */
+@source "../../../packages/ux-kit/src";
 @source "../node_modules/@preset.nz/facets/src";
 /* The family's look: tokens, palettes and fonts (Geist, JetBrains Mono). */
 @import "@preset.nz/ux-kit/index.css";

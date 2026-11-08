@@ -16,6 +16,7 @@
 //! - `depth-map`: Create Depth Map (Epic 17 story 5).
 //! - `layer-as-driver`: a depth layer drives a blur on the photo (Epic 17 story 6).
 //! - `blur-radius`: the same scene twice, masked and driven (Epic 27 story 1).
+//! - `levels-curve`: Levels' gamma as a curve over a histogram (Epic 27, levels-curve).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -538,6 +539,110 @@ fn blur_radius_fixture() {
     }
 }
 
+// ---- levels curve ----
+
+const LEVELS_CURVE_NOTES: &str = "\
+Levels curve window check (Epic 27, levels-curve, phase 1). `just fixtures levels-curve` writes this file again.
+
+0. Open a fresh copy (`just window-check levels-curve`). Photo has two modifiers: Invert (switched off) and, above it in the stack, Levels with Black point 0, White point 255, Gamma 1.6. Under Levels' three number fields there is a square curve over a histogram, about as wide as the panel. The curve bows up from the diagonal, the point sits at the middle of it, and the Gamma field reads 1.6.
+a. The histogram is of the picture as it arrives at Levels: grey for brightness, with red, green and blue overlaid. The photo is mostly mid tones (sky, grass), so most of the histogram sits in the middle.
+b. Drag the point up: the midtones lighten on the canvas as you drag, and the Gamma field climbs with it, live. Drag it down: the picture darkens and Gamma falls. The point only moves up and down; the two ends stay in their corners; double-click on the curve adds no point.
+c. Drag it as far up as it will go: Gamma stops at 5. As far down: it stops at 0.1. Neither goes further.
+d. Type 3 in the Gamma field and press Enter: the point jumps up to match. Scrub the Gamma label: the point follows the scrub.
+e. The drawn line is the power curve: at Gamma 1 it is the straight diagonal, at 0.1 it hugs the bottom and right edges, at 5 it hugs the top and left edges, with no kinks.
+f. One drag, then undo (Cmd+Z): Gamma goes back to where it was before the drag, in one step. The Edit menu names the step after Gamma. Redo puts it back.
+g. Start a drag and press Escape without letting go: the point and the Gamma field go back to where they were, the picture too, and there is nothing to undo from that drag.
+h. Tick Invert (the lower row) on: the picture goes negative and the histogram flips left to right, because a modifier below Levels changed what reaches it. Untick it: it flips back. The curve doesn't move.
+i. Set Black point to 80: the picture's shadows crush, but the curve and its histogram don't change. The curve shows the gamma alone, not the black and white points. Put Black point back to 0.
+j. Lock the layer: the curve greys and can't be dragged. Unlock it.
+k. Collapse the Levels row and open it again: the curve and histogram are there at once. Save, close and reopen the file: Gamma and the other numbers are as you left them.";
+
+/// `list_ops`' `levels` and `invert` as the sidecar declares them (sidecar/ops/levels.py,
+/// invert.py), so the fixture's modifiers are the ones the app makes.
+fn levels_catalogue() -> Catalogue {
+    let float = |name: &str, label: &str, default: f64, min: f64, max: f64| OpParam {
+        name: name.into(),
+        label: Some(label.into()),
+        description: None,
+        kind: "float".into(),
+        default: json!(default),
+        min: Some(min),
+        max: Some(max),
+        choices: vec![],
+        choice_labels: Default::default(),
+    };
+    Catalogue(vec![
+        Op {
+            name: "levels".into(),
+            label: Some("Levels".into()),
+            description: None,
+            category: Some("colour".into()),
+            drivers: vec![],
+            params: vec![
+                float("black", "Black point", 0.0, 0.0, 255.0),
+                float("white", "White point", 255.0, 0.0, 255.0),
+                float("gamma", "Gamma", 1.0, 0.1, 5.0),
+            ],
+        },
+        Op {
+            name: "invert".into(),
+            label: Some("Invert".into()),
+            description: None,
+            category: Some("colour".into()),
+            drivers: vec![],
+            params: vec![],
+        },
+    ])
+}
+
+fn levels_curve_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(levels_catalogue()),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run(
+        "document.set_size",
+        &json!({"size": [SIZE.0 as f64, SIZE.1 as f64]}),
+    )
+    .unwrap();
+    d.run("document.set_note", &json!({"note": LEVELS_CURVE_NOTES}))
+        .unwrap();
+    let mut photo = layer("photo", "Photo", "levels-curve.assets/photo.png", true);
+    // application order: Invert (off) first, then Levels, which the stack shows on top
+    photo["modifiers"] = json!([
+        {"id": "invert", "type": "invert", "enabled": false, "params": {}},
+        {"id": "levels", "type": "levels", "enabled": true,
+         "params": {"black": 0.0, "white": 255.0, "gamma": 1.6}}
+    ]);
+    d.run("layer.add", &json!({ "node": photo })).unwrap();
+    d.tree().serialise()
+}
+
+fn write_levels_curve_pictures() {
+    encode(
+        &fixtures_dir().join("levels-curve.assets/photo.png"),
+        png::ColorType::Rgb,
+        png::BitDepth::Eight,
+        &photo(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn levels_curve_fixture() {
+    let text = levels_curve_project();
+    check_or_write("levels-curve", &text);
+    if wanted("levels-curve") {
+        write_levels_curve_pictures();
+    }
+    assert!(
+        fixtures_dir().join("levels-curve.assets/photo.png").is_file(),
+        "tests/window/fixtures/levels-curve.assets/photo.png is missing: write it with `just fixtures levels-curve`"
+    );
+}
+
 #[test]
 fn depth_map_fixture() {
     let text = depth_map_project();
@@ -562,6 +667,7 @@ fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(depth_map_project(), depth_map_project());
     assert_eq!(layer_as_driver_project(), layer_as_driver_project());
     assert_eq!(blur_radius_project(), blur_radius_project());
+    assert_eq!(levels_curve_project(), levels_curve_project());
 }
 
 #[test]

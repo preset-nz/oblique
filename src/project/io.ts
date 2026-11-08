@@ -6,6 +6,7 @@ import { useMissingFontsStore } from '@/fonts/missingFonts';
 import type { DocumentEvents } from '@/rhizome/rhizome';
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
+import { clearAllHistograms } from '@/scene/histograms';
 import * as prefixStore from '@/scene/prefixStore';
 import { type ReplaceSourceResult, replacePixelSource } from '@/scene/replaceSource';
 import * as sources from '@/scene/sources';
@@ -253,6 +254,7 @@ export function projectDocumentEvents(deps: ProjectIoDeps = tauriProjectIoDeps):
     async opened({ issues, path }, adopt) {
       await adopt(async (target) => {
         cache.clearAll();
+        clearAllHistograms();
         prefixStore.clearAll();
         sources.clearAll();
         clearPending(); // a new or opened document owns none of the last one's unsaved files

@@ -4,6 +4,7 @@ import * as prefixCache from '@/cook/prefixCache';
 import { fontCatalogueSettled } from '@/fonts/catalogue';
 import type { TextGeometry } from '@/fonts/textGeometry';
 import * as cache from '@/scene/cache';
+import { histogramKey, storeResponseHistograms } from '@/scene/histograms';
 import {
   type DriverRasterKey,
   hasDocumentPinnedMask,
@@ -67,6 +68,32 @@ export interface CookModifier {
    * modifier whose op offers `kind`: the sidecar refuses the whole cook otherwise.
    */
   driver?: { kind: string; plane: Uint8Array };
+  /**
+   * The key (`histogramKey`: layer and modifier id) of a scene modifier whose op draws a histogram
+   * of its input (levels): the request asks the sidecar for the bins of the picture reaching this
+   * one, and the response files them under this key (`scene/histograms.ts`). Set by the draft cook only; absent everywhere else,
+   * and then the request and response are the frames they always were.
+   */
+  histogramFor?: string;
+}
+
+/**
+ * `cookModifiers` (built from `pending`, 1:1) of layer `nodeId` with `histogramFor` set on each
+ * whose op asks for a histogram. A new array; the inputs are left as they were.
+ */
+export function withHistograms(
+  nodeId: string,
+  cookModifiers: CookModifier[],
+  pending: Modifier[],
+  ops: OpDescriptor[],
+): CookModifier[] {
+  const asking = new Set(ops.filter((o) => o.histogram).map((o) => o.name));
+  return cookModifiers.map((m, i) => {
+    const source = pending[i];
+    return source && asking.has(m.type)
+      ? { ...m, histogramFor: histogramKey(nodeId, source.id) }
+      : m;
+  });
 }
 
 /**
@@ -331,6 +358,7 @@ async function realRunPython(
   // this function) — only a real production cook pulls it in.
   const { sidecarClient } = await import('@/sidecar/singleton');
   const packed = packMaskedPayload(payload, modifiers);
+  const histogramIndexes = modifiers.flatMap((m, i) => (m.histogramFor ? [i] : []));
   const { header, payload: result } = await sidecarClient.request(
     {
       op: 'cook',
@@ -342,9 +370,12 @@ async function realRunPython(
       // acceptance).
       ...(packed.masks ? { masks: packed.masks } : {}),
       ...(packed.drivers ? { drivers: packed.drivers } : {}),
+      // Likewise only when a modifier in this run wants its input's histogram (draft cook).
+      ...(histogramIndexes.length > 0 ? { histograms: histogramIndexes } : {}),
     },
     packed.payload,
   );
+  storeResponseHistograms(header.histograms, modifiers);
   if (Array.isArray(header.timings_ms)) {
     const perOp = (header.timings_ms as { type: string; ms: number }[])
       .map((t) => `${t.type} ${t.ms}ms`)
@@ -924,13 +955,11 @@ export async function cookNode(
       height,
       factor,
     );
-    const cookModifiers = buildCookModifiers(
-      pending,
-      factor,
-      deps.getOps(),
-      rasterizeFor,
-      rasterizeDriver,
-    );
+    const built = buildCookModifiers(pending, factor, deps.getOps(), rasterizeFor, rasterizeDriver);
+    // Levels' histogram (levels-curve.md) rides the draft cook only: it is a 1/8 picture, so
+    // counting costs nothing, and the panel needs the shape, not the pixels.
+    const cookModifiers =
+      level === 'draft' ? withHistograms(nodeId, built, pending, deps.getOps()) : built;
     if (cookModifiers.length !== pending.length) {
       throw new Error('buildCookModifiers no longer maps enabled modifiers 1:1');
     }

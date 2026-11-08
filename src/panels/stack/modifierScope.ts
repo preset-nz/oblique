@@ -40,6 +40,24 @@ export interface ModifierColorFieldDef extends ColorFieldDef {
   description?: string;
 }
 
+/**
+ * A float param the op's backend asks to be drawn as a curve (`widget: 'curve'`; levels' gamma).
+ * A custom field kind: `modifierFieldRenderers.tsx` registers the renderer, which draws the curve
+ * and keeps the param's own number field beside it. `min`/`max`/`step` are the param's, and the
+ * curve's range is the same range.
+ */
+export type ModifierCurveFieldDef = {
+  kind: 'curve';
+  id: string;
+  path: string;
+  label?: string;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabledWhen?: FieldDef['disabledWhen'];
+};
+
 /** The selected stack row: one modifier instance on one scene node. */
 export interface ModifierSelection {
   nodeId: string;
@@ -90,6 +108,16 @@ function paramToField(spec: OpParamSpec): FieldDef {
         step: spec.step ?? (integerStep ? 1 : 0.1),
         integerStep,
       };
+      if (spec.widget === 'curve' && !integerStep) {
+        return {
+          ...base,
+          ...described,
+          kind: 'curve',
+          min: spec.min,
+          max: spec.max,
+          step: shared.step,
+        } satisfies ModifierCurveFieldDef;
+      }
       return spec.widget === 'slider'
         ? ({ ...shared, kind: 'slider' } satisfies ModifierSliderFieldDef)
         : ({ ...shared, kind: 'number' } satisfies ModifierNumberFieldDef);

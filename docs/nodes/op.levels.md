@@ -30,6 +30,8 @@ Remaps brightness on all three colour channels at once, using the same curve for
 - **White point** is the input value that becomes pure white. Everything at or above it goes white, so lowering it brightens and blows out the highlights.
 - **Gamma** moves the midtones without moving black or white. Above 1 lightens them, below 1 darkens them.
 
+Under the controls, a square curve shows the gamma over a histogram of the picture as it arrives at Levels (luma in grey, red, green and blue overlaid). Drag its one point up to lighten the midtones and down to darken them: the Gamma field follows, and typing a gamma moves the point. The ends stay put, the point only moves up and down, and a drag is one undo step (Escape during the drag puts the gamma back). The histogram changes when a modifier above Levels changes. The curve shows the gamma alone, not the Black point and White point remap.
+
 If White point is set at or below Black point, White point is treated as one above Black point, so the control never inverts.
 
 Levels does not touch alpha.

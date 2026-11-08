@@ -15,7 +15,8 @@ export interface OpParamSpec {
   step?: number;
   scale: 'spatial' | 'none';
   choices?: string[]; // enum type only
-  widget?: 'slider'; // UI hint from the op's home backend — favours the slider kind over plain number
+  /** UI hint from the op's home backend: `slider` favours the slider kind over plain number; `curve` draws a float as a curve (levels' gamma) beside its number field. */
+  widget?: 'slider' | 'curve';
   /** Short sentence-case panel label ("Cell size"). Presentation metadata from
    * the op's home backend; the panel falls back to `name` when absent. */
   label?: string;
@@ -52,6 +53,9 @@ export interface OpDescriptor {
   /** What a layer can drive on this op (Epic 27): each is one `kind` a modifier's driver may
    * carry. Absent for an op that offers none. */
   drivers?: OpDriverSpec[];
+  /** The op's panel draws a histogram of the op's input (levels). The draft cook asks the
+   * sidecar for the bins of each such modifier. Absent for almost every op. */
+  histogram?: boolean;
 }
 
 /** One driver an op offers, as `list_ops` reports it. */

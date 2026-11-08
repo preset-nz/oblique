@@ -18,6 +18,14 @@ The header entry is `{modifierIndex, kind, driver_bytes}`; `kind` must be one
 the op offers. The op receives it as `drivers={kind: float32 0..1 plane}`
 beside `params`. Ops with no driver attached are called as they always were,
 and a frame with no `drivers` key is the pre-driver frame, byte for byte.
+
+Histograms (Epic 27, `features/27-driven-params/levels-curve.md`): the header may
+carry `histograms`, a list of modifier indexes whose op declares
+`@op(histogram=True)`. The response then carries `histograms`, one entry
+`{modifierIndex, luma, r, g, b}` per index: 256 bin counts of the picture as it
+ARRIVES at that modifier (before the op, and before its mask). Without the
+request key the response has no `histograms` key, so an ordinary cook is the
+frame it always was, byte for byte.
 """
 
 from __future__ import annotations
@@ -26,7 +34,29 @@ import time
 from typing import Any
 
 import numpy as np
-from ops import OPS, Op
+from ops import LUMA_B709, LUMA_G709, LUMA_R709, OPS, Op
+
+HISTOGRAM_BINS = 256
+
+
+def histogram_bins(img: np.ndarray) -> dict[str, list[int]]:
+    """256-bin counts of an RGBA8 picture: `luma` (Rec. 709 weights, `LUMA_*709` in
+    `ops`, the sidecar's one definition of grey, rounded to a bin) and `r`, `g`, `b`.
+
+    Fully transparent pixels are left out: they show nothing, and a cut-out's empty
+    area would otherwise stand as a spike in the blacks. Pure; reads `img` only.
+    """
+    visible = img[..., 3] > 0
+    rgb = img[..., :3][visible]
+    luma = np.rint(
+        rgb[:, 0] * LUMA_R709 + rgb[:, 1] * LUMA_G709 + rgb[:, 2] * LUMA_B709
+    ).astype(np.intp)
+    bins: dict[str, list[int]] = {
+        "luma": np.bincount(luma, minlength=HISTOGRAM_BINS)[:HISTOGRAM_BINS].tolist()
+    }
+    for index, name in enumerate("rgb"):
+        bins[name] = np.bincount(rgb[:, index], minlength=HISTOGRAM_BINS).tolist()
+    return bins
 
 
 def _run(
@@ -136,6 +166,23 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
                 ),
             }, b""
 
+    # Optional histograms: the modifier indexes whose input bins are wanted.
+    histogram_indexes = header.get("histograms", [])
+    for index in histogram_indexes:
+        if not isinstance(index, int) or not 0 <= index < len(modifiers):
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": f"histogram modifier index {index!r} out of range",
+            }, b""
+        op_name = modifiers[index]["type"]
+        if not OPS[op_name].histogram:
+            return {
+                "id": request_id,
+                "ok": False,
+                "error": f"op '{op_name}' offers no histogram",
+            }, b""
+
     image_bytes = width * height * 4
     expected_bytes = image_bytes + mask_plane_bytes * (
         len(mask_entries) + len(driver_entries)
@@ -185,8 +232,11 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
     # logging. perf_counter reads cost ~ns against ops that cost ms, so the
     # measurement can't skew what it measures.
     timings_ms: list[dict[str, Any]] = []
+    histograms: list[dict[str, Any]] = []
     for index, modifier in enumerate(modifiers):
         entry = OPS[modifier["type"]]
+        if index in histogram_indexes:
+            histograms.append({"modifierIndex": index, **histogram_bins(img)})
         started = time.perf_counter()
         mask = masks_by_index.get(index)
         driven = drivers_by_index.get(index)
@@ -215,10 +265,13 @@ def handle_cook(header: dict[str, Any], payload: bytes) -> tuple[dict[str, Any],
         )
 
     result = np.ascontiguousarray(img, dtype=np.uint8).tobytes()
-    return {
+    response: dict[str, Any] = {
         "id": request_id,
         "ok": True,
         "width": width,
         "height": height,
         "timings_ms": timings_ms,
-    }, result
+    }
+    if histograms:
+        response["histograms"] = histograms
+    return response, result

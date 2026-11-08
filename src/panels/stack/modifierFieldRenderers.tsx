@@ -1,15 +1,27 @@
 import { type FieldDef, type FieldRenderer, registerFieldRenderer } from '@preset.nz/facets';
 import { Icons } from '@preset.nz/ux-kit';
-import { useEffect, useId, useRef } from 'react';
+import {
+  CurveEditor,
+  type CurveEditorProps,
+  constrainGamma,
+  gammaCurve,
+  gammaLine,
+  gammaOf,
+  Histogram,
+} from '@preset.nz/ux-kit/graphics';
+import { useEffect, useId, useMemo, useRef } from 'react';
 import { InputNumber } from '@/components/InputNumber';
 import { LabelTip } from '@/components/LabelTip';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
+import { useCacheVersionStore } from '@/scene/cache';
 import { useEyedropperStore } from '@/scene/eyedropperState';
-import { beginTransaction, endTransaction } from '@/scene/transaction';
+import { getHistogram } from '@/scene/histograms';
+import { beginTransaction, cancelTransaction, endTransaction } from '@/scene/transaction';
 import { snapToIntegerStep } from './integerStepFix';
 import type {
   ModifierColorFieldDef,
+  ModifierCurveFieldDef,
   ModifierNumberFieldDef,
   ModifierSelectFieldDef,
   ModifierSliderFieldDef,
@@ -177,8 +189,8 @@ const ModifierSelectRenderer: FieldRenderer<ModifierSelectFieldDef> = ({
  * because facets calls renderers as plain functions, so hooks must live here.
  *
  * `fieldKey` comes from `useId`: the facets renderer receives no node/modifier
- * ids (`ctx` is `null` for the modifier scope and the selection never reaches
- * the renderer), but every mounted field instance gets its own id, which is
+ * ids (`ctx` is only the key of the modifier's cooked extras, `histogramKey`, and the
+ * selection never reaches the renderer), but every mounted field instance gets its own id, which is
  * exactly the uniqueness the active state needs. Unmounting (row collapsed,
  * node deleted) while armed cancels the pick rather than leaving it dangling.
  */
@@ -288,8 +300,123 @@ const ModifierColorRenderer: FieldRenderer<ModifierColorFieldDef> = ({
   );
 };
 
+/** The curve type ux-kit's editor hands back (it is math's `Curve`, which ux-kit doesn't re-export). */
+type Curve = Parameters<CurveEditorProps['onChange']>[0];
+
+/** The gamma a curve edit writes, to three places: the point sits on a pixel grid anyway, and a file shouldn't carry 1.2345678901. */
+export function roundGamma(g: number): number {
+  return Math.round(g * 1000) / 1000;
+}
+
+/** The value a curve edit writes as the param, or `null` for a curve that isn't a gamma curve. */
+export function gammaFromCurve(next: Curve): number | null {
+  const g = gammaOf(next);
+  return g === null || !Number.isFinite(g) || g <= 0 ? null : roundGamma(g);
+}
+
+/** The gamma the curve is drawn for: the param's value, or 1 (the diagonal) when it is not a usable number. */
+export function gammaToDraw(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+}
+
 /**
- * Registers Oblique's `number`/`slider`/`select`/`color` renderers, overriding the
+ * Levels' gamma as the Gamma number field with a curve under it, over a histogram of levels' input
+ * (levels-curve.md): dragging the point writes the field, typing in the field moves the point.
+ * A real component because facets calls renderers as plain functions and this one has hooks.
+ *
+ * A drag is one undo step the way a field scrub is: `beginTransaction` when it starts,
+ * `endTransaction` when it ends, and `cancelTransaction` when Escape abandons it (the editor has
+ * already put the point back by then). Arrow-key nudges and menu edits are single writes.
+ */
+function GammaCurveField({
+  field,
+  value,
+  disabled,
+  onChange,
+  histogramKey,
+}: {
+  field: ModifierCurveFieldDef;
+  value: unknown;
+  disabled: boolean;
+  onChange?: (next: unknown) => void;
+  histogramKey: unknown;
+}) {
+  const gamma = gammaToDraw(value);
+  const min = field.min ?? 0.1;
+  const max = field.max ?? 5;
+  const readOnly = disabled || !onChange;
+  const constrain = useMemo(() => constrainGamma(min, max), [min, max]);
+  // the bins live in the cache map; a cook writing them bumps this version
+  useCacheVersionStore((s) => s.cacheVersion);
+  const bins = typeof histogramKey === 'string' ? getHistogram(histogramKey) : undefined;
+  const background = useMemo(
+    () =>
+      bins ? <Histogram bins={bins} aria-label="Histogram of the picture reaching levels" /> : null,
+    [bins],
+  );
+  const write = (next: Curve) => {
+    const g = gammaFromCurve(next);
+    if (g !== null) onChange?.(g);
+  };
+  const label = field.label ?? field.id;
+  return (
+    <div className="flex flex-col gap-2">
+      <InputNumber
+        label={label}
+        description={field.description}
+        value={gamma}
+        onChange={(next) => onChange?.(next)}
+        min={field.min}
+        max={field.max}
+        step={field.step ?? 0.05}
+        disabled={readOnly}
+        allowTypedOverMax
+        onDragStart={beginTransaction}
+        onDragEnd={endTransaction}
+      />
+      <div
+        className={cn('w-full', readOnly && 'opacity-50')}
+        // a locked layer (or a field with no write) shows the curve and ignores it
+        inert={readOnly}
+      >
+        <CurveEditor
+          value={gammaCurve(gamma)}
+          onChange={write}
+          onGestureStart={beginTransaction}
+          onGestureEnd={(committed) => (committed ? endTransaction() : cancelTransaction())}
+          constrain={constrain}
+          line={gammaLine}
+          background={background}
+          aria-label={`${label} curve`}
+          className="aspect-square h-auto w-full"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A float param the op's backend draws as a curve (`widget: 'curve'`): the curve plus the
+ * param's number field. `ctx` is the modifier's histogram key (`StackRow`).
+ */
+const ModifierCurveRenderer: FieldRenderer<ModifierCurveFieldDef> = ({
+  field,
+  value,
+  disabled,
+  onChange,
+  ctx,
+}) => (
+  <GammaCurveField
+    field={field}
+    value={value}
+    disabled={disabled}
+    onChange={onChange}
+    histogramKey={ctx}
+  />
+);
+
+/**
+ * Registers Oblique's `number`/`slider`/`select`/`color`/`curve` renderers, overriding the
  * shared package's plain-`<input>`/`<select>` builtins with the scrub-drag
  * `InputNumber` and the `ToggleGroup` segmented control. Call once at app
  * start, after `registerBuiltinRenderers()`.
@@ -299,4 +426,5 @@ export function registerModifierFieldRenderers(): void {
   registerFieldRenderer('slider', ModifierSliderRenderer as FieldRenderer<FieldDef>);
   registerFieldRenderer('select', ModifierSelectRenderer as FieldRenderer<FieldDef>);
   registerFieldRenderer('color', ModifierColorRenderer as FieldRenderer<FieldDef>);
+  registerFieldRenderer('curve', ModifierCurveRenderer as FieldRenderer<FieldDef>);
 }
