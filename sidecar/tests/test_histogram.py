@@ -33,7 +33,12 @@ def test_only_levels_asks_and_the_list_says_so() -> None:
 def test_gamma_is_the_curve_widget_and_nothing_else_is_changed() -> None:
     params = {p["name"]: p for p in OPS["levels"].to_dict()["params"]}
     assert params["gamma"]["widget"] == "curve"
-    assert params["gamma"]["curve"] == {"black": "black", "white": "white"}
+    assert params["gamma"]["curve"] == {
+        "black": "black",
+        "white": "white",
+        "out_black": "out_black",
+        "out_white": "out_white",
+    }
     assert "curve" not in params["black"]
     assert "widget" not in params["black"]
     assert "widget" not in params["white"]
@@ -149,18 +154,26 @@ def test_histograms_do_not_change_the_picture() -> None:
     assert with_hist == without
 
 
+def _roles(last: str) -> dict[str, str]:
+    return {"black": "lo", "white": "hi", "out_black": "lo", "out_white": last}
+
+
 @pytest.mark.parametrize(
     "bad",
     [
         {"widget": "curve"},  # curve widget with no ends named
-        {"widget": "curve", "curve": {"black": "lo"}},  # a role missing
-        {"widget": "curve", "curve": {"black": "lo", "white": "g"}},  # names itself
-        {"widget": "curve", "curve": {"black": "lo", "white": "nope"}},  # unknown param
-        {"widget": "curve", "curve": {"black": "lo", "white": "flag"}},  # not a float
-        {"curve": {"black": "lo", "white": "hi"}},  # ends without the widget
+        {"widget": "curve", "curve": {"black": "lo"}},  # roles missing
+        {
+            "widget": "curve",
+            "curve": {"black": "lo", "white": "hi"},
+        },  # the output roles missing
+        {"widget": "curve", "curve": _roles("g")},  # names itself
+        {"widget": "curve", "curve": _roles("nope")},  # unknown param
+        {"widget": "curve", "curve": _roles("flag")},  # not a float
+        {"curve": _roles("hi")},  # ends without the widget
     ],
 )
-def test_a_curve_param_must_name_two_bounded_float_siblings(bad: dict) -> None:
+def test_a_curve_param_must_name_its_four_bounded_float_siblings(bad: dict) -> None:
     params = [
         P("lo", "float", min=0.0, max=1.0, default=0.0),
         P("hi", "float", min=0.0, max=1.0, default=1.0),

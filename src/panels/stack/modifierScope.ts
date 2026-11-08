@@ -49,23 +49,48 @@ export interface CurveEnd {
 }
 
 /**
- * What a curve field holds: its own param (`gamma`) and the two params that set the ends, in the
- * params' own units (levels: 0 to 255). `read` builds it from the three, and a write of it
- * changes only the params that differ from what the modifier has.
+ * What a curve field holds: its own param (`gamma`) and the four params that set the ends, in the
+ * params' own units (levels: 0 to 255). `outBlack` and `outWhite` are how high the ends sit. `read`
+ * builds it from the five, and a write of it changes only the params that differ from what the
+ * modifier has.
  */
 export interface CurveValue {
   black: number;
   white: number;
   gamma: number;
+  outBlack: number;
+  outWhite: number;
 }
 
-export const CURVE_ROLES = ['black', 'white', 'gamma'] as const;
+export type CurveKey = keyof CurveValue;
+export const CURVE_KEYS: readonly CurveKey[] = ['black', 'white', 'gamma', 'outBlack', 'outWhite'];
+
+/** Which key of the sidecar's `curve` map names the param behind each end key (gamma is the field's own). */
+const CURVE_ROLE: Record<Exclude<CurveKey, 'gamma'>, keyof NonNullable<OpParamSpec['curve']>> = {
+  black: 'black',
+  white: 'white',
+  outBlack: 'out_black',
+  outWhite: 'out_white',
+};
+
+/** The param each key of a curve value is stored in: the roles' params, and the field's own for gamma. */
+function curveParamNames(
+  spec: OpParamSpec & { curve: NonNullable<OpParamSpec['curve']> },
+): Record<CurveKey, string> {
+  return {
+    black: spec.curve[CURVE_ROLE.black],
+    white: spec.curve[CURVE_ROLE.white],
+    outBlack: spec.curve[CURVE_ROLE.outBlack],
+    outWhite: spec.curve[CURVE_ROLE.outWhite],
+    gamma: spec.name,
+  };
+}
 
 /**
  * A float param the op's backend asks to be drawn as a curve (`widget: 'curve'`, with `curve`
  * naming the end params; levels). A custom field kind: `modifierFieldRenderers.tsx` registers the
  * renderer, which draws the curve and keeps the param's own number field with it. `min`/`max`/
- * `step` are the param's (gamma's) own; `black` and `white` are the end params'.
+ * `step` are the param's (gamma's) own; the four ends are the end params'.
  */
 export type ModifierCurveFieldDef = {
   kind: 'curve';
@@ -78,6 +103,8 @@ export type ModifierCurveFieldDef = {
   step?: number;
   black: CurveEnd;
   white: CurveEnd;
+  outBlack: CurveEnd;
+  outWhite: CurveEnd;
   disabledWhen?: FieldDef['disabledWhen'];
 };
 
@@ -140,8 +167,10 @@ function paramToField(spec: OpParamSpec, params: OpParamSpec[]): FieldDef {
       };
       const black = spec.curve && curveEnd(params, spec.curve.black);
       const white = spec.curve && curveEnd(params, spec.curve.white);
-      // a curve needs both ends named by the backend; without them it stays a number field
-      if (spec.widget === 'curve' && !integerStep && black && white) {
+      const outBlack = spec.curve && curveEnd(params, spec.curve.out_black);
+      const outWhite = spec.curve && curveEnd(params, spec.curve.out_white);
+      // a curve needs its ends named by the backend; without them it stays a number field
+      if (spec.widget === 'curve' && !integerStep && black && white && outBlack && outWhite) {
         return {
           ...base,
           ...described,
@@ -151,6 +180,8 @@ function paramToField(spec: OpParamSpec, params: OpParamSpec[]): FieldDef {
           step: shared.step,
           black,
           white,
+          outBlack,
+          outWhite,
         } satisfies ModifierCurveFieldDef;
       }
       return spec.widget === 'slider'
@@ -189,7 +220,7 @@ export function modifierScopeKey(opType: string): string {
 function isCurveValue(value: unknown): value is CurveValue {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return CURVE_ROLES.every((role) => typeof v[role] === 'number');
+  return CURVE_KEYS.every((key) => typeof v[key] === 'number');
 }
 
 function readModifierParams(
@@ -209,10 +240,13 @@ function readModifierParams(
   // params the backend names, so typing in a sibling field moves the curve.
   for (const spec of descriptor.params) {
     if (spec.widget !== 'curve' || !spec.curve) continue;
+    const names = curveParamNames({ ...spec, curve: spec.curve });
     values[spec.name] = {
-      black: values[spec.curve.black],
-      white: values[spec.curve.white],
+      black: values[names.black],
+      white: values[names.white],
       gamma: values[spec.name],
+      outBlack: values[names.outBlack],
+      outWhite: values[names.outWhite],
     };
   }
   return values;
@@ -236,12 +270,12 @@ export function buildModifierScope(
         // One write of the curve's value: only the params that differ are set, each through
         // `setModifierParam`, so a drag of one end never touches the others.
         const current = readModifierParams(descriptor, selection)[path] as CurveValue;
-        const names = { black: spec.curve.black, white: spec.curve.white, gamma: path };
-        for (const role of CURVE_ROLES) {
-          if (value[role] === current[role]) continue;
+        const names = curveParamNames({ ...spec, curve: spec.curve });
+        for (const key of CURVE_KEYS) {
+          if (value[key] === current[key]) continue;
           useSceneStore
             .getState()
-            .setModifierParam(selection.nodeId, selection.modId, names[role], value[role]);
+            .setModifierParam(selection.nodeId, selection.modId, names[key], value[key]);
         }
         return;
       }

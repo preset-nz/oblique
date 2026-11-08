@@ -323,10 +323,10 @@ export function roundGamma(g: number): number {
 }
 
 /**
- * The curve field's value as the editor draws it: black and white put on the 0..1 axis by their
- * own params' ranges (not a hardcoded 255), and gamma, held to a usable number (else 1, the
- * diagonal). A value that is not a curve value draws the identity: ends at the params' defaults
- * of min and max.
+ * The curve field's value as the editor draws it: each end put on the 0..1 axis by its own
+ * param's range (not a hardcoded 255), and gamma, held to a usable number (else 1, the
+ * diagonal). A value that is not a curve value draws the identity: the ends at their params'
+ * min and max.
  */
 export function levelsToDraw(field: ModifierCurveFieldDef, value: unknown): Levels {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Partial<CurveValue>;
@@ -337,15 +337,30 @@ export function levelsToDraw(field: ModifierCurveFieldDef, value: unknown): Leve
     black: norm(field.black, v.black, field.black.min),
     white: norm(field.white, v.white, field.white.max),
     gamma: gamma > 0 ? gamma : 1,
+    outBlack: norm(field.outBlack, v.outBlack, field.outBlack.min),
+    outWhite: norm(field.outWhite, v.outWhite, field.outWhite.max),
+  };
+}
+
+/** The value a curve field starts from when `value` is not a usable curve value: the params' own ends. */
+function currentOf(field: ModifierCurveFieldDef, value: unknown, gamma: number): CurveValue {
+  const v = (typeof value === 'object' && value !== null ? value : {}) as Partial<CurveValue>;
+  return {
+    black: usable(v.black, field.black.min),
+    white: usable(v.white, field.white.max),
+    gamma,
+    outBlack: usable(v.outBlack, field.outBlack.min),
+    outWhite: usable(v.outWhite, field.outWhite.max),
   };
 }
 
 /**
- * What a curve edit writes: `current` with only the keys the edit changed replaced, black and
- * white rounded to their params' steps and gamma to three places. The comparison is on the
- * un-rounded numbers, with the editor's own tolerance, so dragging an end (which carries the
- * gamma point along without changing its height) never writes gamma, and a gamma typed to more
- * places than three is not rewritten by it. `null` for a curve that is not a levels curve.
+ * What a curve edit writes: `current` with only the keys the edit changed replaced, the ends
+ * rounded to their params' steps and gamma to three places. An end dragged in x and y changes two
+ * keys. The comparison is on the un-rounded numbers, with the editor's own tolerance, so dragging
+ * an end (which carries the gamma point along without changing its share of the span) never writes
+ * gamma, and a gamma typed to more places than three is not rewritten by it. `null` for a curve
+ * that is not a levels curve.
  */
 export function valueFromCurve(
   field: ModifierCurveFieldDef,
@@ -360,17 +375,20 @@ export function valueFromCurve(
   const out = { ...current };
   const unit = (end: CurveEnd, x: number) =>
     snapToStep(end.min + x * (end.max - end.min), end.min, end.max, end.step);
-  if (Math.abs(l.black - was.black) > 1e-9) out.black = unit(field.black, l.black);
-  if (Math.abs(l.white - was.white) > 1e-9) out.white = unit(field.white, l.white);
-  if (Math.abs(l.gamma - was.gamma) > 1e-9) out.gamma = roundGamma(l.gamma);
+  const moved = (a: number, b: number) => Math.abs(a - b) > 1e-9;
+  if (moved(l.black, was.black)) out.black = unit(field.black, l.black);
+  if (moved(l.white, was.white)) out.white = unit(field.white, l.white);
+  if (moved(l.outBlack, was.outBlack)) out.outBlack = unit(field.outBlack, l.outBlack);
+  if (moved(l.outWhite, was.outWhite)) out.outWhite = unit(field.outWhite, l.outWhite);
+  if (moved(l.gamma, was.gamma)) out.gamma = roundGamma(l.gamma);
   return out;
 }
 
 /**
  * Levels as the Gamma number field with a curve under it, over a histogram of levels' input
- * (levels-curve.md): dragging the point writes gamma, dragging an end writes black or white, and
- * typing in Black point, White point or Gamma moves the curve. The field's value is
- * `{black, white, gamma}` (`modifierScope.ts` reads it from the three params and writes back only
+ * (levels-curve.md): dragging the point writes gamma, dragging an end writes its black or white and
+ * its output black or white, and typing in any of those fields moves the curve. The field's value is
+ * `{black, white, gamma, outBlack, outWhite}` (`modifierScope.ts` reads it from the five params and writes back only
  * what changed). A real component because facets calls renderers as plain functions and this one
  * has hooks.
  *
@@ -405,11 +423,7 @@ function LevelsCurveField({
     [bins],
   );
   // the value as the scope read it, in the params' units
-  const current: CurveValue = {
-    black: usable((value as Partial<CurveValue> | null)?.black, field.black.min),
-    white: usable((value as Partial<CurveValue> | null)?.white, field.white.max),
-    gamma: levels.gamma,
-  };
+  const current = currentOf(field, value, levels.gamma);
   const write = (next: Curve) => {
     const written = valueFromCurve(field, current, next);
     if (written) onChange?.(written);

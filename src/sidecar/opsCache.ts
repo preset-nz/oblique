@@ -17,9 +17,10 @@ export interface OpParamSpec {
   choices?: string[]; // enum type only
   /** UI hint from the op's home backend: `slider` favours the slider kind over plain number; `curve` draws a float as a curve with its `curve` ends (levels) beside its number field. */
   widget?: 'slider' | 'curve';
-  /** With `widget: 'curve'`: the params that set the curve's two ends, by role (levels: black and
-   * white). The curve field reads and writes all three; each end is scaled by its own param's range. */
-  curve?: { black: string; white: string };
+  /** With `widget: 'curve'`: the params that set the curve's two ends, by role (levels): `black` and
+   * `white` are the ends' places along the bottom, `out_black` and `out_white` how high they sit.
+   * The curve field reads and writes all of them; each is scaled by its own param's range. */
+  curve?: { black: string; white: string; out_black: string; out_white: string };
   /** Short sentence-case panel label ("Cell size"). Presentation metadata from
    * the op's home backend; the panel falls back to `name` when absent. */
   label?: string;

@@ -47,9 +47,10 @@ class ParamSpec:
     # UI hint: "slider" over the default number field, or "curve" (levels: black, white and
     # gamma drawn as one curve, with the number field beside it; see `curve` below)
     widget: ParamWidget | None = None
-    # With `widget="curve"`: which other params of the op set the curve's two ends, by role,
-    # `{"black": "black", "white": "white"}` (levels). The panel draws all three as one curve
-    # and writes the one that changed; each end is normalised by its own param's min/max.
+    # With `widget="curve"`: which other params of the op set the curve's two ends, in x and
+    # in y, by role: `{"black": "black", "white": "white", "out_black": "out_black",
+    # "out_white": "out_white"}` (levels). The panel draws all of them as one curve and writes
+    # the ones that changed; each is normalised by its own param's min/max.
     # Validated at registration — see `_validate_curve`.
     curve: dict[str, str] | None = None
     # Disables this param in the panel when another of the same op's params
@@ -325,25 +326,29 @@ def _validate_disabled_when(
             )
 
 
+CURVE_ROLES = ("black", "white", "out_black", "out_white")
+
+
 def _validate_curve(
     op_name: str, spec: ParamSpec, params_by_name: dict[str, ParamSpec]
 ) -> None:
     """Validates one param's `curve` at registration time: it needs `widget="curve"`, a float
-    param, and exactly the roles `black` and `white`, each naming another bounded float param of
-    the same op (the panel normalises an end by that param's min and max)."""
+    param, and exactly the four roles `black`, `white`, `out_black` and `out_white` (all required:
+    levels is the only user, and the panel's curve moves each end in x and y), each naming another
+    bounded float param of the same op (the panel normalises an end by that param's min and max)."""
     if spec.curve is None:
         if spec.widget == "curve":
             raise ValueError(
-                f"{op_name}.{spec.name}: widget 'curve' needs curve={{'black': …, 'white': …}}"
+                f"{op_name}.{spec.name}: widget 'curve' needs curve={{{', '.join(CURVE_ROLES)}}}"
             )
         return
     if spec.widget != "curve" or spec.type != "float":
         raise ValueError(
             f"{op_name}.{spec.name}: curve only applies to a float param with widget='curve'"
         )
-    if set(spec.curve) != {"black", "white"}:
+    if set(spec.curve) != set(CURVE_ROLES):
         raise ValueError(
-            f"{op_name}.{spec.name}: curve must name exactly 'black' and 'white', "
+            f"{op_name}.{spec.name}: curve must name exactly {list(CURVE_ROLES)}, "
             f"got {sorted(spec.curve)}"
         )
     for role, name in spec.curve.items():

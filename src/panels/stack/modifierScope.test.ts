@@ -522,7 +522,27 @@ const LEVELS_LIKE_OP: OpDescriptor = {
       label: 'Gamma',
       description: 'Midtone brightness.',
       widget: 'curve',
-      curve: { black: 'black', white: 'white' },
+      curve: { black: 'black', white: 'white', out_black: 'out_black', out_white: 'out_white' },
+    },
+    {
+      name: 'out_black',
+      type: 'float',
+      default: 0,
+      min: 0,
+      max: 255,
+      step: 1,
+      scale: 'none',
+      label: 'Output black',
+    },
+    {
+      name: 'out_white',
+      type: 'float',
+      default: 255,
+      min: 0,
+      max: 255,
+      step: 1,
+      scale: 'none',
+      label: 'Output white',
     },
   ],
 };
@@ -532,7 +552,7 @@ describe('widget: curve', () => {
   const curveField = rows[2] as unknown as ModifierCurveFieldDef;
 
   it("maps the param to a curve field with the param's own range and the ends' ranges, and leaves its neighbours as numbers", () => {
-    expect(rows.map((r) => r.kind)).toEqual(['number', 'number', 'curve']);
+    expect(rows.map((r) => r.kind)).toEqual(['number', 'number', 'curve', 'number', 'number']);
     expect(curveField).toMatchObject({
       id: 'gamma',
       path: 'gamma',
@@ -543,6 +563,8 @@ describe('widget: curve', () => {
       step: 0.05,
       black: { path: 'black', min: 0, max: 255, step: 1 },
       white: { path: 'white', min: 0, max: 255, step: 1 },
+      outBlack: { path: 'out_black', min: 0, max: 255, step: 1 },
+      outWhite: { path: 'out_white', min: 0, max: 255, step: 1 },
     });
   });
 
@@ -553,6 +575,8 @@ describe('widget: curve', () => {
       params: [
         { name: 'lo', type: 'float', default: 0, min: 0, max: 100, step: 5, scale: 'none' },
         { name: 'hi', type: 'float', default: 100, min: 0, max: 100, scale: 'none' },
+        { name: 'olo', type: 'float', default: 0, min: 0, max: 50, scale: 'none' },
+        { name: 'ohi', type: 'float', default: 50, min: 0, max: 50, scale: 'none' },
         {
           name: 'g',
           type: 'float',
@@ -561,17 +585,16 @@ describe('widget: curve', () => {
           max: 5,
           scale: 'none',
           widget: 'curve',
-          curve: { black: 'lo', white: 'hi' },
+          curve: { black: 'lo', white: 'hi', out_black: 'olo', out_white: 'ohi' },
         },
       ],
     };
-    const field = opParamsToSchema(op).groups[0].rows[2] as unknown as ModifierCurveFieldDef;
+    const field = opParamsToSchema(op).groups[0].rows[4] as unknown as ModifierCurveFieldDef;
     expect(field.black).toEqual({ path: 'lo', min: 0, max: 100, step: 5 });
-    expect(levelsToDraw(field, { black: 25, white: 75, gamma: 2 })).toEqual({
-      black: 0.25,
-      white: 0.75,
-      gamma: 2,
-    });
+    expect(field.outWhite).toEqual({ path: 'ohi', min: 0, max: 50, step: 1 });
+    expect(
+      levelsToDraw(field, { black: 25, white: 75, gamma: 2, outBlack: 10, outWhite: 40 }),
+    ).toEqual({ black: 0.25, white: 0.75, gamma: 2, outBlack: 0.2, outWhite: 0.8 });
   });
 
   it('keeps a curve param without named ends, or an int one, a number field', () => {
@@ -588,7 +611,7 @@ describe('widget: curve', () => {
         default: 1,
         scale: 'none',
         widget: 'curve',
-        curve: { black: 'a', white: 'a' },
+        curve: { black: 'a', white: 'a', out_black: 'a', out_white: 'a' },
       }).kind,
     ).toBe('number');
   });
@@ -609,22 +632,48 @@ describe('widget: curve', () => {
   const storedParams = () =>
     (useSceneStore.getState().scene.nodes[0] as PixelNode).modifiers[0].params;
 
-  it('reads the curve field as black, white and gamma from the three params, defaults for any not set', () => {
-    nodeWith({ black: 20, gamma: 2 });
+  it('reads the curve field as black, white, gamma and the output ends from the five params, defaults for any not set', () => {
+    nodeWith({ black: 20, gamma: 2, out_black: 40 });
     const values = buildModifierScope(LEVELS_LIKE_OP).read(selection, null);
-    expect(values.gamma).toEqual({ black: 20, white: 255, gamma: 2 });
+    expect(values.gamma).toEqual({ black: 20, white: 255, gamma: 2, outBlack: 40, outWhite: 255 });
     // the neighbours' own fields are untouched by it
     expect(values.black).toBe(20);
     expect(values.white).toBe(255);
+    expect(values.out_black).toBe(40);
   });
 
   it('a write of the curve value sets only the params that changed', () => {
-    nodeWith({ black: 20, white: 230, gamma: 1.2345 });
+    nodeWith({ black: 20, white: 230, gamma: 1.2345, out_black: 0, out_white: 255 });
     const scope = buildModifierScope(LEVELS_LIKE_OP);
-    scope.write?.('gamma', { black: 20, white: 200, gamma: 1.2345 }, selection, null);
-    expect(storedParams()).toEqual({ black: 20, white: 200, gamma: 1.2345 });
-    scope.write?.('gamma', { black: 40, white: 200, gamma: 3 }, selection, null);
-    expect(storedParams()).toEqual({ black: 40, white: 200, gamma: 3 });
+    const was = { black: 20, white: 230, gamma: 1.2345, outBlack: 0, outWhite: 255 };
+    scope.write?.('gamma', { ...was, white: 200 }, selection, null);
+    expect(storedParams()).toEqual({
+      black: 20,
+      white: 200,
+      gamma: 1.2345,
+      out_black: 0,
+      out_white: 255,
+    });
+    scope.write?.('gamma', { ...was, white: 200, black: 40, gamma: 3 }, selection, null);
+    expect(storedParams()).toMatchObject({ black: 40, white: 200, gamma: 3 });
+  });
+
+  it('an end dragged in x and y writes both of its params in the one write', () => {
+    nodeWith({ black: 20, white: 230, gamma: 1, out_black: 0, out_white: 255 });
+    const scope = buildModifierScope(LEVELS_LIKE_OP);
+    const sets = vi.spyOn(useSceneStore.getState(), 'setModifierParam');
+    scope.write?.(
+      'gamma',
+      { black: 50, white: 230, gamma: 1, outBlack: 60, outWhite: 255 },
+      selection,
+      null,
+    );
+    expect(sets.mock.calls.map((c) => [c[2], c[3]])).toEqual([
+      ['black', 50],
+      ['out_black', 60],
+    ]);
+    expect(storedParams()).toMatchObject({ black: 50, out_black: 60, white: 230, out_white: 255 });
+    sets.mockRestore();
   });
 
   it('a plain number written to gamma is still just gamma', () => {
@@ -650,10 +699,12 @@ describe('widget: curve', () => {
   afterAll(() => vi.unstubAllGlobals());
 
   it('shows the curve in addition to the Black point, White point and Gamma number fields', () => {
-    const markup = renderLevels({ black: 20, white: 230, gamma: 2 });
+    const markup = renderLevels({ black: 20, white: 230, gamma: 2, out_black: 40 });
     expect(markup).toContain('aria-label="Levels curve"');
     expect(markup).toContain('>Black point<');
     expect(markup).toContain('>White point<');
+    expect(markup).toContain('>Output black<');
+    expect(markup).toContain('>Output white<');
     // the Gamma number field is still there, with its value
     expect(markup).toMatch(/>Gamma<[\s\S]*value="2"/);
   });
@@ -662,10 +713,19 @@ describe('widget: curve', () => {
 describe('levels curve helpers', () => {
   const field = opParamsToSchema(LEVELS_LIKE_OP).groups[0]
     .rows[2] as unknown as ModifierCurveFieldDef;
-  const value = (black: number, white: number, gamma: number): CurveValue => ({
-    black,
-    white,
-    gamma,
+  const value = (
+    black: number,
+    white: number,
+    gamma: number,
+    outBlack = 0,
+    outWhite = 255,
+  ): CurveValue => ({ black, white, gamma, outBlack, outWhite });
+  const norm = (v: CurveValue) => ({
+    black: v.black / 255,
+    white: v.white / 255,
+    gamma: v.gamma,
+    outBlack: v.outBlack / 255,
+    outWhite: v.outWhite / 255,
   });
 
   it('the field moves the curve: value to curve to value is the identity', () => {
@@ -674,29 +734,37 @@ describe('levels curve helpers', () => {
       value(20, 230, 1.6),
       value(100, 101, 0.1),
       value(0, 255, 5),
+      value(20, 230, 1.6, 40, 200),
+      value(0, 255, 2, 254, 255),
     ]) {
       expect(valueFromCurve(field, value(0, 255, 1), levelsCurve(levelsToDraw(field, v)))).toEqual(
         // the keys that differ from the start are written, the rest stay the start's
-        {
-          black: v.black,
-          white: v.white,
-          gamma: v.gamma,
-        },
+        v,
       );
     }
   });
 
-  it('dragging an end writes that end, rounded to a whole level, and nothing else', () => {
-    const current = value(20, 230, 1.23456);
-    const dragged = levelsCurve({ black: 40.4 / 255, white: 230 / 255, gamma: 1.23456 });
+  it('dragging an end sideways writes that end, rounded to a whole level, and nothing else', () => {
+    const current = value(20, 230, 1.23456, 40, 200);
+    const dragged = levelsCurve({ ...norm(current), black: 40.4 / 255 });
     expect(valueFromCurve(field, current, dragged)).toEqual({ ...current, black: 40 });
-    const white = levelsCurve({ black: 20 / 255, white: 199.6 / 255, gamma: 1.23456 });
+    const white = levelsCurve({ ...norm(current), white: 199.6 / 255 });
     expect(valueFromCurve(field, current, white)).toEqual({ ...current, white: 200 });
   });
 
+  it('dragging an end up or down writes its output, and one dragged both ways writes both', () => {
+    const current = value(20, 230, 1.23456, 40, 200);
+    const up = levelsCurve({ ...norm(current), outBlack: 80.2 / 255 });
+    expect(valueFromCurve(field, current, up)).toEqual({ ...current, outBlack: 80 });
+    const down = levelsCurve({ ...norm(current), outWhite: 150.7 / 255 });
+    expect(valueFromCurve(field, current, down)).toEqual({ ...current, outWhite: 151 });
+    const both = levelsCurve({ ...norm(current), black: 60 / 255, outBlack: 90 / 255 });
+    expect(valueFromCurve(field, current, both)).toEqual({ ...current, black: 60, outBlack: 90 });
+  });
+
   it('dragging the point writes gamma to three places, and not the ends', () => {
-    const current = value(20, 230, 1);
-    const next = levelsCurve({ black: 20 / 255, white: 230 / 255, gamma: 1.23456 });
+    const current = value(20, 230, 1, 40, 200);
+    const next = levelsCurve({ ...norm(current), gamma: 1.23456 });
     expect(valueFromCurve(field, current, next)).toEqual({ ...current, gamma: 1.235 });
   });
 
@@ -713,7 +781,13 @@ describe('levels curve helpers', () => {
 
   it('a value that is not usable draws the identity: ends at min and max, gamma 1', () => {
     for (const bad of [undefined, null, 'x', {}, { black: 'a', white: null, gamma: -2 }]) {
-      expect(levelsToDraw(field, bad)).toEqual({ black: 0, white: 1, gamma: 1 });
+      expect(levelsToDraw(field, bad)).toEqual({
+        black: 0,
+        white: 1,
+        gamma: 1,
+        outBlack: 0,
+        outWhite: 1,
+      });
     }
   });
 
@@ -726,20 +800,22 @@ describe('levels curve helpers', () => {
     expect(roundGamma(1.0005)).toBe(1.001);
   });
 
-  it("the line is the op's remap ((x-b)/(w-b))^(1/g) with flat ends, at every pixel column", () => {
+  it("the line is the op's remap ob + (ow-ob)*((x-b)/(w-b))^(1/g) with flat ends, at every pixel column", () => {
     const width = 400;
-    for (const [b, w, g] of [
-      [0, 1, 1],
-      [0.1, 0.9, 1],
-      [0.2, 0.7, 0.1],
-      [0.05, 0.4, 5],
-      [0.3, 1, 2.2],
-      [0, 0.5, 0.45],
+    for (const [b, w, g, ob, ow] of [
+      [0, 1, 1, 0, 1],
+      [0.1, 0.9, 1, 0, 1],
+      [0.2, 0.7, 0.1, 0.15, 0.8],
+      [0.05, 0.4, 5, 0.3, 0.95],
+      [0.3, 1, 2.2, 0, 0.6],
+      [0, 0.5, 0.45, 0.5, 1],
+      [0.25, 0.75, 1.6, 0.16, 0.78],
     ]) {
-      const curve = levelsCurve({ black: b, white: w, gamma: g });
+      const curve = levelsCurve({ black: b, white: w, gamma: g, outBlack: ob, outWhite: ow });
       for (let col = 0; col <= width; col++) {
         const x = col / width;
-        const expected = x <= b ? 0 : x >= w ? 1 : ((x - b) / (w - b)) ** (1 / g);
+        const expected =
+          x <= b ? ob : x >= w ? ow : ob + (ow - ob) * ((x - b) / (w - b)) ** (1 / g);
         expect(levelsLine(x, curve)).toBeCloseTo(expected, 12);
       }
     }
