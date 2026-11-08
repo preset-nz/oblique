@@ -5,8 +5,9 @@ the cook, and absent from every cook that doesn't ask."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from handlers.cook import HISTOGRAM_BINS, handle_cook, histogram_bins
-from ops import OPS
+from ops import OPS, P, op
 
 W, H = 16, 8
 
@@ -32,6 +33,8 @@ def test_only_levels_asks_and_the_list_says_so() -> None:
 def test_gamma_is_the_curve_widget_and_nothing_else_is_changed() -> None:
     params = {p["name"]: p for p in OPS["levels"].to_dict()["params"]}
     assert params["gamma"]["widget"] == "curve"
+    assert params["gamma"]["curve"] == {"black": "black", "white": "white"}
+    assert "curve" not in params["black"]
     assert "widget" not in params["black"]
     assert "widget" not in params["white"]
     assert (params["gamma"]["min"], params["gamma"]["max"]) == (0.1, 5.0)
@@ -144,3 +147,26 @@ def test_histograms_do_not_change_the_picture() -> None:
     _, with_hist = _cook(img, mods, histograms=[0])
     _, without = _cook(img, mods)
     assert with_hist == without
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"widget": "curve"},  # curve widget with no ends named
+        {"widget": "curve", "curve": {"black": "lo"}},  # a role missing
+        {"widget": "curve", "curve": {"black": "lo", "white": "g"}},  # names itself
+        {"widget": "curve", "curve": {"black": "lo", "white": "nope"}},  # unknown param
+        {"widget": "curve", "curve": {"black": "lo", "white": "flag"}},  # not a float
+        {"curve": {"black": "lo", "white": "hi"}},  # ends without the widget
+    ],
+)
+def test_a_curve_param_must_name_two_bounded_float_siblings(bad: dict) -> None:
+    params = [
+        P("lo", "float", min=0.0, max=1.0, default=0.0),
+        P("hi", "float", min=0.0, max=1.0, default=1.0),
+        P("flag", "bool", default=False),
+        P("g", "float", min=0.1, max=5.0, default=1.0, **bad),
+    ]
+    with pytest.raises(ValueError, match="curve"):
+        op("curve_bad_test", params)(lambda img, p: img)
+    assert "curve_bad_test" not in OPS

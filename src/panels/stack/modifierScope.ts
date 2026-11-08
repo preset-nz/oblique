@@ -40,11 +40,32 @@ export interface ModifierColorFieldDef extends ColorFieldDef {
   description?: string;
 }
 
+/** One end of a curve: the param that sets it, and the range that puts it on the curve's 0..1 axis. */
+export interface CurveEnd {
+  path: string;
+  min: number;
+  max: number;
+  step: number;
+}
+
 /**
- * A float param the op's backend asks to be drawn as a curve (`widget: 'curve'`; levels' gamma).
- * A custom field kind: `modifierFieldRenderers.tsx` registers the renderer, which draws the curve
- * and keeps the param's own number field beside it. `min`/`max`/`step` are the param's, and the
- * curve's range is the same range.
+ * What a curve field holds: its own param (`gamma`) and the two params that set the ends, in the
+ * params' own units (levels: 0 to 255). `read` builds it from the three, and a write of it
+ * changes only the params that differ from what the modifier has.
+ */
+export interface CurveValue {
+  black: number;
+  white: number;
+  gamma: number;
+}
+
+export const CURVE_ROLES = ['black', 'white', 'gamma'] as const;
+
+/**
+ * A float param the op's backend asks to be drawn as a curve (`widget: 'curve'`, with `curve`
+ * naming the end params; levels). A custom field kind: `modifierFieldRenderers.tsx` registers the
+ * renderer, which draws the curve and keeps the param's own number field with it. `min`/`max`/
+ * `step` are the param's (gamma's) own; `black` and `white` are the end params'.
  */
 export type ModifierCurveFieldDef = {
   kind: 'curve';
@@ -55,6 +76,8 @@ export type ModifierCurveFieldDef = {
   min?: number;
   max?: number;
   step?: number;
+  black: CurveEnd;
+  white: CurveEnd;
   disabledWhen?: FieldDef['disabledWhen'];
 };
 
@@ -64,7 +87,14 @@ export interface ModifierSelection {
   modId: string;
 }
 
-function paramToField(spec: OpParamSpec): FieldDef {
+function curveEnd(params: OpParamSpec[], name: string): CurveEnd | undefined {
+  const end = params.find((p) => p.name === name);
+  return end && end.min !== undefined && end.max !== undefined
+    ? { path: name, min: end.min, max: end.max, step: end.step ?? 1 }
+    : undefined;
+}
+
+function paramToField(spec: OpParamSpec, params: OpParamSpec[]): FieldDef {
   const base = {
     id: spec.name,
     path: spec.name,
@@ -108,7 +138,10 @@ function paramToField(spec: OpParamSpec): FieldDef {
         step: spec.step ?? (integerStep ? 1 : 0.1),
         integerStep,
       };
-      if (spec.widget === 'curve' && !integerStep) {
+      const black = spec.curve && curveEnd(params, spec.curve.black);
+      const white = spec.curve && curveEnd(params, spec.curve.white);
+      // a curve needs both ends named by the backend; without them it stays a number field
+      if (spec.widget === 'curve' && !integerStep && black && white) {
         return {
           ...base,
           ...described,
@@ -116,6 +149,8 @@ function paramToField(spec: OpParamSpec): FieldDef {
           min: spec.min,
           max: spec.max,
           step: shared.step,
+          black,
+          white,
         } satisfies ModifierCurveFieldDef;
       }
       return spec.widget === 'slider'
@@ -140,7 +175,7 @@ export function opParamsToSchema(descriptor: OpDescriptor): PropertySchema {
         // No title: the StackRow header already shows the op label right
         // above this panel.
         id: descriptor.name,
-        rows: descriptor.params.map(paramToField),
+        rows: descriptor.params.map((spec) => paramToField(spec, descriptor.params)),
       },
     ],
   };
@@ -149,6 +184,12 @@ export function opParamsToSchema(descriptor: OpDescriptor): PropertySchema {
 /** Registry key for a given op type's modifier scope — one scope per op, since each op's schema differs. */
 export function modifierScopeKey(opType: string): string {
   return `modifier:${opType}`;
+}
+
+function isCurveValue(value: unknown): value is CurveValue {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return CURVE_ROLES.every((role) => typeof v[role] === 'number');
 }
 
 function readModifierParams(
@@ -163,6 +204,16 @@ function readModifierParams(
     // in document space always; the cook request scales them below this
     // layer (unchanged from Epic 02) — no conversion needed here.
     values[spec.name] = modifier?.params[spec.name] ?? spec.default;
+  }
+  // A curve field holds its ends too (levels' gamma: black, white and gamma), read from the
+  // params the backend names, so typing in a sibling field moves the curve.
+  for (const spec of descriptor.params) {
+    if (spec.widget !== 'curve' || !spec.curve) continue;
+    values[spec.name] = {
+      black: values[spec.curve.black],
+      white: values[spec.curve.white],
+      gamma: values[spec.name],
+    };
   }
   return values;
 }
@@ -180,6 +231,20 @@ export function buildModifierScope(
     schema: opParamsToSchema(descriptor),
     read: (selection) => readModifierParams(descriptor, selection),
     write: (path, value, selection) => {
+      const spec = descriptor.params.find((p) => p.name === path);
+      if (spec?.widget === 'curve' && spec.curve && isCurveValue(value)) {
+        // One write of the curve's value: only the params that differ are set, each through
+        // `setModifierParam`, so a drag of one end never touches the others.
+        const current = readModifierParams(descriptor, selection)[path] as CurveValue;
+        const names = { black: spec.curve.black, white: spec.curve.white, gamma: path };
+        for (const role of CURVE_ROLES) {
+          if (value[role] === current[role]) continue;
+          useSceneStore
+            .getState()
+            .setModifierParam(selection.nodeId, selection.modId, names[role], value[role]);
+        }
+        return;
+      }
       useSceneStore
         .getState()
         .setModifierParam(

@@ -3,11 +3,12 @@ import { Icons } from '@preset.nz/ux-kit';
 import {
   CurveEditor,
   type CurveEditorProps,
-  constrainGamma,
-  gammaCurve,
-  gammaLine,
-  gammaOf,
+  constrainLevels,
   Histogram,
+  type Levels,
+  levelsCurve,
+  levelsLine,
+  levelsOf,
 } from '@preset.nz/ux-kit/graphics';
 import { useEffect, useId, useMemo, useRef } from 'react';
 import { InputNumber } from '@/components/InputNumber';
@@ -20,6 +21,8 @@ import { getHistogram } from '@/scene/histograms';
 import { beginTransaction, cancelTransaction, endTransaction } from '@/scene/transaction';
 import { snapToIntegerStep } from './integerStepFix';
 import type {
+  CurveEnd,
+  CurveValue,
   ModifierColorFieldDef,
   ModifierCurveFieldDef,
   ModifierNumberFieldDef,
@@ -303,32 +306,79 @@ const ModifierColorRenderer: FieldRenderer<ModifierColorFieldDef> = ({
 /** The curve type ux-kit's editor hands back (it is math's `Curve`, which ux-kit doesn't re-export). */
 type Curve = Parameters<CurveEditorProps['onChange']>[0];
 
+/** A number the curve can draw, else `fallback` (a value the document holds that is not a number). */
+function usable(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** `value` rounded to `step` from `min`, held to `[min, max]`: what an end drag writes (black and white are whole levels). */
+export function snapToStep(value: number, min: number, max: number, step: number): number {
+  const snapped = Math.round((value - min) / step) * step + min;
+  return Math.min(max, Math.max(min, Number(snapped.toFixed(6))));
+}
+
 /** The gamma a curve edit writes, to three places: the point sits on a pixel grid anyway, and a file shouldn't carry 1.2345678901. */
 export function roundGamma(g: number): number {
   return Math.round(g * 1000) / 1000;
 }
 
-/** The value a curve edit writes as the param, or `null` for a curve that isn't a gamma curve. */
-export function gammaFromCurve(next: Curve): number | null {
-  const g = gammaOf(next);
-  return g === null || !Number.isFinite(g) || g <= 0 ? null : roundGamma(g);
-}
-
-/** The gamma the curve is drawn for: the param's value, or 1 (the diagonal) when it is not a usable number. */
-export function gammaToDraw(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+/**
+ * The curve field's value as the editor draws it: black and white put on the 0..1 axis by their
+ * own params' ranges (not a hardcoded 255), and gamma, held to a usable number (else 1, the
+ * diagonal). A value that is not a curve value draws the identity: ends at the params' defaults
+ * of min and max.
+ */
+export function levelsToDraw(field: ModifierCurveFieldDef, value: unknown): Levels {
+  const v = (typeof value === 'object' && value !== null ? value : {}) as Partial<CurveValue>;
+  const norm = (end: CurveEnd, raw: unknown, fallback: number) =>
+    (usable(raw, fallback) - end.min) / (end.max - end.min);
+  const gamma = usable(v.gamma, 1);
+  return {
+    black: norm(field.black, v.black, field.black.min),
+    white: norm(field.white, v.white, field.white.max),
+    gamma: gamma > 0 ? gamma : 1,
+  };
 }
 
 /**
- * Levels' gamma as the Gamma number field with a curve under it, over a histogram of levels' input
- * (levels-curve.md): dragging the point writes the field, typing in the field moves the point.
- * A real component because facets calls renderers as plain functions and this one has hooks.
+ * What a curve edit writes: `current` with only the keys the edit changed replaced, black and
+ * white rounded to their params' steps and gamma to three places. The comparison is on the
+ * un-rounded numbers, with the editor's own tolerance, so dragging an end (which carries the
+ * gamma point along without changing its height) never writes gamma, and a gamma typed to more
+ * places than three is not rewritten by it. `null` for a curve that is not a levels curve.
+ */
+export function valueFromCurve(
+  field: ModifierCurveFieldDef,
+  current: CurveValue,
+  next: Curve,
+): CurveValue | null {
+  const l = levelsOf(next);
+  if (!l || !Number.isFinite(l.gamma) || l.gamma <= 0) return null;
+  // as the editor holds it: its ends are kept apart, so a typed black above white compares clamped
+  const was = levelsOf(levelsCurve(levelsToDraw(field, current)));
+  if (!was) return null;
+  const out = { ...current };
+  const unit = (end: CurveEnd, x: number) =>
+    snapToStep(end.min + x * (end.max - end.min), end.min, end.max, end.step);
+  if (Math.abs(l.black - was.black) > 1e-9) out.black = unit(field.black, l.black);
+  if (Math.abs(l.white - was.white) > 1e-9) out.white = unit(field.white, l.white);
+  if (Math.abs(l.gamma - was.gamma) > 1e-9) out.gamma = roundGamma(l.gamma);
+  return out;
+}
+
+/**
+ * Levels as the Gamma number field with a curve under it, over a histogram of levels' input
+ * (levels-curve.md): dragging the point writes gamma, dragging an end writes black or white, and
+ * typing in Black point, White point or Gamma moves the curve. The field's value is
+ * `{black, white, gamma}` (`modifierScope.ts` reads it from the three params and writes back only
+ * what changed). A real component because facets calls renderers as plain functions and this one
+ * has hooks.
  *
  * A drag is one undo step the way a field scrub is: `beginTransaction` when it starts,
  * `endTransaction` when it ends, and `cancelTransaction` when Escape abandons it (the editor has
- * already put the point back by then). Arrow-key nudges and menu edits are single writes.
+ * already put the curve back by then). Arrow-key nudges and menu edits are single writes.
  */
-function GammaCurveField({
+function LevelsCurveField({
   field,
   value,
   disabled,
@@ -341,11 +391,11 @@ function GammaCurveField({
   onChange?: (next: unknown) => void;
   histogramKey: unknown;
 }) {
-  const gamma = gammaToDraw(value);
+  const levels = levelsToDraw(field, value);
   const min = field.min ?? 0.1;
   const max = field.max ?? 5;
   const readOnly = disabled || !onChange;
-  const constrain = useMemo(() => constrainGamma(min, max), [min, max]);
+  const constrain = useMemo(() => constrainLevels(min, max), [min, max]);
   // the bins live in the cache map; a cook writing them bumps this version
   useCacheVersionStore((s) => s.cacheVersion);
   const bins = typeof histogramKey === 'string' ? getHistogram(histogramKey) : undefined;
@@ -354,9 +404,15 @@ function GammaCurveField({
       bins ? <Histogram bins={bins} aria-label="Histogram of the picture reaching levels" /> : null,
     [bins],
   );
+  // the value as the scope read it, in the params' units
+  const current: CurveValue = {
+    black: usable((value as Partial<CurveValue> | null)?.black, field.black.min),
+    white: usable((value as Partial<CurveValue> | null)?.white, field.white.max),
+    gamma: levels.gamma,
+  };
   const write = (next: Curve) => {
-    const g = gammaFromCurve(next);
-    if (g !== null) onChange?.(g);
+    const written = valueFromCurve(field, current, next);
+    if (written) onChange?.(written);
   };
   const label = field.label ?? field.id;
   return (
@@ -364,8 +420,8 @@ function GammaCurveField({
       <InputNumber
         label={label}
         description={field.description}
-        value={gamma}
-        onChange={(next) => onChange?.(next)}
+        value={levels.gamma}
+        onChange={(next) => onChange?.({ ...current, gamma: next })}
         min={field.min}
         max={field.max}
         step={field.step ?? 0.05}
@@ -380,14 +436,14 @@ function GammaCurveField({
         inert={readOnly}
       >
         <CurveEditor
-          value={gammaCurve(gamma)}
+          value={levelsCurve(levels)}
           onChange={write}
           onGestureStart={beginTransaction}
           onGestureEnd={(committed) => (committed ? endTransaction() : cancelTransaction())}
           constrain={constrain}
-          line={gammaLine}
+          line={levelsLine}
           background={background}
-          aria-label={`${label} curve`}
+          aria-label="Levels curve"
           className="aspect-square h-auto w-full"
         />
       </div>
@@ -396,8 +452,8 @@ function GammaCurveField({
 }
 
 /**
- * A float param the op's backend draws as a curve (`widget: 'curve'`): the curve plus the
- * param's number field. `ctx` is the modifier's histogram key (`StackRow`).
+ * A float param the op's backend draws as a curve (`widget: 'curve'` with its `curve` ends): the
+ * curve plus the param's number field. `ctx` is the modifier's histogram key (`StackRow`).
  */
 const ModifierCurveRenderer: FieldRenderer<ModifierCurveFieldDef> = ({
   field,
@@ -406,7 +462,7 @@ const ModifierCurveRenderer: FieldRenderer<ModifierCurveFieldDef> = ({
   onChange,
   ctx,
 }) => (
-  <GammaCurveField
+  <LevelsCurveField
     field={field}
     value={value}
     disabled={disabled}

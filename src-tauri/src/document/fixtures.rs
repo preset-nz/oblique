@@ -544,18 +544,19 @@ fn blur_radius_fixture() {
 const LEVELS_CURVE_NOTES: &str = "\
 Levels curve window check (Epic 27, levels-curve, phase 1). `just fixtures levels-curve` writes this file again.
 
-0. Open a fresh copy (`just window-check levels-curve`). Photo has two modifiers: Invert (switched off) and, above it in the stack, Levels with Black point 0, White point 255, Gamma 1.6. Under Levels' three number fields there is a square curve over a histogram, about as wide as the panel. The curve bows up from the diagonal, the point sits at the middle of it, and the Gamma field reads 1.6.
+0. Open a fresh copy (`just window-check levels-curve`). Photo has two modifiers: Invert (switched off) and, above it in the stack, Levels with Black point 20, White point 230, Gamma 1.6. Under Levels' three number fields there is a square curve over a histogram, about as wide as the panel. The curve is flat along the floor up to x = 20/255, rises to the ceiling at x = 230/255 and is flat after it; its two ends sit there on the floor and the ceiling, and the point sits halfway between them.
 a. The histogram is of the picture as it arrives at Levels: grey for brightness, with red, green and blue overlaid. The photo is mostly mid tones (sky, grass), so most of the histogram sits in the middle.
-b. Drag the point up: the midtones lighten on the canvas as you drag, and the Gamma field climbs with it, live. Drag it down: the picture darkens and Gamma falls. The point only moves up and down; the two ends stay in their corners; double-click on the curve adds no point.
-c. Drag it as far up as it will go: Gamma stops at 5. As far down: it stops at 0.1. Neither goes further.
-d. Type 3 in the Gamma field and press Enter: the point jumps up to match. Scrub the Gamma label: the point follows the scrub.
-e. The drawn line is the power curve: at Gamma 1 it is the straight diagonal, at 0.1 it hugs the bottom and right edges, at 5 it hugs the top and left edges, with no kinks.
-f. One drag, then undo (Cmd+Z): Gamma goes back to where it was before the drag, in one step. The Edit menu names the step after Gamma. Redo puts it back.
-g. Start a drag and press Escape without letting go: the point and the Gamma field go back to where they were, the picture too, and there is nothing to undo from that drag.
-h. Tick Invert (the lower row) on: the picture goes negative and the histogram flips left to right, because a modifier below Levels changed what reaches it. Untick it: it flips back. The curve doesn't move.
-i. Set Black point to 80: the picture's shadows crush, but the curve and its histogram don't change. The curve shows the gamma alone, not the black and white points. Put Black point back to 0.
-j. Lock the layer: the curve greys and can't be dragged. Unlock it.
-k. Collapse the Levels row and open it again: the curve and histogram are there at once. Save, close and reopen the file: Gamma and the other numbers are as you left them.";
+b. Drag the middle point up: the midtones lighten on the canvas as you drag, and the Gamma field climbs with it, live. Drag it down: the picture darkens and Gamma falls. The point only moves up and down; double-click on the curve adds no point. Black point and White point don't change.
+c. Drag the point as far up as it will go: Gamma stops at 5. As far down: it stops at 0.1.
+d. Type 3 in the Gamma field and press Enter: the point jumps up to match. Scrub the Gamma label: the point follows the scrub. Put Gamma back to 1.6.
+e. Type 100 in Black point and press Enter: the left end of the curve slides in to 100/255 and the point moves with it, staying halfway between the ends. Scrub the Black point label: the end follows live. Type 60 in White point: the right end slides in to 60/255 (the ends stay at least one level apart). Put them back to 20 and 230.
+f. Drag the left end along the floor: Black point changes live in whole numbers, the picture's shadows crush or open up on the canvas, and the point rides halfway between the ends. It stops at 0 on the left and one level short of the white end on the right. Drag the right end along the ceiling the same way: White point changes, and it stops at 255 and one level past the black end. Gamma doesn't change while an end moves.
+g. The drawn line is the remap Levels does: flat on the floor up to Black point, the power curve between, flat on the ceiling from White point on. At Gamma 1 the middle is a straight slope; at 0.1 it hugs the floor and then jumps; at 5 it leaps up and then flattens, with no kinks.
+h. One drag of the point or of an end, then undo (Cmd+Z): the value goes back to where it was before the drag, in one step. The Edit menu names the step after the field that changed (Gamma, Black point or White point). Redo puts it back.
+i. Start a drag of the point, or of an end, and press Escape without letting go: the curve and the number field go back to where they were, the picture too, and there is nothing to undo from that drag.
+j. Tick Invert (the lower row) on: the picture goes negative and the histogram flips left to right, because a modifier below Levels changed what reaches it. Untick it: it flips back. The curve doesn't move.
+k. Lock the layer: the curve greys and can't be dragged. Unlock it.
+l. Collapse the Levels row and open it again: the curve and histogram are there at once. Save, close and reopen the file: Black point, White point and Gamma are as you left them.";
 
 /// `list_ops`' `levels` and `invert` as the sidecar declares them (sidecar/ops/levels.py,
 /// invert.py), so the fixture's modifiers are the ones the app makes.
@@ -614,7 +615,7 @@ fn levels_curve_project() -> String {
     photo["modifiers"] = json!([
         {"id": "invert", "type": "invert", "enabled": false, "params": {}},
         {"id": "levels", "type": "levels", "enabled": true,
-         "params": {"black": 0.0, "white": 255.0, "gamma": 1.6}}
+         "params": {"black": 20.0, "white": 230.0, "gamma": 1.6}}
     ]);
     d.run("layer.add", &json!({ "node": photo })).unwrap();
     d.tree().serialise()

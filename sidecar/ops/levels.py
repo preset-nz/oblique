@@ -45,6 +45,7 @@ from ops import P, op
             step=0.05,
             label="Gamma",
             widget="curve",
+            curve={"black": "black", "white": "white"},
             description="Midtone brightness. Above 1 lightens the midtones; below 1 darkens them.",
         ),
     ],

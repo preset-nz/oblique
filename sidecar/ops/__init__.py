@@ -44,9 +44,14 @@ class ParamSpec:
     step: float | None = None
     scale: ParamScale = "none"
     choices: tuple[str, ...] | None = None  # enum type only
-    # UI hint: "slider" over the default number field, or "curve" (levels' gamma
-    # drawn as a curve, beside the number field)
+    # UI hint: "slider" over the default number field, or "curve" (levels: black, white and
+    # gamma drawn as one curve, with the number field beside it; see `curve` below)
     widget: ParamWidget | None = None
+    # With `widget="curve"`: which other params of the op set the curve's two ends, by role,
+    # `{"black": "black", "white": "white"}` (levels). The panel draws all three as one curve
+    # and writes the one that changed; each end is normalised by its own param's min/max.
+    # Validated at registration — see `_validate_curve`.
+    curve: dict[str, str] | None = None
     # Disables this param in the panel when another of the same op's params
     # matches a condition — presentation only, the cook still receives and
     # ignores the value. Wire keys verbatim (`path`, plus exactly one of
@@ -84,6 +89,8 @@ class ParamSpec:
             d["choices"] = list(self.choices)
         if self.widget is not None:
             d["widget"] = self.widget
+        if self.curve is not None:
+            d["curve"] = dict(self.curve)
         if self.label is not None:
             d["label"] = self.label
         if self.description is not None:
@@ -318,6 +325,42 @@ def _validate_disabled_when(
             )
 
 
+def _validate_curve(
+    op_name: str, spec: ParamSpec, params_by_name: dict[str, ParamSpec]
+) -> None:
+    """Validates one param's `curve` at registration time: it needs `widget="curve"`, a float
+    param, and exactly the roles `black` and `white`, each naming another bounded float param of
+    the same op (the panel normalises an end by that param's min and max)."""
+    if spec.curve is None:
+        if spec.widget == "curve":
+            raise ValueError(
+                f"{op_name}.{spec.name}: widget 'curve' needs curve={{'black': …, 'white': …}}"
+            )
+        return
+    if spec.widget != "curve" or spec.type != "float":
+        raise ValueError(
+            f"{op_name}.{spec.name}: curve only applies to a float param with widget='curve'"
+        )
+    if set(spec.curve) != {"black", "white"}:
+        raise ValueError(
+            f"{op_name}.{spec.name}: curve must name exactly 'black' and 'white', "
+            f"got {sorted(spec.curve)}"
+        )
+    for role, name in spec.curve.items():
+        end = params_by_name.get(name)
+        if (
+            end is None
+            or name == spec.name
+            or end.type != "float"
+            or end.min is None
+            or end.max is None
+        ):
+            raise ValueError(
+                f"{op_name}.{spec.name}: curve {role} {name!r} must name another float "
+                "param of the same op with a min and a max"
+            )
+
+
 def _validate_choice_labels(op_name: str, spec: ParamSpec) -> None:
     """Validates one param's `choice_labels` at registration time: only enum
     params carry them, and every key must be one of the param's choices."""
@@ -391,6 +434,7 @@ def op(
         params_by_name = {p.name: p for p in param_list}
         for spec in param_list:
             _validate_disabled_when(name, spec, params_by_name)
+            _validate_curve(name, spec, params_by_name)
             _validate_choice_labels(name, spec)
 
         OPS[name] = Op(
