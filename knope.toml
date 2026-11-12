@@ -1,5 +1,5 @@
-# Releases: `just release`. Bumps package.json, src-tauri/Cargo.toml and
-# src-tauri/Cargo.lock in lockstep from the conventional commits since the last tag,
+# Releases: `just release`. Bumps package.json, src-tauri/Cargo.toml,
+# src-tauri/Cargo.lock and docs/gen/Cargo.lock in lockstep from the conventional commits since the last tag,
 # writes CHANGELOG.md, rescans the licence lock, commits and tags.
 # tauri.conf.json reads its version from ../package.json. Pushing stays manual.
 
@@ -8,6 +8,8 @@ versioned_files = [
     "package.json",
     "src-tauri/Cargo.toml",
     { path = "src-tauri/Cargo.lock", dependency = "oblique" },
+    # docs/gen takes the app crate by path, so its lock names the version too.
+    { path = "docs/gen/Cargo.lock", dependency = "oblique" },
 ]
 changelog = "CHANGELOG.md"
 
