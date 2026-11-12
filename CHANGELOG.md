@@ -1,3 +1,38 @@
+## 0.2.2 (2026-11-12)
+
+### Features
+
+- node pages from the words on Oblique's kinds
+- group ops by category, and name the film stocks
+- tint the selected region, View > Show Selection Fill
+- Smart Select asks before downloading MobileSAM
+- the selection tint shows feather, expand and invert
+- import selects the new layer
+- save a selection without applying an effect
+- show a saved toast with a copy-path button
+- create a depth map from a layer
+- create a depth map on an Untitled document
+- depth-map window fixture and real paths on first save
+- a Selections tab and an active selection
+- a pixel layer can mask a modifier on another layer
+- a blur radius that follows a layer
+- Blur follows a layer, in the stack, and faster
+- gamma as a curve over the picture's histogram
+- black and white slide the curve's ends
+- output black and white, on the curve's ends
+
+### Fixes
+
+- keep document settings out of the inspector
+- describe CMYK Halftone in words, not param names
+- drop trademark words from op labels and stock names
+- take ux-kit 0.1.1, which drops braces
+- look again after a restore, so a delete during it lands
+- take Pillow 13.0.0 for the 2026-10-20 advisories
+- scan ux-kit's classes in node_modules, not packages/
+- start the sidecar without a console window on Windows
+- refresh Undo and Redo when a gesture ends
+
 ## 0.2.1 (2026-10-13)
 
 ### Features

@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "oblique"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fontdb",
  "png 0.17.16",

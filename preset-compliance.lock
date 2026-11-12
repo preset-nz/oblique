@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "docs/gen/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "2b82e279729c7ca4b50d085872e35c08a1ee6609e729212bd23e3ea5e270be15"
+sha256 = "00abd779cbfddb17358eee57a44f0ff2f22004d8b475ca1e78707c87fa071702"
 
 [[inputs]]
 path = "docs/gen/Cargo.toml"
@@ -34,11 +34,11 @@ sha256 = "ced6dd7c52a11177be0df22fc2cec8a9522ab06f76ae7bc08f0fcc01ea897489"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "8ce8422792d59175b61737cc325caa0d3cc73c534ef1386623513011bf3d3636"
+sha256 = "ed9eca8ab2f5f59637bc757a57870b0eb1ffd70bef5d4bcff8ed3b423009d92c"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "81b754d9f4a23769616223e7480f4434078851e2f5443b3715556a2ecbbc54b0"
+sha256 = "16864d1cbf3a67b0959d7fdbe66316851f4317a0ff6f0aa24095a1360cf3e499"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2291,7 +2291,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "oblique"
-version = "0.2.1"
+version = "0.2.2"
 source = "path"
 declared = "MIT"
 scope = "shipped"
