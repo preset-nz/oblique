@@ -96,3 +96,27 @@ describe('smartSelect coords: document <-> cooked-buffer mapping', () => {
     expect(box.y0).toBeLessThanOrEqual(box.y1);
   });
 });
+
+describe('a buffer cooked over a raster rect past the page (layer-overflow.md)', () => {
+  const t = { ...IDENTITY_TRANSFORM_2D, x: 12, y: -6, rotation: 0.2, scaleX: 1.1, scaleY: 0.9 };
+
+  it('a document point lands that many buffer px further in; the pivot is still the page', () => {
+    const page = frameFor([200, 100], [100, 50], t);
+    const grown = frameFor([200, 100], [164, 50], t, { x: -128, y: 0, w: 328, h: 100 });
+    const doc = { x: 70, y: 40 };
+    const a = docToBuffer(doc, page);
+    const b = docToBuffer(doc, grown);
+    expect(b.x).toBeCloseTo(a.x + 64, 9);
+    expect(b.y).toBeCloseTo(a.y, 9);
+    const back = bufferToDoc(b, grown);
+    expect(back.x).toBeCloseTo(doc.x, 9);
+    expect(back.y).toBeCloseTo(doc.y, 9);
+  });
+
+  it('a rect equal to the page is the frame it always was', () => {
+    const doc = { x: 33, y: 21 };
+    expect(
+      docToBuffer(doc, frameFor([200, 100], [100, 50], t, { x: 0, y: 0, w: 200, h: 100 })),
+    ).toEqual(docToBuffer(doc, frameFor([200, 100], [100, 50], t)));
+  });
+});

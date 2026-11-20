@@ -1,4 +1,4 @@
-import type { PixelMaskRef, Transform2D, VectorMaskRef, VectorPath } from './types';
+import type { PixelMaskRef, Point2D, Transform2D, VectorMaskRef, VectorPath } from './types';
 import { buildPath2D, pathCommandsFor } from './vectorRasterize';
 
 /**
@@ -226,6 +226,11 @@ function fillAndReadPlane(
  * matching the compositor and PathEditor), then document -> consumer-local.
  * Both transforms are read fresh each cook — document-pinned means pinned
  * to where the shape *shows*, not to any snapshot.
+ *
+ * `consumerOrigin` is the consumer's raster rect origin (layer-overflow.md): a text or vector
+ * consumer's bitmap can start left of or above its logical frame, and the plane must line up
+ * with it. It shifts consumer-local space only; `consumerSourceSize` stays the logical frame,
+ * the pivot `docToLocalMatrix` turns about.
  */
 export function rasterizeVectorMask(
   paths: VectorPath[],
@@ -238,6 +243,7 @@ export function rasterizeVectorMask(
   width: number,
   height: number,
   factor: number,
+  consumerOrigin: Point2D = { x: 0, y: 0 },
 ): Uint8Array {
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d');
@@ -254,6 +260,10 @@ export function rasterizeVectorMask(
   const m = docToLocalMatrix(consumerFrame, consumerSourceSize[0], consumerSourceSize[1]);
   const vm = localToDocMatrix(vectorTransform2d, documentSize[0], documentSize[1]);
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
+  // consumer-local -> the consumer's raster rect (skipped at the origin: the calls stay as they were)
+  if (consumerOrigin.x !== 0 || consumerOrigin.y !== 0) {
+    ctx.transform(1, 0, 0, 1, -consumerOrigin.x, -consumerOrigin.y);
+  }
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
   ctx.transform(vm[0], vm[1], vm[2], vm[3], vm[4], vm[5]);
 
@@ -286,6 +296,8 @@ export function multiplyMatrix(m1: Matrix2D, m2: Matrix2D): Matrix2D {
  * local frame (its CURRENT transform: a pixel driver is always document-space), then the cook
  * factor. The driver's raster is drawn at its source extent whatever its cooked size, so the
  * cook-level rounding and a locked driver's full-size bake both land in the same place.
+ * `consumerOrigin` is the consumer's raster rect origin (layer-overflow.md), as in
+ * `rasterizeVectorMask`.
  */
 export function driverToTargetMatrix(
   driverTransform2d: Transform2D,
@@ -293,6 +305,7 @@ export function driverToTargetMatrix(
   consumerTransform2d: Transform2D,
   consumerSourceSize: [number, number],
   factor: number,
+  consumerOrigin: Point2D = { x: 0, y: 0 },
 ): Matrix2D {
   const toDoc = localToDocMatrix(driverTransform2d, driverSourceSize[0], driverSourceSize[1]);
   const toConsumer = docToLocalMatrix(
@@ -300,7 +313,10 @@ export function driverToTargetMatrix(
     consumerSourceSize[0],
     consumerSourceSize[1],
   );
-  return multiplyMatrix([factor, 0, 0, factor, 0, 0], multiplyMatrix(toConsumer, toDoc));
+  // target = factor·(local − origin); an origin of 0 keeps today's matrix exactly
+  const ex = consumerOrigin.x === 0 ? 0 : -consumerOrigin.x * factor;
+  const ey = consumerOrigin.y === 0 ? 0 : -consumerOrigin.y * factor;
+  return multiplyMatrix([factor, 0, 0, factor, ex, ey], multiplyMatrix(toConsumer, toDoc));
 }
 
 /** Rec. 709 luma weights: `sidecar/ops/__init__.py`'s `LUMA_*709`, the ones `desaturate` uses. */
@@ -359,6 +375,7 @@ export function rasterizePixelMask(
   width: number,
   height: number,
   factor: number,
+  consumerOrigin: Point2D = { x: 0, y: 0 },
 ): Uint8Array {
   if (!raster) return pixelMaskPlane(new Uint8Array(width * height * 4), ref);
   const canvas = new OffscreenCanvas(width, height);
@@ -370,6 +387,7 @@ export function rasterizePixelMask(
     consumerTransform2d,
     consumerSourceSize,
     factor,
+    consumerOrigin,
   );
   ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
   ctx.drawImage(raster, 0, 0, driverSourceSize[0], driverSourceSize[1]);

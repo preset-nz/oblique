@@ -769,6 +769,150 @@ fn set_size_refuses_what_isnt_a_size() {
     assert_eq!(d.tree().history_len(), 0);
 }
 
+/// `node(id, kind)` moved by `t` (`{x, y, scaleX, scaleY, rotation}`).
+fn moved(id: &str, kind: &str, t: Json) -> Json {
+    let mut n = node(id, kind);
+    n["transform2d"] = t;
+    n
+}
+
+/// Where a few points of a layer's own space land on the page, for a layer whose logical
+/// frame is `w`x`h`.
+fn landing(t: Placement, w: f64, h: f64) -> Vec<(f64, f64)> {
+    [(0.0, 0.0), (100.0, 40.0), (1900.0, 1400.0), (-300.0, 2200.0)]
+        .iter()
+        .map(|&(px, py)| local_to_doc(t, w, h, px, py))
+        .collect()
+}
+
+fn assert_close(a: &[(f64, f64)], b: &[(f64, f64)]) {
+    for (p, q) in a.iter().zip(b) {
+        assert!(
+            (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
+            "{p:?} vs {q:?}"
+        );
+    }
+}
+
+#[test]
+fn set_size_keeps_rotated_and_scaled_text_and_vector_layers_in_place_in_one_undo_step() {
+    // layer-overflow.md item 11: a text or vector layer pivots on the page centre, so a resize
+    // steps its translation by (I - M)(c - c') and every one of its pixels stays put
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
+        .unwrap();
+    let turned = json!({"x": 30.0, "y": -20.0, "scaleX": 1.5, "scaleY": 0.75, "rotation": 0.6});
+    add(&mut d, moved("v", "vector", turned.clone())).unwrap();
+    add(
+        &mut d,
+        moved(
+            "t",
+            "text",
+            json!({"x": -5.0, "y": 12.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": -0.3}),
+        ),
+    )
+    .unwrap();
+    add(&mut d, moved("p", "pixel", turned)).unwrap();
+    add(
+        &mut d,
+        moved(
+            "s",
+            "vector",
+            json!({"x": 40.0, "y": 50.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0}),
+        ),
+    )
+    .unwrap();
+    add(&mut d, node("u", "vector")).unwrap();
+    let before: Vec<_> = ["v", "t"]
+        .iter()
+        .map(|id| landing(placement(&d, &format!("/layers/{id}")), 2048.0, 1536.0))
+        .collect();
+    let pixel_before = placement(&d, "/layers/p");
+    let shifted_before = placement(&d, "/layers/s");
+
+    // the orientation flip
+    d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
+        .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Document Size"));
+    for (id, want) in ["v", "t"].iter().zip(&before) {
+        let after = landing(placement(&d, &format!("/layers/{id}")), 1536.0, 2048.0);
+        assert_close(&after, want);
+    }
+    // rotation and scale are the layer's own; only the translation moved
+    assert_eq!(placement(&d, "/layers/v").rotation, 0.6);
+    assert_eq!(placement(&d, "/layers/v").scale_x, 1.5);
+    // a pixel layer's frame is its own source, not the page: untouched
+    assert_eq!(placement(&d, "/layers/p"), pixel_before);
+    // a layer that is only moved stays as it is (M = I), and an unmoved one gets no transform
+    assert_eq!(placement(&d, "/layers/s"), shifted_before);
+    assert!(!d
+        .tree()
+        .at("/layers/u")
+        .unwrap()
+        .is_set("transform2d.position"));
+
+    // one undo takes back the size and the transforms together
+    d.undo().unwrap();
+    assert_eq!(
+        value(&d, "/document/document", "documentSize"),
+        Some(Value::Vec2([2048.0, 1536.0]))
+    );
+    for (id, want) in ["v", "t"].iter().zip(&before) {
+        let back = landing(placement(&d, &format!("/layers/{id}")), 2048.0, 1536.0);
+        assert_close(&back, want);
+    }
+    assert_eq!(placement(&d, "/layers/v").x, 30.0);
+    assert_eq!(placement(&d, "/layers/v").y, -20.0);
+}
+
+#[test]
+fn set_size_to_the_same_size_or_with_no_layers_touches_no_transform() {
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [800.0, 600.0]}))
+        .unwrap();
+    let turned = json!({"x": 1.0, "y": 2.0, "scaleX": 2.0, "scaleY": 2.0, "rotation": 1.0});
+    add(&mut d, moved("v", "vector", turned)).unwrap();
+    let was = placement(&d, "/layers/v");
+    d.run("document.set_size", &json!({"size": [800.0, 600.0]}))
+        .unwrap();
+    assert_eq!(placement(&d, "/layers/v"), was);
+}
+
+#[test]
+fn set_size_leaves_a_locked_layer_s_transform_frozen() {
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
+        .unwrap();
+    let turned = json!({"x": 1.0, "y": 2.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.5});
+    add(&mut d, moved("t", "text", turned)).unwrap();
+    lock(&mut d, "/layers/t");
+    let was = placement(&d, "/layers/t");
+    d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
+        .unwrap();
+    assert_eq!(placement(&d, "/layers/t"), was);
+}
+
+#[test]
+fn set_size_steps_a_node_pinned_mask_on_a_text_layer_with_it() {
+    // the mask's attachTransform is a placement in the consumer's frame, so it takes the
+    // same step and the mask stays on the same glyphs
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
+        .unwrap();
+    let turned = json!({"x": 10.0, "y": 20.0, "scaleX": 1.25, "scaleY": 1.25, "rotation": 0.4});
+    with_masks(&mut d, moved("a", "text", turned.clone()), &[("r1", turned)]);
+    let before = landing(attach_of(&d, "/layers/a/m1"), 2048.0, 1536.0);
+    d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
+        .unwrap();
+    assert_close(
+        &landing(attach_of(&d, "/layers/a/m1"), 1536.0, 2048.0),
+        &before,
+    );
+    // the binding kept everything else it had
+    assert_eq!(mask_value(&d, "/layers/a/m1", "refId"), json!("r1"));
+    assert_eq!(mask_value(&d, "/layers/a/m1", "space"), json!("node"));
+}
+
 // ---- undo / redo ----
 
 #[test]

@@ -13,6 +13,7 @@ import {
   resolvedMaskInput,
 } from '@/scene/maskInputs';
 import { rasterizePixelMask, rasterizeVectorMask } from '@/scene/maskRasterize';
+import { type RasterRect, rasterRectFor } from '@/scene/rasterRect';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
 import { documentPathsFor, ensureGeometry, textCookKey } from '@/scene/textGeometryCache';
@@ -27,6 +28,7 @@ import {
   type Modifier,
   type ModifierDriver,
   type PixelNode,
+  type Point2D,
   type SceneNode,
   type TextNode,
   type Transform2D,
@@ -268,7 +270,7 @@ function cachedDriverRaster(nodeId: string, level: CookLevel): DriverRaster | un
 export interface CookDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getSource: (nodeId: string) => ImageBitmap | undefined;
-  /** `Scene.documentSize` — a vector node's raster spans this (vector-node-model.md's Sizing note), it has no `sourceSize` of its own. */
+  /** `Scene.documentSize` — a vector or text node's logical frame (its pivot); its raster rect starts from it (layer-overflow.md). */
   getDocumentSize: () => [number, number];
   getOps: () => OpDescriptor[];
   /** `Modifier.maskId` resolves against this — a live vector, text or pixel-driver reference. */
@@ -285,6 +287,8 @@ export interface CookDeps {
     width: number,
     height: number,
     factor: number,
+    /** The consumer's raster rect origin (layer-overflow.md); `consumerSourceSize` stays its logical frame. */
+    consumerOrigin: Point2D,
   ) => Uint8Array;
   /**
    * A pixel driver's cooked raster for a cook at `level` (layer-as-driver.md), with the
@@ -300,6 +304,7 @@ export interface CookDeps {
   rasterizeVector: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
+    rect: RasterRect,
     width: number,
     height: number,
     factor: number,
@@ -317,7 +322,8 @@ export interface CookDeps {
   ) => Promise<Uint8Array>;
   /** RGBA8 bytes -> displayable bitmap. */
   encode: (bytes: Uint8Array, width: number, height: number) => Promise<ImageBitmap>;
-  setCache: (nodeId: string, level: CookLevel, bitmap: ImageBitmap) => void;
+  /** `rect` is the raster rect the bitmap was cooked over; passed for every text or vector write (layer-overflow.md). */
+  setCache: (nodeId: string, level: CookLevel, bitmap: ImageBitmap, rect?: RasterRect) => void;
   clearDirty: (nodeId: string, level: CookLevel) => void;
   /** Prefix cache (prefix-cache.md): the stored intermediate for a node/level. Production wiring is `scene/prefixStore.ts`. */
   getPrefix: (nodeId: string, level: CookLevel) => prefixCache.PrefixEntry | undefined;
@@ -428,6 +434,8 @@ function makeRasterizeFor(
   textGeometry: Map<string, TextGeometry>,
   driverRaster: (driverId: string) => ImageBitmap | undefined,
   nodeExtent: [number, number],
+  /** The consumer's raster rect origin: its planes line up with a raster grown past the page. */
+  consumerOrigin: Point2D,
   consumerTransform2d: Transform2D,
   width: number,
   height: number,
@@ -452,6 +460,7 @@ function makeRasterizeFor(
         width,
         height,
         factor,
+        consumerOrigin,
       );
     }
     if (isVectorNode(target)) {
@@ -466,6 +475,7 @@ function makeRasterizeFor(
         width,
         height,
         factor,
+        consumerOrigin,
       );
     }
     if (isTextNode(target)) {
@@ -482,6 +492,7 @@ function makeRasterizeFor(
         width,
         height,
         factor,
+        consumerOrigin,
       );
     }
     return undefined;
@@ -498,6 +509,7 @@ function makeRasterizeDriverFor(
   deps: Pick<CookDeps, 'getNode' | 'rasterizePixelMask'>,
   driverRaster: (driverId: string) => ImageBitmap | undefined,
   nodeExtent: [number, number],
+  consumerOrigin: Point2D,
   consumerTransform2d: Transform2D,
   width: number,
   height: number,
@@ -516,6 +528,7 @@ function makeRasterizeDriverFor(
       width,
       height,
       factor,
+      consumerOrigin,
     );
   };
 }
@@ -571,6 +584,8 @@ export interface FullResCookDeps {
     width: number,
     height: number,
     factor: number,
+    /** The consumer's raster rect origin (layer-overflow.md); `consumerSourceSize` stays its logical frame. */
+    consumerOrigin: Point2D,
   ) => Uint8Array;
   /** Same injection as `CookDeps.rasterizePixelMask`; the driver's raster is its own full-res cook. */
   rasterizePixelMask: typeof rasterizePixelMask;
@@ -579,6 +594,7 @@ export interface FullResCookDeps {
   rasterizeVector: (
     paths: VectorNode['paths'],
     fillRule: VectorNode['fillRule'],
+    rect: RasterRect,
     width: number,
     height: number,
     factor: number,
@@ -628,7 +644,8 @@ async function fullResDriverRasters(
   const inner = new Set(visiting).add(node.id);
   for (const driverId of pixelDriversOf(enabled, deps.getMaskRef)) {
     if (inner.has(driverId)) continue;
-    out.set(driverId, await cookNodeFullRes(driverId, deps, inner));
+    // a driver is a pixel layer: its raster spans its own source, no rect to carry
+    out.set(driverId, (await cookNodeFullRes(driverId, deps, inner)).bitmap);
   }
   return out;
 }
@@ -645,15 +662,19 @@ async function fullResDriverRasters(
  *
  * Vector nodes cook full-res too (dogfood 2026-07-06 — the old pixel-only
  * throw aborted export of ANY scene containing a vector node): their
- * "source pixels" are `rasterizeVector` at documentSize, factor 1, exactly
+ * "source pixels" are `rasterizeVector` over their raster rect, factor 1, exactly
  * mirroring `cookNode`'s vector branch.
+ *
+ * Returns the bitmap with the raster rect it was cooked over (layer-overflow.md): absent for a
+ * pixel layer (its `sourceSize`), always set for text and vector, whose bitmap can reach past
+ * the page. Whoever stores or draws the bitmap carries the rect with it.
  */
 export async function cookNodeFullRes(
   nodeId: string,
   deps: FullResCookDeps = productionFullResCookDeps,
   /** Layers whose full-res cook is waiting on this one (driver recursion's cycle guard). */
   visiting: ReadonlySet<string> = new Set(),
-): Promise<ImageBitmap> {
+): Promise<cache.PlacedBitmap> {
   const rawNode = deps.getNode(nodeId);
   if (
     !rawNode ||
@@ -670,16 +691,21 @@ export async function cookNodeFullRes(
   }
 
   const factor = 1; // full resolution — node's own extent, no downscale
-  const nodeExtent = node.type === 'pixel' ? node.sourceSize : deps.getDocumentSize();
-  const [width, height] = computeTargetSize(nodeExtent, factor);
-
+  // The logical frame, the pivot every transform turns about; the raster rect is where the
+  // bitmap sits inside it (layer-overflow.md), sized from the text geometry once it resolves.
+  const documentSize = deps.getDocumentSize();
+  const nodeExtent = node.type === 'pixel' ? node.sourceSize : documentSize;
   const t0 = performance.now();
+  const geometry = node.type === 'text' ? await deps.getTextGeometry(node) : undefined;
+  const rect = rasterRectFor(node, documentSize, geometry);
+  const [width, height] = computeTargetSize([rect.w, rect.h], factor);
+
   let resultBytes =
     node.type === 'pixel'
       ? deps.downscale(source as ImageBitmap, width, height)
       : node.type === 'text'
-        ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
-        : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+        ? deps.rasterizeText(node, geometry as TextGeometry, rect, width, height, factor)
+        : deps.rasterizeVector(node.paths, node.fillRule, rect, width, height, factor);
   // Text mask targets' geometry resolves before the sync rasterizeFor (a
   // rejection throws, aborting the export like any other cook failure).
   const maskTextGeometry = await prefetchMaskTextGeometry(node, deps);
@@ -691,6 +717,7 @@ export async function cookNodeFullRes(
     maskTextGeometry,
     (id) => drivers.get(id),
     nodeExtent,
+    { x: rect.x, y: rect.y },
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
     width,
     height,
@@ -700,6 +727,7 @@ export async function cookNodeFullRes(
     deps,
     (id) => drivers.get(id),
     nodeExtent,
+    { x: rect.x, y: rect.y },
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
     width,
     height,
@@ -738,7 +766,7 @@ export async function cookNodeFullRes(
     width,
     height,
   });
-  return bitmap;
+  return node.type === 'pixel' ? { bitmap } : { bitmap, rect };
 }
 
 /**
@@ -826,10 +854,11 @@ export async function cookNode(
   const node = rawNode as PixelNode | VectorNode | TextNode;
 
   const factor = resolutionFactor(level);
-  // A vector node has no `sourceSize` of its own — its raster always spans
-  // `Scene.documentSize` (vector-node-model.md's Sizing note).
-  const nodeExtent = node.type === 'pixel' ? node.sourceSize : deps.getDocumentSize();
-  const [width, height] = computeTargetSize(nodeExtent, factor);
+  // The logical frame: `sourceSize` for a pixel node, the page for vector and text. It is the
+  // pivot every transform and mask turns about. The bitmap's own rect inside it (layer-overflow.md)
+  // is worked out in the try below, once a text node's geometry has resolved.
+  const documentSize = deps.getDocumentSize();
+  const nodeExtent = node.type === 'pixel' ? node.sourceSize : documentSize;
 
   // A missing pixel source is not a cook failure (no toast, dirty stays
   // set, paintScene shows the striped placeholder) — checked before the
@@ -858,7 +887,7 @@ export async function cookNode(
   // from. The commit below re-derives them and only stores on an exact match,
   // so a mid-cook edit can never leave a prefix claiming inputs it wasn't
   // built from.
-  const sourceKey = prefixCache.sourceKeyFor(node, source);
+  const sourceKey = prefixCache.sourceKeyFor(node, source, documentSize);
   const stackDescriptors = prefixCache.descriptorsFor(node, deps, rasterKey);
   /** True while every prefix input still reads as it did at the start of this cook. */
   const prefixInputsUnchanged = (): boolean => {
@@ -867,16 +896,19 @@ export async function cookNode(
       return false;
     }
     const latestNode = latest as PixelNode | VectorNode | TextNode;
-    const [latestW, latestH] = computeTargetSize(
-      latestNode.type === 'pixel' ? latestNode.sourceSize : deps.getDocumentSize(),
-      factor,
-    );
+    // A vector or text raster's size and placement follow from its content and the document
+    // size, both inside the source key; a pixel raster's from its `sourceSize`.
+    const sizeUnchanged =
+      latestNode.type !== 'pixel' ||
+      (node.type === 'pixel' &&
+        latestNode.sourceSize[0] === node.sourceSize[0] &&
+        latestNode.sourceSize[1] === node.sourceSize[1]);
     return (
-      latestW === width &&
-      latestH === height &&
+      sizeUnchanged &&
       prefixCache.sourceKeyFor(
         latestNode,
         latestNode.type === 'pixel' ? deps.getSource(nodeId) : undefined,
+        deps.getDocumentSize(),
       ) === sourceKey &&
       prefixCache.sameDescriptors(
         prefixCache.descriptorsFor(latestNode, deps, rasterKey),
@@ -897,6 +929,14 @@ export async function cookNode(
       throw new Error('prefix descriptors are out of step with the enabled modifiers');
     }
 
+    // The raster rect (layer-overflow.md), once per cook: the page grown where the content
+    // crosses it. Text needs its geometry first, even on a prefix hit (the geometry cache makes
+    // that cheap). The await sits inside this try: a Rust error (e.g. FontNotFound) is a cook
+    // failure — one toast per burst, dirty stays, stale cache untouched.
+    const geometry = node.type === 'text' ? await deps.getTextGeometry(node) : undefined;
+    const rect = rasterRectFor(node, documentSize, geometry);
+    const [width, height] = computeTargetSize([rect.w, rect.h], factor);
+
     // Reuse check: a stored intermediate is only a hit when it was built from
     // exactly this source, at exactly this size, by an exact prefix of this
     // stack. Anything else — a miss — is today's full cook.
@@ -913,8 +953,6 @@ export async function cookNode(
         : undefined;
     const start = hit ? hit.descriptor.modifiers.length : 0;
 
-    // The geometry await sits inside this try: a Rust error (e.g. FontNotFound)
-    // is a cook failure — one toast per burst, dirty stays, stale cache untouched.
     let resultBytes: Uint8Array;
     if (hit) {
       // Always a copy: the stored buffer stays the cache's, whatever the run
@@ -925,8 +963,8 @@ export async function cookNode(
         node.type === 'pixel'
           ? deps.downscale(source as ImageBitmap, width, height)
           : node.type === 'text'
-            ? deps.rasterizeText(node, await deps.getTextGeometry(node), width, height, factor)
-            : deps.rasterizeVector(node.paths, node.fillRule, width, height, factor);
+            ? deps.rasterizeText(node, geometry as TextGeometry, rect, width, height, factor)
+            : deps.rasterizeVector(node.paths, node.fillRule, rect, width, height, factor);
     }
     const tDownscale = performance.now();
     // Text mask targets' geometry (async) resolves here, inside the failure try,
@@ -937,6 +975,7 @@ export async function cookNode(
       maskTextGeometry,
       (id) => deps.getDriverRaster(id, level)?.bitmap,
       nodeExtent,
+      { x: rect.x, y: rect.y },
       node.transform2d ?? IDENTITY_TRANSFORM_2D,
       width,
       height,
@@ -950,6 +989,7 @@ export async function cookNode(
       deps,
       (id) => deps.getDriverRaster(id, level)?.bitmap,
       nodeExtent,
+      { x: rect.x, y: rect.y },
       node.transform2d ?? IDENTITY_TRANSFORM_2D,
       width,
       height,
@@ -1002,7 +1042,9 @@ export async function cookNode(
         `(downscale ${(tDownscale - t0).toFixed(1)}, sidecar+ipc ${(tSidecar - tDownscale).toFixed(1)}, ` +
         `encode ${(tEncode - tSidecar).toFixed(1)}) prefix ${start}/${stackLength}`,
     );
-    deps.setCache(nodeId, level, bitmap);
+    // The rect travels with the bitmap (layer-overflow.md); a pixel bitmap spans its sourceSize.
+    if (node.type === 'pixel') deps.setCache(nodeId, level, bitmap);
+    else deps.setCache(nodeId, level, bitmap, rect);
     // Success only: the status bar's "last cook" readout (cook-time-readout.md).
     // A throw anywhere above lands in the catch and publishes nothing.
     useLastCookStore.getState().publish({
@@ -1026,10 +1068,17 @@ export async function cookNode(
     const textInputsUnchanged =
       textKeyAtStart === undefined ||
       (current !== undefined && isTextNode(current) && textCookKey(current) === textKeyAtStart);
+    // A vector or text raster is cooked over a rect taken from the page: a resize mid-cook
+    // dirtied this node again (setDocumentSize), and this older bitmap mustn't clear that.
+    const latestSize = deps.getDocumentSize();
+    const frameUnchanged =
+      node.type === 'pixel' ||
+      (latestSize[0] === documentSize[0] && latestSize[1] === documentSize[1]);
     if (
       current &&
       current.modifiers === modifiersAtStart &&
       textInputsUnchanged &&
+      frameUnchanged &&
       maskInputsKey(current, deps, rasterKey) === maskKeyAtStart
     ) {
       deps.clearDirty(nodeId, level);

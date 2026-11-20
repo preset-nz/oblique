@@ -214,7 +214,7 @@ describe('lockNode', () => {
 
   it('cooks full-res once, then commits state: locked', async () => {
     useSceneStore.setState((s) => ({ scene: { ...s.scene, nodes: [pixelNode('a')] } }));
-    const cookFullRes = vi.fn(async () => fakeBitmap());
+    const cookFullRes = vi.fn(async () => ({ bitmap: fakeBitmap() }));
 
     await useSceneStore.getState().lockNode('a', cookFullRes);
 
@@ -242,7 +242,7 @@ describe('lockNode', () => {
     useSceneStore.setState((s) => ({
       scene: { ...s.scene, nodes: [pixelNode('a', { state: 'locked' })] },
     }));
-    const cookFullRes = vi.fn(async () => fakeBitmap());
+    const cookFullRes = vi.fn(async () => ({ bitmap: fakeBitmap() }));
 
     await useSceneStore.getState().lockNode('a', cookFullRes);
 
@@ -254,8 +254,8 @@ describe('lockNode', () => {
     let resolveCook: (bitmap: ImageBitmap) => void = () => {};
     const cookFullRes = vi.fn(
       () =>
-        new Promise<ImageBitmap>((resolve) => {
-          resolveCook = resolve;
+        new Promise<{ bitmap: ImageBitmap }>((resolve) => {
+          resolveCook = (b) => resolve({ bitmap: b });
         }),
     );
 
@@ -1508,5 +1508,44 @@ describe('isSelectionNode', () => {
     expect(isSelectionNode(vectorNode('s', { label: 'Selection (rect)' }))).toBe(true);
     expect(isSelectionNode(vectorNode('s', { label: 'My shape' }))).toBe(false);
     expect(isSelectionNode(pixelNode('p', { label: 'Selection (rect)' }))).toBe(false);
+  });
+});
+
+describe('setDocumentSize (layer-overflow.md)', () => {
+  const clean = { draft: false, working: false };
+  const both = { draft: true, working: true };
+
+  function arrange(): void {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        documentSize: [2048, 1536],
+        nodes: [
+          vectorNode('v'),
+          vectorNode('locked', { state: 'locked' }),
+          { ...vectorNode('t'), type: 'text' } as unknown as SceneNode,
+          pixelNode('p'),
+        ],
+      },
+    }));
+  }
+  const dirtyOf = (id: string) =>
+    useSceneStore.getState().scene.nodes.find((n) => n.id === id)?.dirty;
+
+  it('a real size change redraws every unlocked text and vector layer, over a rect holding the new page', () => {
+    arrange();
+    useSceneStore.getState().setDocumentSize([1536, 2048]);
+    expect(useSceneStore.getState().scene.documentSize).toEqual([1536, 2048]);
+    expect(dirtyOf('v')).toEqual(both);
+    expect(dirtyOf('t')).toEqual(both);
+    // a pixel layer's frame is its own source (rule 4 still holds), and a lock keeps its bake
+    expect(dirtyOf('p')).toEqual(clean);
+    expect(dirtyOf('locked')).toEqual(clean);
+  });
+
+  it('the same size dirties nothing', () => {
+    arrange();
+    useSceneStore.getState().setDocumentSize([2048, 1536]);
+    expect(dirtyOf('v')).toEqual(clean);
   });
 });

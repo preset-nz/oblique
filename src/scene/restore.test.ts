@@ -128,6 +128,30 @@ beforeEach(() => {
 });
 
 describe('dirty-diff correctness on restore', () => {
+  it('an undo across a document resize redraws text and vector layers, not pixel ones (layer-overflow.md)', async () => {
+    const text = { ...vectorNode('t'), type: 'text' } as unknown as SceneNode;
+    useSceneStore.setState({
+      scene: { ...emptyScene([vectorNode('v'), text, pixelNode('a')]), documentSize: [2048, 1536] },
+    });
+    sources.set('a', fakeBitmap());
+    reset();
+
+    useSceneStore.getState().setDocumentSize([1536, 2048]);
+    for (const id of ['v', 't']) {
+      useSceneStore.getState().clearDirty(id, 'draft');
+      useSceneStore.getState().clearDirty(id, 'working');
+    }
+
+    await undo(fakeDeps());
+
+    const dirty = (id: string) =>
+      useSceneStore.getState().scene.nodes.find((n) => n.id === id)?.dirty;
+    expect(useSceneStore.getState().scene.documentSize).toEqual([2048, 1536]);
+    expect(dirty('v')).toEqual({ draft: true, working: true });
+    expect(dirty('t')).toEqual({ draft: true, working: true });
+    expect(dirty('a')).toEqual({ draft: false, working: false });
+  });
+
   it('marks a node dirty when its modifiers changed between old and restored', async () => {
     useSceneStore.setState({ scene: emptyScene([pixelNode('a')]) });
     sources.set('a', fakeBitmap());

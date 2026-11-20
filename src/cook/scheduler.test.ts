@@ -318,7 +318,7 @@ describe('CookScheduler', () => {
 
     it('cooks a locked node with an empty baked slot on start()', async () => {
       setNodes([makeNode('a', { state: 'locked' })]);
-      const rehydrate: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      const rehydrate: RehydrateExecutor = vi.fn(async () => ({ bitmap: fakeBitmap() }));
       const scheduler = new CookScheduler(
         vi.fn(async () => {}),
         rehydrate,
@@ -337,7 +337,7 @@ describe('CookScheduler', () => {
     it('never rehydrates a locked node that already has a baked bitmap', async () => {
       cache.set('a', 'baked', fakeBitmap());
       setNodes([makeNode('a', { state: 'locked' })]);
-      const rehydrate: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      const rehydrate: RehydrateExecutor = vi.fn(async () => ({ bitmap: fakeBitmap() }));
       const scheduler = new CookScheduler(
         vi.fn(async () => {}),
         rehydrate,
@@ -386,7 +386,7 @@ describe('CookScheduler', () => {
       expect(rehydrate).toHaveBeenCalledTimes(1);
       expect(cache.get('a', 'baked')).toBeUndefined();
 
-      const rehydrateOk: RehydrateExecutor = vi.fn(async () => fakeBitmap());
+      const rehydrateOk: RehydrateExecutor = vi.fn(async () => ({ bitmap: fakeBitmap() }));
       (scheduler as unknown as { rehydrateExecutor: RehydrateExecutor }).rehydrateExecutor =
         rehydrateOk;
       useSidecarStatusStore.setState({ status: 'up' });
@@ -406,8 +406,8 @@ describe('CookScheduler', () => {
       let resolveRehydrate: (bitmap: ImageBitmap) => void = () => {};
       const rehydrate: RehydrateExecutor = vi.fn(
         () =>
-          new Promise<ImageBitmap>((resolve) => {
-            resolveRehydrate = resolve;
+          new Promise<{ bitmap: ImageBitmap }>((resolve) => {
+            resolveRehydrate = (b) => resolve({ bitmap: b });
           }),
       );
       const scheduler = new CookScheduler(
@@ -537,8 +537,8 @@ describe('CookScheduler', () => {
       let bake: (b: ImageBitmap) => void = () => {};
       const rehydrate: RehydrateExecutor = vi.fn(
         () =>
-          new Promise<ImageBitmap>((resolve) => {
-            bake = resolve;
+          new Promise<{ bitmap: ImageBitmap }>((resolve) => {
+            bake = (b) => resolve({ bitmap: b });
           }),
       );
       const scheduler = new CookScheduler(executor, rehydrate);

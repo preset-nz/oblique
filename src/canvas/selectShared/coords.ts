@@ -1,4 +1,5 @@
 import { applyMatrix, docToLocalMatrix, localToDocMatrix } from '@/scene/maskRasterize';
+import type { RasterRect } from '@/scene/rasterRect';
 import { IDENTITY_TRANSFORM_2D, type Point2D, type Transform2D } from '@/scene/types';
 
 /**
@@ -28,30 +29,53 @@ export interface BufferFrame {
   extent: [number, number];
   /** The actual cooked bitmap's pixel dimensions at the level sent to the sidecar. */
   bufferSize: [number, number];
+  /**
+   * Where the buffer sits in the node's local space: its raster rect (layer-overflow.md), which
+   * for a text or vector node can reach past the page. Absent = `{0, 0, extent}`.
+   */
+  raster?: RasterRect;
 }
 
 export function frameFor(
   extent: [number, number],
   bufferSize: [number, number],
   transform2d: Transform2D | undefined = IDENTITY_TRANSFORM_2D,
+  raster?: RasterRect,
 ): BufferFrame {
-  return { transform2d: transform2d ?? IDENTITY_TRANSFORM_2D, extent, bufferSize };
+  const frame: BufferFrame = {
+    transform2d: transform2d ?? IDENTITY_TRANSFORM_2D,
+    extent,
+    bufferSize,
+  };
+  return raster ? { ...frame, raster } : frame;
+}
+
+function rasterOf(frame: BufferFrame): RasterRect {
+  return frame.raster ?? { x: 0, y: 0, w: frame.extent[0], h: frame.extent[1] };
 }
 
 /** Document-space point -> the cooked buffer's pixel space. */
 export function docToBuffer(doc: Point2D, frame: BufferFrame): Point2D {
   const [ew, eh] = frame.extent;
   const [bw, bh] = frame.bufferSize;
+  const r = rasterOf(frame);
   const m = docToLocalMatrix(frame.transform2d, ew, eh);
   const local = applyMatrix(m, doc.x, doc.y);
-  return { x: local.x * (ew === 0 ? 0 : bw / ew), y: local.y * (eh === 0 ? 0 : bh / eh) };
+  return {
+    x: (local.x - r.x) * (r.w === 0 ? 0 : bw / r.w),
+    y: (local.y - r.y) * (r.h === 0 ? 0 : bh / r.h),
+  };
 }
 
 /** The cooked buffer's pixel space -> document space (the inverse of `docToBuffer` for the same frame). */
 export function bufferToDoc(buf: Point2D, frame: BufferFrame): Point2D {
   const [ew, eh] = frame.extent;
   const [bw, bh] = frame.bufferSize;
-  const local = { x: buf.x * (bw === 0 ? 0 : ew / bw), y: buf.y * (bh === 0 ? 0 : eh / bh) };
+  const r = rasterOf(frame);
+  const local = {
+    x: buf.x * (bw === 0 ? 0 : r.w / bw) + r.x,
+    y: buf.y * (bh === 0 ? 0 : r.h / bh) + r.y,
+  };
   const m = localToDocMatrix(frame.transform2d, ew, eh);
   return applyMatrix(m, local.x, local.y);
 }

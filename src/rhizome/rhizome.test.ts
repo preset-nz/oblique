@@ -2717,7 +2717,7 @@ describe('document and lock (document.*, layer.set_state)', () => {
   });
 
   describe('lock and unlock (layer.set_state)', () => {
-    const cook = (b = bitmap()) => vi.fn(async () => b);
+    const cook = (b = bitmap()) => vi.fn(async () => ({ bitmap: b }));
 
     it('lock bakes, fills the baked slot and commits locked, then sends the command', async () => {
       await setup([pixel('a'), pixel('z')]);
@@ -2755,8 +2755,8 @@ describe('document and lock (document.*, layer.set_state)', () => {
       let finish: (b: ImageBitmap) => void = () => undefined;
       const slow = vi.fn(
         () =>
-          new Promise<ImageBitmap>((r) => {
-            finish = r;
+          new Promise<{ bitmap: ImageBitmap }>((r) => {
+            finish = (b) => r({ bitmap: b });
           }),
       );
       const first = state().lockNode('a', slow);
@@ -2797,7 +2797,7 @@ describe('document and lock (document.*, layer.set_state)', () => {
 
     it('lock, undo, redo leaves a usable layer: the scheduler rehydrates the bake', async () => {
       await setup([pixel('a')], true, {}, restoring);
-      const rehydrate = vi.fn(async () => bitmap());
+      const rehydrate = vi.fn(async () => ({ bitmap: bitmap() }));
       const scheduler = new CookScheduler(async () => undefined, rehydrate);
       scheduler.start();
       try {
@@ -2826,7 +2826,7 @@ describe('document and lock (document.*, layer.set_state)', () => {
 
     it('unlock, undo, redo: undo relocks and the scheduler rehydrates; redo unlocks again', async () => {
       await setup([pixel('a')], true, {}, restoring);
-      const rehydrate = vi.fn(async () => bitmap());
+      const rehydrate = vi.fn(async () => ({ bitmap: bitmap() }));
       const scheduler = new CookScheduler(async () => undefined, rehydrate);
       scheduler.start();
       try {

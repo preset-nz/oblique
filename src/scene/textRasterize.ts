@@ -1,10 +1,12 @@
 import type { TextGeometry } from '@/fonts/textGeometry';
+import type { RasterRect } from './rasterRect';
 import type { TextNode } from './types';
 import { buildPath2D, pathCommandsFor } from './vectorRasterize';
 
 /**
- * Rasterise a text node's glyph geometry at the cook target `width`×`height`
- * (= documentSize × level factor). `geometry.paths` are in anchor space, so the
+ * Rasterise a text node's glyph geometry over `rect` (its raster rect, layer-overflow.md) at the
+ * cook target `width`×`height` (= the rect's size × level factor): document px `p` land at
+ * `(p - rect origin) × factor`. `geometry.paths` are in anchor space, so the
  * node's `position` is applied here with `translate` — moving text never needs
  * Rust. Fill first, then the stroke on top (centred on the outline, round joins).
  * Production-only (needs OffscreenCanvas/Path2D); cook tests inject a fake via
@@ -13,6 +15,7 @@ import { buildPath2D, pathCommandsFor } from './vectorRasterize';
 export function rasterizeText(
   node: TextNode,
   geometry: TextGeometry,
+  rect: RasterRect,
   width: number,
   height: number,
   factor: number,
@@ -22,6 +25,8 @@ export function rasterizeText(
   if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
 
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
+  // Skipped at the origin, so a layer on the page draws exactly the calls it always did.
+  if (rect.x !== 0 || rect.y !== 0) ctx.translate(-rect.x, -rect.y);
   ctx.translate(node.position.x, node.position.y);
   const path = buildPath2D(pathCommandsFor(geometry.paths));
 

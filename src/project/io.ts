@@ -8,6 +8,7 @@ import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
 import { clearAllHistograms } from '@/scene/histograms';
 import * as prefixStore from '@/scene/prefixStore';
+import { logicalFrameFor, type RasterRect, sameRect } from '@/scene/rasterRect';
 import { type ReplaceSourceResult, replacePixelSource } from '@/scene/replaceSource';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
@@ -95,6 +96,30 @@ async function removeIfExists(
 }
 
 /**
+ * A bake's raster rect as `<id>.json` (layer-overflow.md): written beside `<id>.png` only when
+ * the rect differs from the node's logical frame, so a missing file means the logical frame,
+ * which is what every bake from before the rect holds.
+ */
+function rectJson(rect: RasterRect): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({ x: rect.x, y: rect.y, w: rect.w, h: rect.h }));
+}
+
+/** A `<id>.json` read back, or `undefined` when it isn't a rect (then the logical frame stands). */
+function parseRectJson(bytes: Uint8Array): RasterRect | undefined {
+  const j = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+  const n = (k: string) => (typeof j[k] === 'number' && Number.isFinite(j[k]) ? j[k] : undefined);
+  const [x, y, w, h] = [n('x'), n('y'), n('w'), n('h')];
+  if (x === undefined || y === undefined || w === undefined || h === undefined) return undefined;
+  if (w <= 0 || h <= 0) return undefined;
+  return { x, y, w, h };
+}
+
+/** The node id a file in the baked directory belongs to: `<id>.png` or `<id>.json`. */
+function bakedIdOf(name: string): string {
+  return name.replace(/\.(png|json)$/, '');
+}
+
+/**
  * Persist the `baked` cache slot for every locked node as a PNG beside the
  * project file, sweep stale files (unlocked-then-saved, deleted nodes), and
  * drop the whole directory once nothing locked remains. A locked node whose
@@ -102,6 +127,10 @@ async function removeIfExists(
  * not an error: its existing on-disk PNG (if any) is left alone since its
  * node id is still locked, and the next save after rehydration completes
  * writes the fresh bitmap.
+ *
+ * A bake whose raster rect differs from the node's logical frame at this save
+ * (layer-overflow.md) gets `<id>.json` beside its PNG; a written node whose rect
+ * is the frame again loses an older one in the sweep.
  */
 export async function writeBakedSidecar(
   path: string,
@@ -119,11 +148,19 @@ export async function writeBakedSidecar(
   await deps.mkdir(dir, { recursive: true });
 
   const writtenIds = new Set<string>();
-  for (const id of lockedIds) {
+  const rectIds = new Set<string>();
+  for (const node of scene.nodes) {
+    const id = node.id;
+    if (!lockedIds.has(id)) continue;
     const bitmap = cache.get(id, 'baked');
     if (!bitmap) continue; // mid-rehydrate: skipped, not an error — next save catches it
     await deps.writeFile(`${dir}/${id}.png`, await deps.encodePng(bitmap));
     writtenIds.add(id);
+    const rect = cache.getRect(id, 'baked');
+    if (rect && !sameRect(rect, logicalFrameFor(node, scene.documentSize))) {
+      await deps.writeFile(`${dir}/${id}.json`, rectJson(rect));
+      rectIds.add(id);
+    }
   }
 
   let entries: DirEntry[] = [];
@@ -139,8 +176,14 @@ export async function writeBakedSidecar(
   // (a mid-rehydrate node's older PNG); everything else is stale and swept.
   let survivingCount = writtenIds.size;
   for (const entry of entries) {
-    const id = entry.name.replace(/\.png$/, '');
-    if (writtenIds.has(id)) continue;
+    const id = bakedIdOf(entry.name);
+    if (writtenIds.has(id)) {
+      // the rect is the logical frame again: an older `<id>.json` would misplace the new bake
+      if (entry.name === `${id}.json` && !rectIds.has(id)) {
+        await removeIfExists(`${dir}/${entry.name}`, deps);
+      }
+      continue;
+    }
     if (lockedIds.has(id)) {
       survivingCount++;
       continue;
@@ -213,12 +256,39 @@ async function rehydrateBaked(path: string, target: Scene, deps: ProjectIoDeps):
     try {
       const bytes = await deps.readFile(`${bakedDirFor(path)}/${node.id}.png`);
       const bitmap = await deps.decode(bytes);
-      cache.set(node.id, 'baked', bitmap as ImageBitmap);
+      cache.set(node.id, 'baked', bitmap as ImageBitmap, await bakedRect(path, node, target, deps));
     } catch (err) {
       // Non-fatal by design: a missing sidecar or a corrupt one both fall through to the
       // scheduler's rehydrate path.
       console.warn(`[project] baked bitmap for ${node.id} missing/corrupt, will recook`, err);
     }
+  }
+}
+
+/**
+ * The raster rect a bake was made over (layer-overflow.md): its `<id>.json`, else the node's
+ * logical frame in the scene being opened. Explicit for text and vector, so a later resize can't
+ * reread an absent rect as the new page; absent for a pixel layer (its `sourceSize`, as always).
+ */
+async function bakedRect(
+  path: string,
+  node: Scene['nodes'][number],
+  target: Scene,
+  deps: ProjectIoDeps,
+): Promise<RasterRect | undefined> {
+  if (isPixelNode(node)) return undefined; // a pixel bake always spans its sourceSize
+  const frame = logicalFrameFor(node, target.documentSize);
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.readFile(`${bakedDirFor(path)}/${node.id}.json`);
+  } catch {
+    return frame; // none written: the bake spans the logical frame
+  }
+  try {
+    return parseRectJson(bytes) ?? frame;
+  } catch (err) {
+    console.warn(`[project] baked rect for ${node.id} unreadable, reading the logical frame`, err);
+    return frame;
   }
 }
 

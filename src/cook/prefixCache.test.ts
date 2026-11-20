@@ -182,9 +182,11 @@ describe('descriptorsFor', () => {
 });
 
 describe('sourceKeyFor', () => {
+  const DOC: [number, number] = [800, 400];
+
   it('pixel: the bitmap reference itself', () => {
     const bmp = {} as ImageBitmap;
-    expect(sourceKeyFor(pixel([]), bmp)).toBe(bmp);
+    expect(sourceKeyFor(pixel([]), bmp, DOC)).toBe(bmp);
   });
 
   it('vector: {paths, fillRule} content, so an anchor move changes it', () => {
@@ -196,8 +198,38 @@ describe('sourceKeyFor', () => {
         fillRule: 'nonzero',
         paths: [{ closed: true, anchors: [{ point: { x, y: 0 } }] }],
       }) as unknown as VectorNode;
-    expect(sourceKeyFor(v(0), undefined)).toBe(sourceKeyFor(v(0), undefined));
-    expect(sourceKeyFor(v(0), undefined)).not.toBe(sourceKeyFor(v(1), undefined));
+    expect(sourceKeyFor(v(0), undefined, DOC)).toBe(sourceKeyFor(v(0), undefined, DOC));
+    expect(sourceKeyFor(v(0), undefined, DOC)).not.toBe(sourceKeyFor(v(1), undefined, DOC));
+  });
+
+  it('vector and text: the document size is in the key (the raster rect starts from the page, layer-overflow.md)', () => {
+    const v = {
+      id: 'v',
+      type: 'vector',
+      modifiers: [],
+      fillRule: 'nonzero',
+      paths: [{ closed: true, anchors: [{ point: { x: 0, y: 0 } }] }],
+    } as unknown as VectorNode;
+    expect(sourceKeyFor(v, undefined, [800, 400])).not.toBe(sourceKeyFor(v, undefined, [400, 800]));
+    const t = {
+      id: 't',
+      type: 'text',
+      modifiers: [],
+      content: 'HI',
+      font: { family: 'F', style: 'R', postscriptName: 'F', weight: 400, italic: false },
+      fontSize: 10,
+      tracking: 0,
+      kerning: 100,
+      lineHeight: 1,
+      align: 'left',
+      fill: '#fff',
+      stroke: null,
+      position: { x: 0, y: 0 },
+    } as unknown as TextNode;
+    expect(sourceKeyFor(t, undefined, [800, 400])).not.toBe(sourceKeyFor(t, undefined, [400, 800]));
+    // and a pixel layer's key stays its bitmap, whatever the page
+    const bmp = {} as ImageBitmap;
+    expect(sourceKeyFor(pixel([]), bmp, [1, 1])).toBe(bmp);
   });
 
   it('text: follows content and position, ignores transform2d', () => {
@@ -218,10 +250,10 @@ describe('sourceKeyFor', () => {
         position: { x: 0, y: 0 },
         ...over,
       }) as unknown as TextNode;
-    const base = sourceKeyFor(t({}), undefined);
-    expect(sourceKeyFor(t({ content: 'BYE' }), undefined)).not.toBe(base);
-    expect(sourceKeyFor(t({ position: { x: 1, y: 0 } }), undefined)).not.toBe(base);
-    expect(sourceKeyFor(t({ transform2d: { ...t1, x: 9 } }), undefined)).toBe(base);
+    const base = sourceKeyFor(t({}), undefined, DOC);
+    expect(sourceKeyFor(t({ content: 'BYE' }), undefined, DOC)).not.toBe(base);
+    expect(sourceKeyFor(t({ position: { x: 1, y: 0 } }), undefined, DOC)).not.toBe(base);
+    expect(sourceKeyFor(t({ transform2d: { ...t1, x: 9 } }), undefined, DOC)).toBe(base);
   });
 });
 

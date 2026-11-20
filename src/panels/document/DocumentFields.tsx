@@ -20,10 +20,11 @@ import {
  * background, shown only in File → Document Settings… (the dialog,
  * `DocumentSettingsDialog.tsx`), per the menu standard's decision 11.
  *
- * Applies to empty documents and post-hoc: sets `scene.documentSize` only
- * (`setDocumentSize` is compositing-only, no dirty flag — dirty rule 4 in
- * scene/store.ts), so picking a preset recomposites without recooking any
- * node. The background (colour and image) goes through `document.set_background` on
+ * Applies to empty documents and post-hoc: sets `scene.documentSize` only, so
+ * picking a preset recomposites pixel layers without recooking them (dirty rule
+ * 4 in scene/store.ts). Text and vector layers redraw over a raster rect that
+ * holds the new page, and Rust's `document.set_size` keeps a rotated or scaled
+ * one in place in the same undo step (layer-overflow.md). The background (colour and image) goes through `document.set_background` on
  * rhizome, local first, so a colour drag is one undo step.
  */
 const DEFAULT_BACKGROUND_COLOR = '#ffffff';

@@ -1,0 +1,209 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "background": {
+          "color": "#262a33",
+          "type": "color"
+        },
+        "documentSize": [
+          1280.0,
+          960.0
+        ],
+        "note": "Layer overflow window check (Epic 03, layer-overflow). `just fixtures text-overflow` writes this file again.\n\n0. Open a fresh copy (`just window-check text-overflow`). A 1280 x 960 page, dark grey, with four layers: Right, a yellow line of text running off the right edge; Left, a blue line starting past the left edge; Drop, a white triangle reaching past the bottom; Turned, a white square turned about 30 degrees, on the page.\na. Move tool: drag Right left until the whole line is on the page. Every letter is whole, with no cut where the page edge was: while dragging (blurry draft) and after letting go (sharp).\nb. Drag Left right until it is on the page: its first letters are whole. Drag Drop up: its point is whole.\nc. Undo back to the start, then click the part of Right that lies off the page: Right is selected.\nd. Text tool: click into Right and type more letters at its end, so it runs further past the edge. Move tool: drag it back on. The new letters are whole too.\ne. File > Export PNG with the layers moved on: the PNG shows every letter and the triangle's point whole.\nf. Lock Right (its padlock), save, close and reopen the file: Right shows whole where you left it. Unlock it, drag it further right and back: still whole.\ng. Drag Left fully onto the page, then Use as mask in its row: the layers below it show only through its letters, all of them whole. Use as image to put it back.\nh. Give Turned an Invert modifier and choose Mask from vector or text layer, then Right: Turned inverts only where Right's letters cover it. Drag Right across Turned: the inverted letters are whole.\ni. File > Document Settings…: switch Orientation to Portrait. Nothing moves on the page: each layer keeps its place, and Turned keeps its angle and its place (the parts outside the new page are simply off it). Switch back to Landscape: all as before. One undo takes the orientation back with everything in place. The same for a different aspect (1:1) and a different size.\nj. After the switch in i, drag each layer around the new page: nothing is cut that was there before.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000009",
+          "00000000000000000000000008",
+          "00000000000000000000000007",
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/drop",
+      "id": "00000000000000000000000007",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Drop",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 180.0,
+                  "y": 700.0
+                }
+              },
+              {
+                "point": {
+                  "x": 460.0,
+                  "y": 700.0
+                }
+              },
+              {
+                "point": {
+                  "x": 320.0,
+                  "y": 1180.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/left",
+      "id": "00000000000000000000000008",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Starts off the page",
+        "fill": "#7fb7ff",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 140.0,
+        "kerning": 100.0,
+        "label": "Left",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": -420.0,
+          "y": 640.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/right",
+      "id": "00000000000000000000000009",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Runs off the right edge",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 140.0,
+        "kerning": 100.0,
+        "label": "Right",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 520.0,
+          "y": 260.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/turned",
+      "id": "00000000000000000000000006",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Turned",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 820.0,
+                  "y": 520.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1060.0,
+                  "y": 520.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1060.0,
+                  "y": 760.0
+                }
+              },
+              {
+                "point": {
+                  "x": 820.0,
+                  "y": 760.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "transform2d.position": [
+          0.0,
+          0.0
+        ],
+        "transform2d.rotation": 0.52,
+        "transform2d.scale": [
+          1.0,
+          1.0
+        ],
+        "visible": true
+      }
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

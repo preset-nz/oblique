@@ -79,3 +79,43 @@ describe('clearNode', () => {
     expect(() => cache.clearNode('node-1')).not.toThrow();
   });
 });
+
+describe('the raster rect beside the bitmap (layer-overflow.md)', () => {
+  const grown = { x: -128, y: 0, w: 2304, h: 1536 };
+
+  it('set stores the rect with the bitmap, per level; absent means the logical frame', () => {
+    cache.set('t', 'draft', fakeBitmap(), grown);
+    cache.set('t', 'working', fakeBitmap());
+    expect(cache.getRect('t', 'draft')).toEqual(grown);
+    expect(cache.getRect('t', 'working')).toBeUndefined();
+    expect(cache.getRect('other', 'draft')).toBeUndefined();
+  });
+
+  it('a later write replaces the rect, and a write without one drops the old', () => {
+    cache.set('t', 'draft', fakeBitmap(), grown);
+    cache.set('t', 'draft', fakeBitmap(), { ...grown, x: -192 });
+    expect(cache.getRect('t', 'draft')?.x).toBe(-192);
+    cache.set('t', 'draft', fakeBitmap());
+    expect(cache.getRect('t', 'draft')).toBeUndefined();
+  });
+
+  it('keeps its own copy: mutating the rect passed in changes nothing', () => {
+    const rect = { ...grown };
+    cache.set('t', 'baked', fakeBitmap(), rect);
+    rect.x = 0;
+    expect(cache.getRect('t', 'baked')?.x).toBe(-128);
+  });
+
+  it('clearLevel, clearNode and clearAll drop the rect with the bitmap', () => {
+    cache.set('t', 'draft', fakeBitmap(), grown);
+    cache.set('t', 'working', fakeBitmap(), grown);
+    cache.clearLevel('t', 'draft');
+    expect(cache.getRect('t', 'draft')).toBeUndefined();
+    expect(cache.getRect('t', 'working')).toEqual(grown);
+    cache.clearNode('t');
+    expect(cache.getRect('t', 'working')).toBeUndefined();
+    cache.set('u', 'baked', fakeBitmap(), grown);
+    cache.clearAll();
+    expect(cache.getRect('u', 'baked')).toBeUndefined();
+  });
+});

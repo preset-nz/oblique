@@ -956,3 +956,306 @@ describe('transform2d — compositing-only node transform (node-transform-2d.md)
     expect(ctx.restore).toHaveBeenCalledTimes(2);
   });
 });
+
+// ---------------------------------------------------------------- layer overflow (layer-overflow.md)
+
+type M = [number, number, number, number, number, number];
+const mul = (m: M, n: M): M => [
+  m[0] * n[0] + m[2] * n[1],
+  m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3],
+  m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4],
+  m[1] * n[4] + m[3] * n[5] + m[5],
+];
+const apply = (m: M, x: number, y: number) => ({
+  x: m[0] * x + m[2] * y + m[4],
+  y: m[1] * x + m[3] * y + m[5],
+});
+
+/**
+ * A context that tracks its matrix as the real one composes it (save/restore, translate,
+ * rotate, scale), and records each drawImage as the map from the source bitmap's own pixels to
+ * the buffer: `bitmapToBuffer(u, v)`.
+ */
+function matrixCtx() {
+  let m: M = [1, 0, 0, 1, 0, 0];
+  const stack: M[] = [];
+  const draws: {
+    src: unknown;
+    args: number[];
+    op: GlobalCompositeOperation;
+    bitmapToBuffer: (u: number, v: number) => { x: number; y: number };
+  }[] = [];
+  const ctx = {
+    draws,
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over' as GlobalCompositeOperation,
+    imageSmoothingEnabled: false,
+    save: () => stack.push(m),
+    restore: () => {
+      m = stack.pop() ?? [1, 0, 0, 1, 0, 0];
+    },
+    translate: (x: number, y: number) => {
+      m = mul(m, [1, 0, 0, 1, x, y]);
+    },
+    rotate: (a: number) => {
+      m = mul(m, [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0]);
+    },
+    scale: (x: number, y: number) => {
+      m = mul(m, [x, 0, 0, y, 0, 0]);
+    },
+    drawImage: (src: { width: number; height: number }, ...args: number[]) => {
+      const [dx, dy, dw, dh] = args;
+      const at = m;
+      draws.push({
+        src,
+        args,
+        op: ctx.globalCompositeOperation,
+        bitmapToBuffer: (u, v) => apply(at, dx + (u * dw) / src.width, dy + (v * dh) / src.height),
+      });
+    },
+    beginPath: vi.fn(),
+    rect: vi.fn(),
+    clip: vi.fn(),
+    fillStyle: '',
+    fillRect: vi.fn(),
+    strokeStyle: '',
+    lineWidth: 0,
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+  };
+  (ctx as unknown as { canvas: unknown }).canvas = ctx;
+  return ctx as unknown as Composite2DContext & { draws: typeof draws };
+}
+
+/** A bitmap cooked over `rect` at `factor` (the cook's `computeTargetSize`). */
+function bitmapFor(rect: { w: number; h: number }, factor: number): ImageBitmap {
+  return {
+    width: Math.max(1, Math.round(rect.w * factor)),
+    height: Math.max(1, Math.round(rect.h * factor)),
+    close: vi.fn(),
+  } as unknown as ImageBitmap;
+}
+
+function textNode(id: string, overrides: Partial<SceneNode> = {}): SceneNode {
+  return {
+    id,
+    label: id,
+    type: 'text',
+    state: 'active',
+    output: 'image',
+    cameraId: null,
+    modifiers: [],
+    visible: true,
+    blendMode: 'normal',
+    opacity: 1,
+    dirty: { draft: false, working: false },
+    ...overrides,
+  } as unknown as SceneNode;
+}
+
+/** Where a point of the layer's own space (document px) shows on the page, in document px. */
+function shownAt(
+  draw: ReturnType<typeof matrixCtx>['draws'][number],
+  rect: { x: number; y: number },
+  factor: number,
+  p: { x: number; y: number },
+) {
+  // the layer-space point sits at bitmap pixel (p - rect origin) x factor
+  const b = draw.bitmapToBuffer((p.x - rect.x) * factor, (p.y - rect.y) * factor);
+  return { x: b.x / factor, y: b.y / factor };
+}
+
+describe('layer overflow — the bitmap drawn at its raster rect', () => {
+  it('a text bitmap is drawn at the rect it was cooked over, scaled by the composite level', () => {
+    const rect = { x: -128, y: 0, w: 2304, h: 1536 };
+    const bmp = bitmapFor(rect, 1 / 2);
+    cache.set('t', 'working', bmp, rect);
+    const ctx = fakeCtx();
+    compositeScene(ctx, makeScene([textNode('t')], [2048, 1536]), 'working');
+    expect(ctx.drawImage).toHaveBeenCalledWith(bmp, -64, 0, 1152, 768);
+  });
+
+  it('a layer on the page draws exactly as before: at the origin, the logical frame', () => {
+    const page = { x: 0, y: 0, w: 2048, h: 1536 };
+    cache.set('t', 'working', bitmapFor(page, 1 / 2), page);
+    cache.set('p', 'working', fakeBitmap()); // a pixel layer: no rect, its sourceSize
+    const ctx = fakeCtx();
+    compositeScene(ctx, makeScene([textNode('t'), makeNode('p')], [2048, 1536]), 'working');
+    const args = vi.mocked(ctx.drawImage).mock.calls.map((c) => c.slice(1));
+    // bottom-up: the pixel layer (200x100 at 1/2), then the text layer (the page at 1/2)
+    expect(args).toEqual([
+      [0, 0, 100, 50],
+      [0, 0, 1024, 768],
+    ]);
+  });
+
+  it('a stale bitmap keeps its own rect: pickBestAvailable hands back the rect of the level it picked', () => {
+    const older = { x: 0, y: 0, w: 2048, h: 1536 };
+    const newer = { x: -128, y: 0, w: 2176, h: 1536 };
+    const working = fakeBitmap();
+    const draft = fakeBitmap();
+    cache.set('t', 'working', working, older);
+    cache.set('t', 'draft', draft, newer);
+    expect(pickBestAvailable('t', 'working')).toEqual({
+      bitmap: working,
+      level: 'working',
+      rect: older,
+    });
+    const allStale = () => true;
+    expect(pickBestAvailable('t', 'working', cache.get, allStale)).toEqual({
+      bitmap: draft,
+      level: 'draft',
+      rect: newer,
+    });
+  });
+
+  it('the repro: text moved back onto the page shows the glyphs that were past its edge', () => {
+    // cooked while it ran 300 px past the right edge; then moved 400 px left, no recook
+    const rect = { x: 0, y: 0, w: 2368, h: 1536 };
+    cache.set('t', 'baked', bitmapFor(rect, 1), rect);
+    const moved = textNode('t', {
+      transform2d: { x: -400, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+    });
+    const ctx = matrixCtx();
+    compositeScene(ctx, makeScene([moved], [2048, 1536]), 'baked');
+    const [draw] = ctx.draws;
+    // the glyph at x = 2300 (past the page when cooked) is in the bitmap, now at 1900 on the page
+    expect(shownAt(draw, rect, 1, { x: 2300, y: 100 })).toEqual({ x: 1900, y: 100 });
+    expect(draw.src).toBeDefined();
+  });
+
+  it("a rotated vector layer past the edge keeps its pivot: its on-page pixels don't move", () => {
+    const t = { x: 40, y: -30, scaleX: 1.25, scaleY: 0.8, rotation: 0.4 };
+    const page = { x: 0, y: 0, w: 2048, h: 1536 };
+    const grown = { x: -192, y: 0, w: 2240, h: 1536 };
+    const vector = textNode('v', { type: 'vector', transform2d: t } as Partial<SceneNode>);
+    const scene = makeScene([vector], [2048, 1536]);
+    const points = [
+      { x: 100, y: 100 },
+      { x: 1000, y: 700 },
+      { x: 2000, y: 1500 },
+    ];
+
+    cache.set('v', 'working', bitmapFor(page, 1 / 2), page);
+    const before = matrixCtx();
+    compositeScene(before, scene, 'working');
+    // the same layer after an edit that runs it past the left edge, cooked over a grown rect
+    cache.set('v', 'working', bitmapFor(grown, 1 / 2), grown);
+    const after = matrixCtx();
+    compositeScene(after, scene, 'working');
+
+    for (const p of points) {
+      const a = shownAt(before.draws[0], page, 1 / 2, p);
+      const b = shownAt(after.draws[0], grown, 1 / 2, p);
+      expect(b.x).toBeCloseTo(a.x, 9);
+      expect(b.y).toBeCloseTo(a.y, 9);
+    }
+  });
+
+  it('a text stack mask is drawn at its rect for both the clip and the cut', () => {
+    const rect = { x: -64, y: -64, w: 2176, h: 1664 };
+    const maskBitmap = bitmapFor(rect, 1);
+    cache.set('mask', 'baked', maskBitmap, rect);
+    cache.set('bottom', 'baked', fakeBitmap());
+    const mask = textNode('mask', { output: 'mask' });
+    const { createScratch, scratches } = createFakeScratch();
+    const ctx = fakeCtx();
+    compositeScene(
+      ctx,
+      makeScene([mask, makeNode('bottom')], [2048, 1536]),
+      'baked',
+      cache.get,
+      createScratch,
+    );
+    const clip = vi.mocked(scratches[0].ctx.drawImage).mock.calls.find((c) => c[0] === maskBitmap);
+    const cut = vi.mocked(ctx.drawImage).mock.calls.find((c) => c[0] === maskBitmap);
+    expect(clip?.slice(1)).toEqual([-64, -64, 2176, 1664]);
+    expect(cut?.slice(1)).toEqual([-64, -64, 2176, 1664]);
+  });
+
+  it('an injected rect lookup is read instead of the live cache (export reads its own map)', () => {
+    const live = { x: -640, y: 0, w: 2688, h: 1536 };
+    const own = { x: -128, y: 0, w: 2176, h: 1536 };
+    const bmp = fakeBitmap();
+    cache.set('t', 'baked', fakeBitmap(), live);
+    const ctx = fakeCtx();
+    compositeScene(
+      ctx,
+      makeScene([textNode('t')], [2048, 1536]),
+      'baked',
+      (id, level) => (id === 't' && level === 'baked' ? bmp : undefined),
+      undefined,
+      (id, level) => (id === 't' && level === 'baked' ? own : undefined),
+    );
+    expect(ctx.drawImage).toHaveBeenCalledWith(bmp, -128, 0, 2176, 1536);
+  });
+});
+
+describe('layer overflow — a document resize keeps text and vector layers in place', () => {
+  // `document.set_size` (src-tauri/src/document/mod.rs `kept_in_place`) steps each text or
+  // vector layer's translation by (I - M)(c - c'); mirrored here so the composite can be checked.
+  function keptInPlace(
+    t: { x: number; y: number; scaleX: number; scaleY: number; rotation: number },
+    from: [number, number],
+    to: [number, number],
+  ) {
+    const sx = (from[0] - to[0]) / 2;
+    const sy = (from[1] - to[1]) / 2;
+    const cos = Math.cos(t.rotation);
+    const sin = Math.sin(t.rotation);
+    const mx = cos * t.scaleX * sx - sin * t.scaleY * sy;
+    const my = sin * t.scaleX * sx + cos * t.scaleY * sy;
+    return { ...t, x: t.x + sx - mx, y: t.y + sy - my };
+  }
+
+  const from: [number, number] = [2048, 1536];
+  const to: [number, number] = [1536, 2048];
+  const rotated = { x: 30, y: -20, scaleX: 1.5, scaleY: 0.75, rotation: 0.6 };
+  // points inside both pages
+  const points = [
+    { x: 10, y: 10 },
+    { x: 700, y: 400 },
+    { x: 1500, y: 1500 },
+  ];
+
+  it.each([
+    ['a text layer', 'text', undefined],
+    ['a rotated vector layer', 'vector', rotated],
+  ] as const)(
+    '%s composites to the same page pixels before and after 2048x1536 -> 1536x2048, before and after its recook',
+    (_name, type, t) => {
+      const node = (transform2d: typeof rotated | undefined) =>
+        textNode('n', { type, ...(transform2d ? { transform2d } : {}) } as Partial<SceneNode>);
+      const pageFrom = { x: 0, y: 0, w: from[0], h: from[1] };
+      const pageTo = { x: 0, y: 0, w: to[0], h: to[1] };
+
+      cache.set('n', 'working', bitmapFor(pageFrom, 1 / 2), pageFrom);
+      const before = matrixCtx();
+      compositeScene(before, makeScene([node(t)], from), 'working');
+
+      // after the resize, the bitmap from before still in the cache (it hasn't recooked yet)
+      const moved = t ? keptInPlace(t, from, to) : undefined;
+      const stale = matrixCtx();
+      compositeScene(stale, makeScene([node(moved)], to), 'working');
+      // ... and once it has, over a rect that holds the new page
+      cache.set('n', 'working', bitmapFor(pageTo, 1 / 2), pageTo);
+      const recooked = matrixCtx();
+      compositeScene(recooked, makeScene([node(moved)], to), 'working');
+
+      for (const p of points) {
+        const a = shownAt(before.draws[0], pageFrom, 1 / 2, p);
+        for (const [ctx, rect] of [
+          [stale, pageFrom],
+          [recooked, pageTo],
+        ] as const) {
+          const b = shownAt(ctx.draws[0], rect, 1 / 2, p);
+          expect(b.x).toBeCloseTo(a.x, 9);
+          expect(b.y).toBeCloseTo(a.y, 9);
+        }
+      }
+    },
+  );
+});

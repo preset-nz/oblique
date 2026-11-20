@@ -50,6 +50,33 @@ import { clearPending, getPending, setPending } from './pendingFiles';
 import { bindProjectMeta } from './projectMeta';
 import { resetHomeDirCache } from './SavedToastPath';
 
+/** A locked vector layer on a 200x100 page (layer-overflow.md's bake tests). */
+function lockedVectorScene(): Scene {
+  return {
+    ...sampleScene(),
+    nodes: [
+      {
+        id: 'v1',
+        label: 'Shape',
+        type: 'vector',
+        state: 'locked',
+        output: 'image',
+        cameraId: null,
+        modifiers: [],
+        visible: true,
+        blendMode: 'normal',
+        opacity: 1,
+        dirty: { draft: false, working: false },
+        paths: [
+          { closed: true, anchors: [{ point: { x: -40, y: 10 } }, { point: { x: 50, y: 60 } }] },
+        ],
+        fillRule: 'nonzero',
+        // biome-ignore lint/suspicious/noExplicitAny: VectorNode via SceneNode[] slot
+      } as any,
+    ],
+  };
+}
+
 function sampleScene(): Scene {
   return {
     id: 'scene-1',
@@ -485,6 +512,57 @@ describe('a document opened from Rust (document-opened)', () => {
       expect(decode).toHaveBeenCalledWith(pngBytes);
       expect(cache.get('n1', 'baked')).toBeDefined();
     });
+
+    // layer-overflow.md: a bake of a layer that reaches past the page carries its rect
+    it('a locked vector baked past the page reopens drawn at the rect it was baked over', async () => {
+      const fs = new Map<string, Uint8Array>();
+      await arrange(lockedVectorScene());
+      const rect = { x: -64, y: 0, w: 328, h: 100 };
+      cache.set('v1', 'baked', fakeBitmap(), rect);
+      await saveProject(
+        '/proj/round.oblique',
+        makeDeps({
+          writeFile: vi.fn(async (path: string, bytes: Uint8Array) => {
+            fs.set(path, bytes);
+          }),
+        }),
+      );
+      expect(fs.has('/proj/round.oblique.baked/v1.json')).toBe(true);
+
+      cache.clearAll();
+      await loadProject(
+        '/proj/round.oblique',
+        use(
+          makeDeps({
+            readFile: vi.fn(async (path: string) => {
+              const bytes = fs.get(path);
+              if (!bytes) throw new Error(`not found: ${path}`);
+              return bytes;
+            }),
+          }),
+        ),
+      );
+      expect(cache.get('v1', 'baked')).toBeDefined();
+      expect(cache.getRect('v1', 'baked')).toEqual(rect);
+    });
+
+    it('a text or vector bake with no json (every bake from before the rect) reads as the page it was opened with', async () => {
+      putFile('/proj/x.oblique', lockedVectorScene());
+      await loadProject(
+        '/proj/x.oblique',
+        use(
+          makeDeps({
+            readFile: vi.fn(async (path: string) => {
+              if (path.endsWith('.json')) throw new Error('ENOENT');
+              return new Uint8Array([9, 9]);
+            }),
+          }),
+        ),
+      );
+      expect(cache.get('v1', 'baked')).toBeDefined();
+      // explicit, so a later resize can't reread it as the new page
+      expect(cache.getRect('v1', 'baked')).toEqual({ x: 0, y: 0, w: 200, h: 100 });
+    });
   });
 });
 
@@ -765,7 +843,7 @@ describe('lock, save and reopen (layer.set_state)', () => {
   it('a layer locked in the app is saved with its bake and comes back locked, showing the bake', async () => {
     const fs = new Map<string, Uint8Array>();
     await arrange(sampleScene());
-    await useSceneStore.getState().lockNode('n1', async () => fakeBitmap());
+    await useSceneStore.getState().lockNode('n1', async () => ({ bitmap: fakeBitmap() }));
     await settle();
     expect(host.runs.map((r) => r.id)).toEqual(['layer.set_state']);
 
@@ -802,6 +880,62 @@ describe('lock, save and reopen (layer.set_state)', () => {
 });
 
 describe('writeBakedSidecar', () => {
+  describe('the raster rect beside the bake (layer-overflow.md)', () => {
+    const page = { x: 0, y: 0, w: 200, h: 100 };
+    const grown = { x: -64, y: 0, w: 328, h: 100 };
+    const written = (deps: ProjectIoDeps) =>
+      (deps.writeFile as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+
+    it('a bake whose rect differs from the logical frame gets <id>.json with the rect', async () => {
+      cache.set('v1', 'baked', fakeBitmap(), grown);
+      const deps = makeDeps();
+      await writeBakedSidecar('/proj/x.oblique', lockedVectorScene(), deps);
+      expect(written(deps)).toEqual([
+        '/proj/x.oblique.baked/v1.png',
+        '/proj/x.oblique.baked/v1.json',
+      ]);
+      const bytes = (deps.writeFile as ReturnType<typeof vi.fn>).mock.calls[1][1] as Uint8Array;
+      expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual(grown);
+    });
+
+    it('a bake over the logical frame writes no json, and sweeps an older one', async () => {
+      cache.set('v1', 'baked', fakeBitmap(), page);
+      const deps = makeDeps({
+        readDir: vi.fn(async () => [{ name: 'v1.png' }, { name: 'v1.json' }]),
+      });
+      await writeBakedSidecar('/proj/x.oblique', lockedVectorScene(), deps);
+      expect(written(deps)).toEqual(['/proj/x.oblique.baked/v1.png']);
+      expect(deps.remove).toHaveBeenCalledWith('/proj/x.oblique.baked/v1.json', undefined);
+      expect(deps.remove).not.toHaveBeenCalledWith('/proj/x.oblique.baked/v1.png', undefined);
+    });
+
+    it('the json is compared with the frame at this save: a bake from before a resize keeps its rect', async () => {
+      cache.set('v1', 'baked', fakeBitmap(), page); // baked when the page was 200x100
+      const scene = { ...lockedVectorScene(), documentSize: [100, 200] as [number, number] };
+      const deps = makeDeps();
+      await writeBakedSidecar('/proj/x.oblique', scene, deps);
+      expect(written(deps)).toContain('/proj/x.oblique.baked/v1.json');
+    });
+
+    it("the sweep keeps the json just written, and a mid-rehydrate node's, and drops an unlocked node's", async () => {
+      cache.set('v1', 'baked', fakeBitmap(), grown);
+      const scene = lockedVectorScene();
+      scene.nodes.push({ ...scene.nodes[0], id: 'v2' }); // locked, not rehydrated yet
+      scene.nodes.push({ ...scene.nodes[0], id: 'v3', state: 'active' });
+      const deps = makeDeps({
+        readDir: vi.fn(async () =>
+          ['v1.png', 'v1.json', 'v2.png', 'v2.json', 'v3.png', 'v3.json'].map((name) => ({ name })),
+        ),
+      });
+      await writeBakedSidecar('/proj/x.oblique', scene, deps);
+      const removed = (deps.remove as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      expect(removed.sort()).toEqual([
+        '/proj/x.oblique.baked/v3.json',
+        '/proj/x.oblique.baked/v3.png',
+      ]);
+    });
+  });
+
   it('no locked nodes: never touches the baked sidecar dir', async () => {
     const deps = makeDeps();
     await writeBakedSidecar('/proj/x.oblique', sampleScene(), deps);

@@ -17,6 +17,8 @@
 //! - `layer-as-driver`: a depth layer drives a blur on the photo (Epic 17 story 6).
 //! - `blur-radius`: the same scene twice, masked and driven (Epic 27 story 1).
 //! - `levels-curve`: Levels' gamma as a curve over a histogram (Epic 27, levels-curve).
+//! - `text-overflow`: text and vector layers keep what lies past the page (Epic 03,
+//!   layer-overflow).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -648,6 +650,94 @@ fn levels_curve_fixture() {
     );
 }
 
+// ---- text overflow ----
+
+const TEXT_OVERFLOW_NOTES: &str = "\
+Layer overflow window check (Epic 03, layer-overflow). `just fixtures text-overflow` writes this file again.
+
+0. Open a fresh copy (`just window-check text-overflow`). A 1280 x 960 page, dark grey, with four layers: Right, a yellow line of text running off the right edge; Left, a blue line starting past the left edge; Drop, a white triangle reaching past the bottom; Turned, a white square turned about 30 degrees, on the page.
+a. Move tool: drag Right left until the whole line is on the page. Every letter is whole, with no cut where the page edge was: while dragging (blurry draft) and after letting go (sharp).
+b. Drag Left right until it is on the page: its first letters are whole. Drag Drop up: its point is whole.
+c. Undo back to the start, then click the part of Right that lies off the page: Right is selected.
+d. Text tool: click into Right and type more letters at its end, so it runs further past the edge. Move tool: drag it back on. The new letters are whole too.
+e. File > Export PNG with the layers moved on: the PNG shows every letter and the triangle's point whole.
+f. Lock Right (its padlock), save, close and reopen the file: Right shows whole where you left it. Unlock it, drag it further right and back: still whole.
+g. Drag Left fully onto the page, then Use as mask in its row: the layers below it show only through its letters, all of them whole. Use as image to put it back.
+h. Give Turned an Invert modifier and choose Mask from vector or text layer, then Right: Turned inverts only where Right's letters cover it. Drag Right across Turned: the inverted letters are whole.
+i. File > Document Settings…: switch Orientation to Portrait. Nothing moves on the page: each layer keeps its place, and Turned keeps its angle and its place (the parts outside the new page are simply off it). Switch back to Landscape: all as before. One undo takes the orientation back with everything in place. The same for a different aspect (1:1) and a different size.
+j. After the switch in i, drag each layer around the new page: nothing is cut that was there before.";
+
+fn helvetica() -> Json {
+    json!({"family": "Helvetica", "style": "Regular", "postscriptName": "Helvetica",
+           "weight": 400.0, "italic": false, "category": "sans-serif"})
+}
+
+fn text_layer(id: &str, label: &str, content: &str, fill: &str, x: f64, y: f64) -> Json {
+    json!({
+        "id": id, "type": "text", "label": label, "state": "active", "output": "image",
+        "visible": true, "blendMode": "normal", "opacity": 1.0, "modifiers": [],
+        "content": content, "font": helvetica(), "fontSize": 140.0, "tracking": 0.0,
+        "kerning": 100.0, "lineHeight": 1.2, "align": "left", "fill": fill, "stroke": null,
+        "position": {"x": x, "y": y},
+    })
+}
+
+fn vector_layer(id: &str, label: &str, points: &[(f64, f64)]) -> Json {
+    let anchors: Vec<Json> = points
+        .iter()
+        .map(|(x, y)| json!({"point": {"x": x, "y": y}}))
+        .collect();
+    json!({
+        "id": id, "type": "vector", "label": label, "state": "active", "output": "image",
+        "visible": true, "blendMode": "normal", "opacity": 1.0, "modifiers": [],
+        "paths": [{"anchors": anchors, "closed": true}], "fillRule": "nonzero",
+    })
+}
+
+fn text_overflow_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(Catalogue(vec![])),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run("document.set_size", &json!({"size": [1280.0, 960.0]}))
+        .unwrap();
+    d.run("document.set_note", &json!({"note": TEXT_OVERFLOW_NOTES}))
+        .unwrap();
+    d.run(
+        "document.set_background",
+        &json!({"background": {"type": "color", "color": "#262a33"}}),
+    )
+    .unwrap();
+    let mut turned = vector_layer(
+        "turned",
+        "Turned",
+        &[(820.0, 520.0), (1060.0, 520.0), (1060.0, 760.0), (820.0, 760.0)],
+    );
+    turned["transform2d"] =
+        json!({"x": 0.0, "y": 0.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.52});
+    // each new layer lands on top, so the bottom one is added first
+    for node in [
+        turned,
+        vector_layer(
+            "drop",
+            "Drop",
+            &[(180.0, 700.0), (460.0, 700.0), (320.0, 1180.0)],
+        ),
+        text_layer("left", "Left", "Starts off the page", "#7fb7ff", -420.0, 640.0),
+        text_layer("right", "Right", "Runs off the right edge", "#f4d35e", 520.0, 260.0),
+    ] {
+        d.run("layer.add", &json!({ "node": node })).unwrap();
+    }
+    d.tree().serialise()
+}
+
+#[test]
+fn text_overflow_fixture() {
+    check_or_write("text-overflow", &text_overflow_project());
+}
+
 #[test]
 fn depth_map_fixture() {
     let text = depth_map_project();
@@ -673,6 +763,7 @@ fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(layer_as_driver_project(), layer_as_driver_project());
     assert_eq!(blur_radius_project(), blur_radius_project());
     assert_eq!(levels_curve_project(), levels_curve_project());
+    assert_eq!(text_overflow_project(), text_overflow_project());
 }
 
 #[test]

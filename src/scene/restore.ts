@@ -129,6 +129,15 @@ function cookAffectingChanged(a: SceneNode, b: SceneNode, sceneA: Scene, sceneB:
   const ta = isTextNode(a) ? textInputs(a) : undefined;
   const tb = isTextNode(b) ? textInputs(b) : undefined;
   if (JSON.stringify(ta) !== JSON.stringify(tb)) return true;
+  // A text or vector raster's rect starts from the page (layer-overflow.md): an undo or redo
+  // across a document resize redraws it, as the resize itself does (store `setDocumentSize`).
+  if (
+    (isTextNode(b) || isVectorNode(b)) &&
+    (sceneA.documentSize[0] !== sceneB.documentSize[0] ||
+      sceneA.documentSize[1] !== sceneB.documentSize[1])
+  ) {
+    return true;
+  }
   const va = isVectorNode(a) ? { paths: a.paths, fillRule: a.fillRule } : undefined;
   const vb = isVectorNode(b) ? { paths: b.paths, fillRule: b.fillRule } : undefined;
   return JSON.stringify(va) !== JSON.stringify(vb);

@@ -1,4 +1,5 @@
 import * as cache from '@/scene/cache';
+import type { RasterRect } from '@/scene/rasterRect';
 import { useSceneStore } from '@/scene/store';
 import { IDENTITY_TRANSFORM_2D, isPixelNode, type SceneNode } from '@/scene/types';
 import { type BufferFrame, frameFor } from './coords';
@@ -16,6 +17,8 @@ export interface TargetPayload {
 export interface SelectPayloadDeps {
   getNode: (nodeId: string) => SceneNode | undefined;
   getCachedWorking: (nodeId: string) => ImageBitmap | undefined;
+  /** The raster rect the WORKING bitmap was cooked over (layer-overflow.md); absent = the node's logical frame. */
+  getCachedWorkingRect?: (nodeId: string) => RasterRect | undefined;
   getDocumentSize: () => [number, number];
   /** ImageBitmap -> RGBA8 bytes, drawn at the bitmap's own size (it's already the cook target — no further downscale) — same OffscreenCanvas readback shape as `cook.ts`'s private `realDownscale`, which isn't exported. */
   readBitmap: (bitmap: ImageBitmap) => Uint8Array;
@@ -37,11 +40,15 @@ function realReadBitmap(bitmap: ImageBitmap): Uint8Array {
 export const productionSelectPayloadDeps: SelectPayloadDeps = {
   getNode: (nodeId) => useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId),
   getCachedWorking: (nodeId) => cache.get(nodeId, 'working'),
+  getCachedWorkingRect: (nodeId) => cache.getRect(nodeId, 'working'),
   getDocumentSize: () => useSceneStore.getState().scene.documentSize,
   readBitmap: realReadBitmap,
 };
 
-type FrameDeps = Pick<SelectPayloadDeps, 'getNode' | 'getCachedWorking' | 'getDocumentSize'>;
+type FrameDeps = Pick<
+  SelectPayloadDeps,
+  'getNode' | 'getCachedWorking' | 'getCachedWorkingRect' | 'getDocumentSize'
+>;
 
 /** Shared by `getTargetFrame` and `getTargetPayload` — the bitmap lookup and frame maths neither needs the other to duplicate. */
 function resolveTargetFrame(
@@ -60,6 +67,7 @@ function resolveTargetFrame(
     extent,
     [bitmap.width, bitmap.height],
     node.transform2d ?? IDENTITY_TRANSFORM_2D,
+    deps.getCachedWorkingRect?.(nodeId),
   );
   return { bitmap, frame };
 }

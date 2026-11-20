@@ -6,6 +6,7 @@ import {
   type Composite2DContext,
   type CreateScratch,
   compositeScene,
+  type RectLookup,
 } from '@/compositor/composite';
 import { cookNodeFullRes } from '@/cook/cook';
 import * as cache from '@/scene/cache';
@@ -33,15 +34,18 @@ export interface ExportCanvas {
  */
 export interface ExportDeps {
   getScene: () => Scene;
-  /** One-shot full-res cook of a single node — never a cache read, never a fallback. */
-  cookFullRes: (nodeId: string) => Promise<ImageBitmap>;
+  /**
+   * One-shot full-res cook of a single node — never a cache read, never a fallback. Its bitmap
+   * comes with the raster rect it was cooked over (layer-overflow.md), drawn by the composite.
+   */
+  cookFullRes: (nodeId: string) => Promise<cache.PlacedBitmap>;
   /**
    * The shared `baked` cache slot (lock-state-machine.md) — locking makes
    * export cheaper: a locked node's frozen bitmap is reused as-is instead of
-   * cooking it again. `undefined` (not yet rehydrated) falls back to
-   * `cookFullRes`, same as an active node.
+   * cooking it again, with the rect it was baked over. `undefined` (not yet
+   * rehydrated) falls back to `cookFullRes`, same as an active node.
    */
-  getBaked: (nodeId: string) => ImageBitmap | undefined;
+  getBaked: (nodeId: string) => cache.PlacedBitmap | undefined;
   createCanvas: (width: number, height: number) => ExportCanvas;
   blobToBytes: (blob: Blob) => Promise<Uint8Array>;
   pickSavePath: (suggestedName: string) => Promise<string | null>;
@@ -66,7 +70,10 @@ async function realPickSavePath(suggestedName: string): Promise<string | null> {
 export const tauriExportDeps: ExportDeps = {
   getScene: () => useSceneStore.getState().scene,
   cookFullRes: (nodeId) => cookNodeFullRes(nodeId),
-  getBaked: (nodeId) => cache.get(nodeId, 'baked'),
+  getBaked: (nodeId) => {
+    const bitmap = cache.get(nodeId, 'baked');
+    return bitmap ? { bitmap, rect: cache.getRect(nodeId, 'baked') } : undefined;
+  },
   createCanvas: realCreateCanvas,
   blobToBytes: realBlobToBytes,
   pickSavePath: realPickSavePath,
@@ -119,7 +126,7 @@ export async function renderFullRes(
   const [docW, docH] = scene.documentSize;
   const nodes = exportableNodes(scene);
 
-  const bitmaps = new Map<string, ImageBitmap>();
+  const bitmaps = new Map<string, cache.PlacedBitmap>();
   // One-shot cooks only — never the shared `baked` cache bitmap reused below
   // for locked nodes, which must survive this export (still the live cache
   // entry future paints/exports read).
@@ -141,8 +148,7 @@ export async function renderFullRes(
       if (baked) {
         bitmaps.set(node.id, baked);
       } else {
-        const bitmap = await deps.cookFullRes(node.id);
-        bitmaps.set(node.id, bitmap);
+        bitmaps.set(node.id, await deps.cookFullRes(node.id));
         ownedBitmaps.add(node.id);
       }
     }
@@ -163,7 +169,10 @@ export async function renderFullRes(
     // resolves to `undefined`, so `pickBestAvailable` has nothing to
     // cascade to (composite.ts's best-available-cache fallback never fires).
     const getCache: CacheLookup = (nodeId, level) =>
-      level === 'baked' ? bitmaps.get(nodeId) : undefined;
+      level === 'baked' ? bitmaps.get(nodeId)?.bitmap : undefined;
+    // Each bitmap's own rect, from the same map: never the live cache's (layer-overflow.md).
+    const getRect: RectLookup = (nodeId, level) =>
+      level === 'baked' ? bitmaps.get(nodeId)?.rect : undefined;
 
     // Masked spans composite into scratch canvases; build them from the same
     // injected canvas factory as the main surface (the real ExportCanvas is
@@ -175,10 +184,10 @@ export async function renderFullRes(
       return { ctx: scratchCtx, canvas: scratchCanvas as unknown as CanvasImageSource };
     };
 
-    compositeScene(ctx, scene, 'baked', getCache, createScratch);
+    compositeScene(ctx, scene, 'baked', getCache, createScratch, getRect);
     return canvas;
   } finally {
-    for (const [nodeId, bitmap] of bitmaps) {
+    for (const [nodeId, { bitmap }] of bitmaps) {
       if (!ownedBitmaps.has(nodeId)) continue; // shared baked cache bitmap — never close
       (bitmap as ImageBitmap & { close?: () => void }).close?.();
     }

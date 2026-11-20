@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { RasterRect } from './rasterRect';
 
 /** Anything with a `.close()`, so tests can stub `ImageBitmap` without a real one. */
 export interface Closable {
@@ -36,6 +37,20 @@ function seqKey(nodeId: string, level: CacheLevel): string {
   return `${level}:${nodeId}`;
 }
 
+/**
+ * The raster rect each cached bitmap was cooked over (layer-overflow.md), keyed like `seqMap`.
+ * Stored with the bitmap, never re-derived from current geometry: `pickBestAvailable` can hand
+ * the compositor a bitmap from before the last keystroke, and drawing it into the new rect would
+ * stretch it. Absent means the layer's logical frame (`sourceSize` for pixel, the page otherwise).
+ */
+const rectMap = new Map<string, RasterRect>();
+
+/** A cooked bitmap and the rect it was cooked over (`cookNodeFullRes`'s result; absent rect = the logical frame). */
+export interface PlacedBitmap {
+  bitmap: ImageBitmap;
+  rect?: RasterRect;
+}
+
 interface CacheVersionState {
   cacheVersion: number;
   bump: () => void;
@@ -60,13 +75,28 @@ export function get(nodeId: string, level: CacheLevel): ImageBitmap | undefined 
   return cacheMap.get(nodeId)?.[level];
 }
 
-/** Store a cooked bitmap, closing whatever it replaces at that level. */
-export function set(nodeId: string, level: CacheLevel, bitmap: ImageBitmap): void {
+/** The rect the bitmap at a node/level was cooked over; `undefined` = the logical frame (or nothing cached). */
+export function getRect(nodeId: string, level: CacheLevel): RasterRect | undefined {
+  return rectMap.get(seqKey(nodeId, level));
+}
+
+/**
+ * Store a cooked bitmap, closing whatever it replaces at that level. `rect` is where the bitmap
+ * sits in the layer's own space; every text or vector write passes it.
+ */
+export function set(
+  nodeId: string,
+  level: CacheLevel,
+  bitmap: ImageBitmap,
+  rect?: RasterRect,
+): void {
   const entry = cacheMap.get(nodeId) ?? {};
   closeBitmap(entry[level]);
   entry[level] = bitmap;
   cacheMap.set(nodeId, entry);
   seqMap.set(seqKey(nodeId, level), ++writeSeq);
+  if (rect) rectMap.set(seqKey(nodeId, level), { ...rect });
+  else rectMap.delete(seqKey(nodeId, level));
   useCacheVersionStore.getState().bump();
 }
 
@@ -77,6 +107,7 @@ export function clearLevel(nodeId: string, level: CacheLevel): void {
   closeBitmap(entry[level]);
   delete entry[level];
   seqMap.delete(seqKey(nodeId, level));
+  rectMap.delete(seqKey(nodeId, level));
   useCacheVersionStore.getState().bump();
 }
 
@@ -91,6 +122,7 @@ export function clearNode(nodeId: string): void {
   seqMap.delete(seqKey(nodeId, 'draft'));
   seqMap.delete(seqKey(nodeId, 'working'));
   seqMap.delete(seqKey(nodeId, 'baked'));
+  for (const level of ['draft', 'working', 'baked'] as const) rectMap.delete(seqKey(nodeId, level));
   useCacheVersionStore.getState().bump();
 }
 

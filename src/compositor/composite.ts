@@ -1,5 +1,6 @@
 import * as backgroundSource from '@/scene/backgroundSource';
 import * as cache from '@/scene/cache';
+import { logicalFrameFor, type RasterRect } from '@/scene/rasterRect';
 import * as sources from '@/scene/sources';
 import type { Resolution, Scene, SceneNode } from '@/scene/types';
 import { isPixelNode } from '@/scene/types';
@@ -56,6 +57,8 @@ export function resolutionFactorFor(level: Resolution): number {
 export interface BestCache {
   bitmap: ImageBitmap;
   level: Resolution;
+  /** The raster rect this bitmap was cooked over (layer-overflow.md); absent = the logical frame. */
+  rect?: RasterRect;
 }
 
 /**
@@ -78,6 +81,13 @@ export type StaleLookup = (nodeId: string, level: Resolution) => boolean;
 
 /** Write order of a cached bitmap; higher is newer (see scene/cache.ts `getSeq`). */
 export type SeqLookup = (nodeId: string, level: Resolution) => number | undefined;
+
+/**
+ * The raster rect a cached bitmap was cooked over (scene/cache.ts `getRect`), read beside the
+ * bitmap, never re-derived from current geometry (layer-overflow.md). `undefined` = the node's
+ * logical frame. Injectable for the same reason as `CacheLookup`: export reads its own map.
+ */
+export type RectLookup = (nodeId: string, level: Resolution) => RasterRect | undefined;
 
 /**
  * Best available cache for a node at or below `level` — requested level,
@@ -106,6 +116,7 @@ export function pickBestAvailable(
   getCache: CacheLookup = cache.get,
   isStale: StaleLookup = () => false,
   getSeq: SeqLookup = cache.getSeq,
+  getRect: RectLookup = cache.getRect,
 ): BestCache | undefined {
   const startIndex = LEVEL_ORDER.indexOf(level);
   let newestStale: BestCache | undefined;
@@ -115,7 +126,9 @@ export function pickBestAvailable(
     const candidateLevel = LEVEL_ORDER[i];
     const bitmap = getCache(nodeId, candidateLevel);
     if (!bitmap) continue;
-    if (!isStale(nodeId, candidateLevel)) return { bitmap, level: candidateLevel };
+    if (!isStale(nodeId, candidateLevel)) {
+      return { bitmap, level: candidateLevel, rect: getRect(nodeId, candidateLevel) };
+    }
 
     // `?? -1` keeps an unknown seq (export's own bitmap map has none)
     // behind anything with a real one, and preserves level order among
@@ -123,7 +136,7 @@ export function pickBestAvailable(
     const seq = getSeq(nodeId, candidateLevel) ?? -1;
     if (seq > newestStaleSeq) {
       newestStaleSeq = seq;
-      newestStale = { bitmap, level: candidateLevel };
+      newestStale = { bitmap, level: candidateLevel, rect: getRect(nodeId, candidateLevel) };
     }
   }
   return newestStale;
@@ -219,6 +232,25 @@ export function spanRoles(nodes: SceneNode[]): SpanRole[] {
   return nodes.map((node) => roles.get(node) ?? 'none');
 }
 
+/**
+ * Draws `best`'s bitmap where it sits in `node`'s own space (layer-overflow.md): at the raster
+ * rect it was cooked over, scaled by the composite level's factor `f`. Called inside the node's
+ * unchanged `withNodeTransform`, so the logical frame stays the pivot. With no rect stored it
+ * is the logical frame at the origin, which for every pixel layer and every text or vector
+ * layer on the page is exactly `drawImage(bitmap, 0, 0, destW, destH)`.
+ */
+function drawAtRect(
+  ctx: Composite2DContext,
+  node: SceneNode,
+  best: BestCache,
+  level: Resolution,
+  documentSize: [number, number],
+): void {
+  const f = resolutionFactorFor(level);
+  const r = best.rect ?? logicalFrameFor(node, documentSize);
+  ctx.drawImage(best.bitmap, r.x * f, r.y * f, r.w * f, r.h * f);
+}
+
 /** Destination draw size for a node at `level`: its own `sourceSize`, scaled by the level's factor. */
 export function destSizeFor(
   node: SceneNode,
@@ -226,10 +258,10 @@ export function destSizeFor(
   documentSize: [number, number],
 ): [number, number] {
   const factor = resolutionFactorFor(level);
-  // A vector or text node's raster always spans documentSize (vector-node-model.md's
-  // Sizing note — no sourceSize of its own); mesh/splat nodes will get their
-  // own source-size concept in Milestone B. Only PixelNode carries
-  // sourceSize today.
+  // A vector or text node's logical frame is documentSize (no sourceSize of its own): it is the
+  // pivot, and its bitmap may reach past it (the raster rect, layer-overflow.md, drawn by
+  // `drawAtRect`). Mesh/splat nodes will get their own source-size concept in Milestone B.
+  // Only PixelNode carries sourceSize today.
   const [srcW, srcH] = isPixelNode(node) ? node.sourceSize : documentSize;
   return [srcW * factor, srcH * factor];
 }
@@ -281,6 +313,7 @@ function drawSpanContent(
   scene: Scene,
   getCache: CacheLookup,
   isStale: StaleLookup,
+  getRect: RectLookup,
 ): void {
   for (const node of content) {
     if (!node.visible || node.output !== 'image') continue;
@@ -304,13 +337,13 @@ function drawSpanContent(
     // lands). destW/destH stay sized to the composite's `level` so a locked
     // node's drawn size never mismatches its siblings.
     const requestLevel: Resolution = node.state === 'locked' ? 'baked' : level;
-    const best = pickBestAvailable(node.id, requestLevel, getCache, isStale);
+    const best = pickBestAvailable(node.id, requestLevel, getCache, isStale, cache.getSeq, getRect);
     if (!best) continue; // still cooking (or not yet imported) — draws nothing, per spec
 
     withNodeTransform(ctx, node, destW, destH, level, () => {
       ctx.globalAlpha = node.opacity;
       ctx.globalCompositeOperation = mapBlendMode(node.blendMode);
-      ctx.drawImage(best.bitmap, 0, 0, destW, destH);
+      drawAtRect(ctx, node, best, level, scene.documentSize);
     });
   }
 }
@@ -392,18 +425,26 @@ function drawMaskedSpan(
   getCache: CacheLookup,
   isStale: StaleLookup,
   createScratch: CreateScratch,
+  getRect: RectLookup,
 ): void {
   if (content.length === 0) return; // mask at the stack bottom — nothing to clip
 
   if (!maskNode.visible) {
-    drawSpanContent(ctx, content, level, scene, getCache, isStale);
+    drawSpanContent(ctx, content, level, scene, getCache, isStale, getRect);
     return;
   }
 
   // Same locked-prefers-baked posture as `drawSpanContent` — a locked mask
   // node's clip should read its frozen full-res raster too.
   const maskRequestLevel: Resolution = maskNode.state === 'locked' ? 'baked' : level;
-  const maskBest = pickBestAvailable(maskNode.id, maskRequestLevel, getCache, isStale);
+  const maskBest = pickBestAvailable(
+    maskNode.id,
+    maskRequestLevel,
+    getCache,
+    isStale,
+    cache.getSeq,
+    getRect,
+  );
   if (!maskBest) return; // mask still cooking — draw nothing rather than show it unclipped
 
   const [docW, docH] = scene.documentSize;
@@ -419,20 +460,20 @@ function drawMaskedSpan(
   scratch.ctx.globalCompositeOperation = 'source-over';
   scratch.ctx.drawImage(ctx.canvas, 0, 0, scratchW, scratchH);
 
-  drawSpanContent(scratch.ctx, content, level, scene, getCache, isStale);
+  drawSpanContent(scratch.ctx, content, level, scene, getCache, isStale, getRect);
 
   const [maskDestW, maskDestH] = destSizeFor(maskNode, level, scene.documentSize);
   withNodeTransform(scratch.ctx, maskNode, maskDestW, maskDestH, level, () => {
     scratch.ctx.globalAlpha = 1;
     scratch.ctx.globalCompositeOperation = 'destination-in';
-    scratch.ctx.drawImage(maskBest.bitmap, 0, 0, maskDestW, maskDestH);
+    drawAtRect(scratch.ctx, maskNode, maskBest, level, scene.documentSize);
   });
 
   // Cut the hole: erase the mask's coverage from the live backdrop.
   withNodeTransform(ctx, maskNode, maskDestW, maskDestH, level, () => {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.drawImage(maskBest.bitmap, 0, 0, maskDestW, maskDestH);
+    drawAtRect(ctx, maskNode, maskBest, level, scene.documentSize);
   });
 
   // Insert the blended plug — additive, not `source-over` (see doc comment).
@@ -450,13 +491,24 @@ function drawSpan(
   getCache: CacheLookup,
   isStale: StaleLookup,
   createScratch: CreateScratch,
+  getRect: RectLookup,
 ): void {
   const last = span[span.length - 1];
   if (last && last.output === 'mask') {
-    drawMaskedSpan(ctx, span.slice(0, -1), last, level, scene, getCache, isStale, createScratch);
+    drawMaskedSpan(
+      ctx,
+      span.slice(0, -1),
+      last,
+      level,
+      scene,
+      getCache,
+      isStale,
+      createScratch,
+      getRect,
+    );
     return;
   }
-  drawSpanContent(ctx, span, level, scene, getCache, isStale);
+  drawSpanContent(ctx, span, level, scene, getCache, isStale, getRect);
 }
 
 let compositeCallCount = 0;
@@ -476,7 +528,8 @@ export function resetCompositeCallCount(): void {
  * skip invisible/non-image nodes, best-available-cache selection, each node
  * drawn at its own `sourceSize` (scaled to `level`) at document origin —
  * never stretched to `documentSize` (the multi-aspect-import distortion
- * bug this replaces). `ctx` is expected to already be document-space (no
+ * bug this replaces). A text or vector bitmap is drawn at the raster rect it
+ * was cooked over (layer-overflow.md, `getRect`), inside the same frame. `ctx` is expected to already be document-space (no
  * view transform applied — that's the caller's blit concern); this
  * function never touches pan/zoom.
  *
@@ -494,6 +547,7 @@ export function compositeScene(
   level: Resolution,
   getCache: CacheLookup = cache.get,
   createScratch: CreateScratch = realCreateScratch,
+  getRect: RectLookup = cache.getRect,
 ): void {
   compositeCallCount++;
 
@@ -535,7 +589,7 @@ export function compositeScene(
   const isStale = staleLookupFor(scene);
 
   for (const span of splitIntoSpans(scene.nodes)) {
-    drawSpan(ctx, span, level, scene, getCache, isStale, createScratch);
+    drawSpan(ctx, span, level, scene, getCache, isStale, createScratch, getRect);
   }
 
   ctx.globalAlpha = 1;

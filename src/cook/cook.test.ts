@@ -156,11 +156,12 @@ function makeDeps(nodeRef: { current: SceneNode }, overrides: Partial<CookDeps> 
     ),
     downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
     rasterizeVector: vi.fn(
-      (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+      (_paths, _fillRule, _rect, w: number, h: number, _factor: number) =>
+        new Uint8Array(w * h * 4),
     ),
     getTextGeometry: vi.fn(async () => emptyGeometry),
     rasterizeText: vi.fn(
-      (_node, _geometry, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+      (_node, _geometry, _rect, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
     ),
     runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
     encode: vi.fn(async () => fakeBitmap()),
@@ -467,6 +468,7 @@ describe('cookNode — masks', () => {
       100,
       50,
       1 / 8,
+      { x: 0, y: 0 },
     );
     const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(runModifiers[0].mask).toBe(plane);
@@ -565,6 +567,7 @@ describe('cookNode — text-node mask targets', () => {
       100,
       50,
       1 / 8,
+      { x: 0, y: 0 },
     );
     const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(runModifiers[0].mask).toBe(plane);
@@ -852,11 +855,17 @@ describe('cookNode — vector nodes', () => {
     expect(deps.rasterizeVector).toHaveBeenCalledWith(
       (nodeRef.current as unknown as VectorNode).paths,
       'nonzero',
+      { x: 0, y: 0, w: 800, h: 400 }, // on the page: the raster rect is the page
       100, // documentSize [800,400] x draft factor 1/8
       50,
       1 / 8,
     );
-    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything());
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything(), {
+      x: 0,
+      y: 0,
+      w: 800,
+      h: 400,
+    });
     expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
   });
 
@@ -893,6 +902,9 @@ describe('cookNode — vector nodes', () => {
   });
 });
 
+/** The 800x400 page the fakes report, as a raster rect. */
+const PAGE = { x: 0, y: 0, w: 800, h: 400 };
+
 describe('cookNode — text nodes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -908,8 +920,8 @@ describe('cookNode — text nodes', () => {
 
     expect(deps.getSource).not.toHaveBeenCalled();
     expect(deps.getTextGeometry).toHaveBeenCalledWith(node);
-    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, 100, 50, 1 / 8);
-    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything());
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, PAGE, 100, 50, 1 / 8);
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything(), PAGE);
     expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'draft');
   });
 
@@ -1004,7 +1016,7 @@ describe('cookNode — text nodes', () => {
 
     await cookNodeFullRes('node-1', deps);
 
-    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, 800, 400, 1);
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, emptyGeometry, PAGE, 800, 400, 1);
     expect(deps.encode).toHaveBeenCalledWith(expect.any(Uint8Array), 800, 400);
   });
 });
@@ -1039,11 +1051,13 @@ describe('cookNodeFullRes', () => {
           new Uint8Array(w * h),
       ),
       rasterizeVector: vi.fn(
-        (_paths, _fillRule, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+        (_paths, _fillRule, _rect, w: number, h: number, _factor: number) =>
+          new Uint8Array(w * h * 4),
       ),
       getTextGeometry: vi.fn(async () => emptyGeometry),
       rasterizeText: vi.fn(
-        (_node, _geometry, w: number, h: number, _factor: number) => new Uint8Array(w * h * 4),
+        (_node, _geometry, _rect, w: number, h: number, _factor: number) =>
+          new Uint8Array(w * h * 4),
       ),
       downscale: vi.fn((_src: ImageBitmap, w: number, h: number) => new Uint8Array(w * h * 4)),
       runPython: vi.fn(async (w: number, h: number) => new Uint8Array(w * h * 4)),
@@ -1157,6 +1171,7 @@ describe('cookNodeFullRes', () => {
     expect(deps.rasterizeVector).toHaveBeenCalledWith(
       (nodeRef.current as VectorNode).paths,
       'nonzero',
+      { x: 0, y: 0, w: 800, h: 400 },
       800,
       400,
       1,
@@ -1213,8 +1228,8 @@ describe('cookNode — prefix cache', () => {
     const encoded: Uint8Array[] = [];
     const deps = makeDeps(nodeRef, {
       downscale: vi.fn((_s: ImageBitmap, w: number, h: number) => sourcePattern(w, h)),
-      rasterizeVector: vi.fn((_p, _f, w: number, h: number) => sourcePattern(w, h)),
-      rasterizeText: vi.fn((_n, _g, w: number, h: number) => sourcePattern(w, h)),
+      rasterizeVector: vi.fn((_p, _f, _r, w: number, h: number) => sourcePattern(w, h)),
+      rasterizeText: vi.fn((_n, _g, _r, w: number, h: number) => sourcePattern(w, h)),
       runPython: vi.fn(
         async (_w: number, _h: number, mods: CookModifier[], payload: Uint8Array) => {
           calls.push({ modifiers: mods, payload: payload.slice() });
@@ -1805,6 +1820,7 @@ describe('cookNode — pixel drivers (layer-as-driver.md)', () => {
       100,
       50,
       1 / 8,
+      { x: 0, y: 0 },
     );
     expect(deps.rasterizeVectorMask).not.toHaveBeenCalled();
     const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
@@ -1891,7 +1907,7 @@ describe('cookNode — pixel drivers (layer-as-driver.md)', () => {
 
     const out = await cookNodeFullRes('node-1', deps);
 
-    expect(out).toBe(consumerBitmap);
+    expect(out.bitmap).toBe(consumerBitmap);
     // the driver (400x200) cooked before the consumer (800x400)
     expect(encode.mock.calls.map((c) => c[1])).toEqual([400, 800]);
     expect(rasterizePixelMask).toHaveBeenCalledWith(
@@ -1904,6 +1920,7 @@ describe('cookNode — pixel drivers (layer-as-driver.md)', () => {
       800,
       400,
       1,
+      { x: 0, y: 0 },
     );
     expect(
       (driverBitmap as unknown as { close: ReturnType<typeof vi.fn> }).close,
@@ -2049,6 +2066,7 @@ describe('modifier drivers (Epic 27, blur-radius.md)', () => {
         100,
         50,
         1 / 8,
+        { x: 0, y: 0 },
       );
       const [, , runModifiers] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(runModifiers[0].driver).toEqual({ kind: 'radius', plane });
@@ -2088,6 +2106,7 @@ describe('modifier drivers (Epic 27, blur-radius.md)', () => {
         100,
         50,
         1 / 8,
+        { x: 0, y: 0 },
       );
     });
 
@@ -2123,6 +2142,7 @@ describe('modifier drivers (Epic 27, blur-radius.md)', () => {
         800,
         400,
         1,
+        { x: 0, y: 0 },
       );
     });
   });
@@ -2165,5 +2185,229 @@ describe('levels histogram (levels-curve.md)', () => {
         (runModifiers as CookModifier[]).flatMap((m) => (m.histogramFor ? [m.histogramFor] : [])),
       ).toEqual(asked);
     }
+  });
+});
+
+describe('layer overflow: the raster rect (layer-overflow.md)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCookErrorBurst();
+  });
+
+  /** Glyph bounds `w` wide on the baseline, in anchor space. */
+  const glyphs = (w: number): TextGeometry => ({
+    paths: [],
+    lines: [],
+    ascent: 60,
+    descent: 10,
+    bounds: { x: 0, y: -60, w, h: 70 },
+  });
+
+  it('text typed past the right edge cooks over the page grown to hold it, and caches that rect', async () => {
+    // 700 .. 1100 across an 800 px page: 1100 + 64 = 1164, up to 1216
+    const node = makeTextNode({ position: { x: 700, y: 200 } });
+    const deps = makeDeps({ current: node }, { getTextGeometry: vi.fn(async () => glyphs(400)) });
+
+    await cookNode('node-1', 'working', deps);
+
+    const rect = { x: 0, y: 0, w: 1216, h: 400 };
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, glyphs(400), rect, 608, 200, 1 / 2);
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'working', expect.anything(), rect);
+    expect(deps.clearDirty).toHaveBeenCalledWith('node-1', 'working');
+  });
+
+  it('past the left edge: a negative origin, and the modifier runs at the grown size', async () => {
+    const node = makeTextNode({
+      position: { x: -150, y: 200 },
+      modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+    });
+    const deps = makeDeps({ current: node }, { getTextGeometry: vi.fn(async () => glyphs(400)) });
+
+    await cookNode('node-1', 'draft', deps);
+
+    // -150 - 64 = -214, down to -256
+    const rect = { x: -256, y: 0, w: 1056, h: 400 };
+    expect(deps.rasterizeText).toHaveBeenCalledWith(node, glyphs(400), rect, 132, 50, 1 / 8);
+    const [w, h] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect([w, h]).toEqual([132, 50]);
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything(), rect);
+  });
+
+  it('a vector shape past the bottom grows the bottom', async () => {
+    const node = makeVectorNode({
+      paths: [
+        {
+          closed: true,
+          anchors: [
+            { point: { x: 100, y: 300 } },
+            { point: { x: 200, y: 300 } },
+            { point: { x: 150, y: 520 } },
+          ],
+        },
+      ],
+    });
+    const deps = makeDeps({ current: node });
+
+    await cookNode('node-1', 'draft', deps);
+
+    const rect = { x: 0, y: 0, w: 800, h: 640 };
+    expect(deps.rasterizeVector).toHaveBeenCalledWith(
+      (node as VectorNode).paths,
+      'nonzero',
+      rect,
+      100,
+      80,
+      1 / 8,
+    );
+    expect(deps.setCache).toHaveBeenCalledWith('node-1', 'draft', expect.anything(), rect);
+  });
+
+  it("a mask on a grown text layer is rasterised at the grown size, at the rect's origin", async () => {
+    const vector = makeVectorNode({ id: 'v1' }) as VectorNode;
+    const ref = { id: 'ref-1', nodeId: 'v1', featherPx: 0, expand: 0, invert: false };
+    const node = makeTextNode({
+      position: { x: -150, y: 200 },
+      modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: {}, maskId: 'ref-1' }],
+    });
+    const nodeRef = { current: node as SceneNode };
+    const deps = makeDeps(nodeRef, {
+      getTextGeometry: vi.fn(async () => glyphs(400)),
+      getMaskRef: vi.fn((id: string) => (id === 'ref-1' ? ref : undefined)),
+      getNode: vi.fn((id: string) =>
+        id === 'node-1' ? nodeRef.current : id === 'v1' ? vector : undefined,
+      ),
+    });
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.rasterizeVectorMask).toHaveBeenCalledWith(
+      vector.paths,
+      vector.fillRule,
+      ref,
+      expect.anything(),
+      [800, 400],
+      expect.anything(),
+      [800, 400], // the consumer's logical frame stays the pivot
+      132,
+      50,
+      1 / 8,
+      { x: -256, y: 0 }, // and its plane starts where the raster does
+    );
+  });
+
+  it('cookNodeFullRes returns the rect with the bitmap for text, and none for a pixel layer', async () => {
+    const text = makeTextNode({ position: { x: 700, y: 200 } });
+    const textDeps = makeDeps(
+      { current: text },
+      { getTextGeometry: vi.fn(async () => glyphs(400)) },
+    ) as unknown as FullResCookDeps;
+    const out = await cookNodeFullRes('node-1', textDeps);
+    expect(out.rect).toEqual({ x: 0, y: 0, w: 1216, h: 400 });
+    expect(textDeps.rasterizeText).toHaveBeenCalledWith(
+      text,
+      glyphs(400),
+      { x: 0, y: 0, w: 1216, h: 400 },
+      1216,
+      400,
+      1,
+    );
+
+    const pixelOut = await cookNodeFullRes(
+      'node-1',
+      makeDeps({ current: makeNode() }) as unknown as FullResCookDeps,
+    );
+    expect(pixelOut.rect).toBeUndefined();
+  });
+
+  it.each([
+    ['text', () => makeTextNode({ position: { x: 10, y: 80 } })],
+    ['vector', () => makeVectorNode()],
+  ])(
+    'a %s layer on the page cooks exactly as before: page rect, the old target size, the same bytes on to the sidecar',
+    async (kind, make) => {
+      const node = {
+        ...make(),
+        modifiers: [{ id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 8 } }],
+      } as SceneNode;
+      const raster = new Uint8Array(100 * 50 * 4).map((_, i) => i % 251);
+      const deps = makeDeps(
+        { current: node },
+        {
+          getTextGeometry: vi.fn(async () => glyphs(500)), // 10 .. 510, well inside 800
+          rasterizeText: vi.fn(() => raster),
+          rasterizeVector: vi.fn(() => raster),
+        },
+      );
+
+      await cookNode('node-1', 'draft', deps);
+
+      const rasterise = kind === 'text' ? deps.rasterizeText : deps.rasterizeVector;
+      const call = (rasterise as ReturnType<typeof vi.fn>).mock.calls[0];
+      // [..., rect, width, height, factor]: the page, and documentSize x factor as before
+      expect(call.slice(-4)).toEqual([
+        { x: 0, y: 0, w: 800, h: 400 },
+        ...computeTargetSize([800, 400], 1 / 8),
+        1 / 8,
+      ]);
+      const [w, h, , payload] = (deps.runPython as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect([w, h]).toEqual([100, 50]);
+      expect(payload).toBe(raster);
+    },
+  );
+
+  it('race guard: a document resize mid-cook leaves dirty set (the resize dirtied it again)', async () => {
+    let size: [number, number] = [800, 400];
+    const node = makeVectorNode();
+    const deps = makeDeps(
+      { current: node },
+      {
+        getDocumentSize: vi.fn(() => size),
+        encode: vi.fn(async () => {
+          size = [400, 800];
+          return fakeBitmap();
+        }),
+      },
+    );
+
+    await cookNode('node-1', 'draft', deps);
+
+    expect(deps.setCache).toHaveBeenCalledOnce(); // newer than nothing, at the rect it was cooked
+    expect(deps.clearDirty).not.toHaveBeenCalled();
+  });
+
+  it('a document resize misses a stored prefix: the rect it was cooked over has moved', async () => {
+    let size: [number, number] = [800, 400];
+    const nodeRef = {
+      current: makeVectorNode({
+        modifiers: [
+          { id: 'm1', type: 'gaussian_blur', enabled: true, params: { radius: 2 } },
+          { id: 'm2', type: 'gaussian_blur', enabled: true, params: { radius: 4 } },
+        ],
+      }),
+    };
+    const deps = makeDeps(nodeRef, { getDocumentSize: vi.fn(() => size) });
+    await cookNode('node-1', 'draft', deps);
+    // a scrub on the second modifier stores the first as a prefix
+    nodeRef.current = {
+      ...nodeRef.current,
+      modifiers: [
+        nodeRef.current.modifiers[0],
+        { ...nodeRef.current.modifiers[1], params: { radius: 5 } },
+      ],
+    };
+    await cookNode('node-1', 'draft', deps);
+    expect(deps.setPrefix).toHaveBeenCalled();
+    vi.mocked(deps.rasterizeVector).mockClear();
+
+    size = [800, 400 * 2];
+    nodeRef.current = {
+      ...nodeRef.current,
+      modifiers: [
+        nodeRef.current.modifiers[0],
+        { ...nodeRef.current.modifiers[1], params: { radius: 6 } },
+      ],
+    };
+    await cookNode('node-1', 'draft', deps);
+    expect(deps.rasterizeVector).toHaveBeenCalledOnce(); // a full cook, not the old prefix
   });
 });

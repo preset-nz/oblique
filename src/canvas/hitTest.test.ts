@@ -143,6 +143,17 @@ describe('topmostNodeAt — text nodes', () => {
     const s = scene([node, pixelNode('below')]);
     expect(topmostNodeAt(s, { x: 10, y: 10 })?.id).toBe('below');
   });
+
+  it('a click on the part past the page edge selects the layer (layer-overflow.md)', async () => {
+    // glyph box x 150..250 on a 200 px page: the right half lies past the edge
+    const node = textNode({ position: { x: 150, y: 100 } });
+    await ensureGeometry(node);
+    const s = scene([node]);
+    expect(topmostNodeAt(s, { x: 230, y: 90 })?.id).toBe('t');
+    // and, moved back onto the page, the same glyphs are hit where they now show
+    const moved = { ...node, transform2d: { x: -100, y: 0, scaleX: 1, scaleY: 1, rotation: 0 } };
+    expect(topmostNodeAt(scene([moved]), { x: 130, y: 90 })?.id).toBe('t');
+  });
 });
 
 describe('nodeWorldBounds', () => {

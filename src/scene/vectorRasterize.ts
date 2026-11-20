@@ -1,3 +1,4 @@
+import type { RasterRect } from './rasterRect';
 import type { AnchorPoint, Point2D, VectorPath } from './types';
 
 /**
@@ -90,11 +91,10 @@ export function buildPath2D(commands: PathCommand[]): Path2D {
 }
 
 /**
- * Rasterise `paths` at the cook target `width`×`height` (= documentSize ×
- * level factor — a vector node has no `sourceSize` of its own, its raster
- * always spans the document, vector-node-model.md's Sizing note),
- * `factor`-scaled so document-space coordinates land at the right target
- * pixels. Production-only (needs OffscreenCanvas/Path2D) — cook tests inject
+ * Rasterise `paths` over `rect` (the node's raster rect: the page, grown where
+ * the shape crosses it, layer-overflow.md) at the cook target `width`×`height`
+ * (= the rect's size × level factor), so a document-space point `p` lands at
+ * target pixel `(p - rect origin) × factor`. Production-only (needs OffscreenCanvas/Path2D) — cook tests inject
  * a fake via `CookDeps.rasterizeVector`. Returns RGBA8 bytes (white fill,
  * alpha carries coverage) — same shape `CookDeps.downscale` returns, so the
  * vector cook branch slots into the same pipeline stage a pixel node's
@@ -103,6 +103,7 @@ export function buildPath2D(commands: PathCommand[]): Path2D {
 export function rasterizeVector(
   paths: VectorPath[],
   fillRule: 'nonzero' | 'evenodd',
+  rect: RasterRect,
   width: number,
   height: number,
   factor: number,
@@ -112,6 +113,8 @@ export function rasterizeVector(
   if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
 
   ctx.setTransform(factor, 0, 0, factor, 0, 0);
+  // Skipped at the origin, so a layer on the page draws exactly the calls it always did.
+  if (rect.x !== 0 || rect.y !== 0) ctx.translate(-rect.x, -rect.y);
   const path2d = buildPath2D(pathCommandsFor(paths));
   ctx.fillStyle = '#fff';
   ctx.fill(path2d, fillRule);

@@ -1048,9 +1048,8 @@ impl ObjectModel for Oblique {
             |_, p| p.get("size").is_some_and(Json::is_array),
             |d, p| {
                 let a: SizeArgs = payload(p)?;
-                let (_, commit) = d.edit("Document Size", |tx| {
-                    set(tx, live(tx, "/document/document")?, "documentSize", &a.size)
-                })?;
+                let (_, commit) =
+                    d.edit("Document Size", |tx| set_document_size(tx, &a.size))?;
                 Ok(commit.into())
             },
         );
@@ -1487,6 +1486,100 @@ const MASK_KEYS: [&str; 9] = [
 
 /// The keys a modifier's driver binding carries (`driver_values` less `refId`).
 const DRIVER_KEYS: [&str; 5] = ["kind", "channel", "low", "high", "invert"];
+
+/// `document.set_size` (layer-overflow.md): the size, and in the same undo step each unlocked
+/// text or vector layer's transform, so the layer stays where it was on the page. Such a layer's
+/// logical frame is the page, and it turns and scales about the page's centre: when the centre
+/// moves from `c` to `c'`, a layer with rotation and scale `M` keeps every pixel in place with
+/// `t' = t + (I − M)(c − c')`. A node-pinned mask's `attachTransform` is a transform in the same
+/// frame and takes the same step. An unmoved layer (`M = I`) is left as it is, and pixel layers
+/// don't follow the page at all. Locked layers are left too: their transform is frozen
+/// (lock-state-machine.md), and the store would refuse the change.
+fn set_document_size(tx: &mut Edit<'_>, size: &Json) -> rhizome_core::Result<()> {
+    let doc = live(tx, DOCUMENT_AT)?;
+    let size_of = |tx: &Edit<'_>| match tx.at(doc).expect("live").value("documentSize") {
+        Some(Value::Vec2(v)) => v,
+        _ => [0.0, 0.0],
+    };
+    let old = size_of(tx);
+    set(tx, doc, "documentSize", size)?;
+    let new = size_of(tx);
+    if new == old {
+        return Ok(());
+    }
+    // c − c': the old page centre less the new one
+    let shift = [(old[0] - new[0]) / 2.0, (old[1] - new[1]) / 2.0];
+
+    for layer in stack_of(tx) {
+        let n = tx.at(layer).expect("live");
+        if !["vector", "text"].contains(&n.type_name())
+            || n.value("state") == Some(Value::Choice("locked".into()))
+        {
+            continue;
+        }
+        // node-pinned masks this layer consumes, read before anything is written
+        let mut refits = vec![];
+        for modifier in n.order("modifiers") {
+            for b in modifier.bindings() {
+                if *b.on != On::slot("mask")
+                    || b.value("space") != Some(Value::Shaped(json!("node")))
+                {
+                    continue;
+                }
+                let Some(Value::Shaped(j)) = b.value("attachTransform") else {
+                    continue;
+                };
+                let Some(attach) = Placement::from_json(&j).and_then(|a| kept_in_place(a, shift))
+                else {
+                    continue;
+                };
+                let values: Vec<(&'static str, Value)> = MASK_KEYS
+                    .iter()
+                    .filter_map(|k| Some((*k, b.value(k)?)))
+                    .map(|(k, v)| {
+                        if k == "attachTransform" {
+                            (k, Value::Shaped(attach.to_json()))
+                        } else {
+                            (k, v)
+                        }
+                    })
+                    .collect();
+                refits.push((modifier.id(), b.source.id(), values));
+            }
+        }
+        if let Some(p) = kept_in_place(placement_of(tx, layer), shift) {
+            tx.set_value(layer, "transform2d.position", Value::Vec2([p.x, p.y]))?;
+            tx.set_value(
+                layer,
+                "transform2d.scale",
+                Value::Vec2([p.scale_x, p.scale_y]),
+            )?;
+            tx.set_value(layer, "transform2d.rotation", Value::Float(p.rotation))?;
+        }
+        for (modifier, source, values) in refits {
+            tx.bind(modifier, On::slot("mask"), source, values)?;
+        }
+    }
+    Ok(())
+}
+
+/// `p` with its translation stepped by `(I − M)·shift`, `M` being its rotation and scale
+/// (`localToDocMatrix`'s linear part: scale first, then rotate). `None` when that step is zero,
+/// as it is for any transform without rotation or scale.
+fn kept_in_place(p: Placement, shift: [f64; 2]) -> Option<Placement> {
+    let (sin, cos) = p.rotation.sin_cos();
+    let mx = cos * p.scale_x * shift[0] - sin * p.scale_y * shift[1];
+    let my = sin * p.scale_x * shift[0] + cos * p.scale_y * shift[1];
+    let (dx, dy) = (shift[0] - mx, shift[1] - my);
+    if dx == 0.0 && dy == 0.0 {
+        return None;
+    }
+    Some(Placement {
+        x: p.x + dx,
+        y: p.y + dy,
+        ..p
+    })
+}
 
 /// `layer.set_source`: the path always; with a different size, the fit and the mask refits.
 fn set_source(tx: &mut Edit<'_>, a: &SourceArgs) -> rhizome_core::Result<()> {

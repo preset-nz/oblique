@@ -16,9 +16,9 @@ export type Executor = (nodeId: string, level: CookLevel) => Promise<void>;
  * (lock-state-machine.md's rehydrate path). Injectable so tests can mock it
  * the same way they mock `Executor`.
  */
-export type RehydrateExecutor = (nodeId: string) => Promise<ImageBitmap>;
+export type RehydrateExecutor = (nodeId: string) => Promise<cache.PlacedBitmap>;
 
-async function productionRehydrate(nodeId: string): Promise<ImageBitmap> {
+async function productionRehydrate(nodeId: string): Promise<cache.PlacedBitmap> {
   return cookNodeFullRes(nodeId);
 }
 
@@ -139,7 +139,8 @@ export class CookScheduler {
 
       this.rehydrating.add(node.id);
       void this.rehydrateExecutor(node.id)
-        .then((bitmap) => cache.set(node.id, 'baked', bitmap))
+        // the rect travels with the bake (layer-overflow.md)
+        .then(({ bitmap, rect }) => cache.set(node.id, 'baked', bitmap, rect))
         .catch((err) => {
           // Not (yet) toast-worthy per lock-state-machine.md — corrupt/missing
           // persisted PNGs are baked-persistence.md's problem; today this can

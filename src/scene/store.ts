@@ -194,7 +194,7 @@ interface SceneState {
    */
   lockNode: (
     nodeId: string,
-    cookFullRes: (nodeId: string) => Promise<ImageBitmap>,
+    cookFullRes: (nodeId: string) => Promise<cache.PlacedBitmap>,
   ) => Promise<void>;
 
   /**
@@ -224,7 +224,14 @@ interface SceneState {
    */
   setNodeTransform: (id: string, transform2d: Transform2D) => void;
 
-  /** Sets `scene.documentSize`. Compositing-only — no dirty flag (rule 4). */
+  /**
+   * Sets `scene.documentSize`. Compositing-only for pixel layers (rule 4). A text or vector
+   * layer's raster rect starts from the page (layer-overflow.md), so a real size change marks
+   * each unlocked one dirty and it redraws over a rect that holds the new page; a locked one
+   * keeps its bake, drawn at the rect it was baked over. Keeping a rotated or scaled one in place
+   * is the transform's job, done in the same undo step where the size lands (Rust's
+   * `document.set_size`).
+   */
   setDocumentSize: (size: [number, number]) => void;
 
   /**
@@ -645,8 +652,9 @@ export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
 
       set((s) => ({ bakingNodeIds: new Set(s.bakingNodeIds).add(nodeId) }));
       try {
-        const bitmap = await cookFullRes(nodeId);
-        cache.set(nodeId, 'baked', bitmap);
+        // the rect the bake was cooked over travels with it (layer-overflow.md)
+        const { bitmap, rect } = await cookFullRes(nodeId);
+        cache.set(nodeId, 'baked', bitmap, rect);
         set((s) => ({
           scene: {
             ...s.scene,
@@ -946,7 +954,18 @@ export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
     },
 
     setDocumentSize: (size) => {
-      set((s) => ({ scene: { ...s.scene, documentSize: size } }));
+      set((s) => {
+        const [w, h] = s.scene.documentSize;
+        const changed = size[0] !== w || size[1] !== h;
+        const nodes = changed
+          ? s.scene.nodes.map((n) =>
+              (n.type === 'text' || n.type === 'vector') && n.state !== 'locked'
+                ? { ...n, dirty: dirtyBoth() }
+                : n,
+            )
+          : s.scene.nodes;
+        return { scene: { ...s.scene, documentSize: size, nodes } };
+      });
     },
 
     setBackgroundColor: (color) => {

@@ -53,8 +53,12 @@ function extentFor(
  * Identity of a node's source pixels (before any modifier):
  * - pixel: the `ImageBitmap` itself, compared with `===` (`sources.set`
  *   replaces the object on any reload);
- * - vector: `{paths, fillRule}` JSON — all `rasterizeVector` reads;
- * - text: `textCookKey(node)` — spec, position, fill, stroke.
+ * - vector: `{paths, fillRule}` JSON — all `rasterizeVector` reads — and the document size;
+ * - text: `textCookKey(node)` — spec, position, fill, stroke — and the document size.
+ * The document size is there because a vector or text raster is cooked over its raster rect
+ * (layer-overflow.md), which starts from the page: the rect follows from the content (paths, or
+ * the geometry the spec keys, widened by the stroke) and the page, so two raster rects of the
+ * same size but a different origin can never share a key.
  * `transform2d` is deliberately not part of it: a node's raster is produced
  * untransformed (node-transform-2d.md); masks that read it carry it in their
  * own modifier descriptor.
@@ -62,10 +66,11 @@ function extentFor(
 export function sourceKeyFor(
   node: PixelNode | VectorNode | TextNode,
   pixelSource: ImageBitmap | undefined,
+  documentSize: [number, number],
 ): ImageBitmap | string | undefined {
   if (node.type === 'pixel') return pixelSource;
-  if (node.type === 'text') return textCookKey(node);
-  return JSON.stringify({ paths: node.paths, fillRule: node.fillRule });
+  if (node.type === 'text') return textCookKey(node) + JSON.stringify({ documentSize });
+  return JSON.stringify({ paths: node.paths, fillRule: node.fillRule, documentSize });
 }
 
 /**

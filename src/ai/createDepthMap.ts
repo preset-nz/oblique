@@ -8,6 +8,7 @@ import { tauriImportDeps } from '@/project/import';
 import { setPending } from '@/project/pendingFiles';
 import { useProjectMetaStore } from '@/project/projectMeta';
 import * as cache from '@/scene/cache';
+import { logicalFrameFor, sameRect } from '@/scene/rasterRect';
 import { useSelectionStore } from '@/scene/selection';
 import * as sources from '@/scene/sources';
 import { useSceneStore } from '@/scene/store';
@@ -65,11 +66,20 @@ export function canCreateDepthMap(node: SceneNode | undefined): boolean {
 }
 
 async function readRasterFromCooks(nodeId: string) {
-  const node = useSceneStore.getState().scene.nodes.find((n) => n.id === nodeId);
+  const { scene } = useSceneStore.getState();
+  const node = scene.nodes.find((n) => n.id === nodeId);
   // A locked layer's frozen bake is its raster (as export reads it); else cook at full size.
   const baked = node?.state === 'locked' ? cache.get(nodeId, 'baked') : undefined;
-  const bitmap = baked ?? (await cookNodeFullRes(nodeId));
+  const { bitmap, rect } = baked
+    ? { bitmap: baked, rect: cache.getRect(nodeId, 'baked') }
+    : await cookNodeFullRes(nodeId);
   try {
+    // The depth layer is placed over the source's logical frame (the page, for text and
+    // vector), so a raster that reaches past the page (layer-overflow.md) is cut back to it.
+    const frame = node ? logicalFrameFor(node, scene.documentSize) : undefined;
+    if (rect && frame && !sameRect(rect, frame)) {
+      return readIntoFrame(bitmap, rect, frame);
+    }
     return {
       image: productionSelectPayloadDeps.readBitmap(bitmap),
       width: bitmap.width,
@@ -78,6 +88,27 @@ async function readRasterFromCooks(nodeId: string) {
   } finally {
     if (!baked) bitmap.close();
   }
+}
+
+/** `bitmap` drawn at `rect` into a picture of the logical `frame`, at full size, as RGBA8 bytes. */
+function readIntoFrame(
+  bitmap: ImageBitmap,
+  rect: { x: number; y: number; w: number; h: number },
+  frame: { w: number; h: number },
+): { image: Uint8Array; width: number; height: number } {
+  const canvas = new OffscreenCanvas(
+    Math.max(1, Math.round(frame.w)),
+    Math.max(1, Math.round(frame.h)),
+  );
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('OffscreenCanvas 2d context unavailable');
+  ctx.drawImage(bitmap, rect.x, rect.y, rect.w, rect.h);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  return {
+    image: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+    width: canvas.width,
+    height: canvas.height,
+  };
 }
 
 export function productionCreateDepthMapDeps(

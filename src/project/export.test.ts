@@ -110,7 +110,7 @@ function makeDeps(
   };
   return {
     getScene: () => scene,
-    cookFullRes: vi.fn(async () => fakeBitmap()),
+    cookFullRes: vi.fn(async () => ({ bitmap: fakeBitmap() })),
     getBaked: vi.fn(() => undefined),
     createCanvas: vi.fn(() => canvas),
     blobToBytes: vi.fn(async () => new Uint8Array([1, 2, 3])),
@@ -271,7 +271,7 @@ describe('exportPng', () => {
     const baked = fakeBitmap();
     const nodes = [pixelNode('locked', { state: 'locked' }), pixelNode('active')];
     const deps = makeDeps(makeScene(nodes), {
-      getBaked: vi.fn((id: string) => (id === 'locked' ? baked : undefined)),
+      getBaked: vi.fn((id: string) => (id === 'locked' ? { bitmap: baked } : undefined)),
     });
 
     await exportPng(deps);
@@ -300,7 +300,7 @@ describe('exportPng', () => {
     const bitmap = fakeBitmap();
     const nodes = [pixelNode('a')];
     const deps = makeDeps(makeScene(nodes), {
-      cookFullRes: vi.fn(async () => bitmap),
+      cookFullRes: vi.fn(async () => ({ bitmap })),
       writeFile: vi.fn(async () => {
         throw new Error('disk full');
       }),
@@ -366,5 +366,45 @@ describe('exportProof', () => {
     await exportProof(proofOptions, deps);
     expect(deps.cookFullRes).not.toHaveBeenCalled();
     expect(deps.writeFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('export draws each bitmap at the rect it was cooked over (layer-overflow.md)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const textNode = (id: string, overrides: Partial<SceneNode> = {}) =>
+    ({
+      ...pixelNode(id),
+      type: 'text',
+      sourcePath: undefined,
+      sourceSize: undefined,
+      ...overrides,
+    }) as unknown as SceneNode;
+
+  it('an active text layer past the page: its one-shot cook rect, not the page', async () => {
+    const bitmap = fakeBitmap();
+    const rect = { x: -64, y: 0, w: 328, h: 100 };
+    const deps = makeDeps(makeScene([textNode('t')]), {
+      cookFullRes: vi.fn(async () => ({ bitmap, rect })),
+    });
+
+    await exportPng(deps);
+
+    expect(deps.ctx.drawImage).toHaveBeenCalledWith(bitmap, -64, 0, 328, 100);
+  });
+
+  it('a locked text layer: the bake with the rect it was baked over', async () => {
+    const bitmap = fakeBitmap();
+    const rect = { x: 0, y: -128, w: 200, h: 228 };
+    const deps = makeDeps(makeScene([textNode('t', { state: 'locked' })]), {
+      getBaked: vi.fn(() => ({ bitmap, rect })),
+    });
+
+    await exportPng(deps);
+
+    expect(deps.cookFullRes).not.toHaveBeenCalled();
+    expect(deps.ctx.drawImage).toHaveBeenCalledWith(bitmap, 0, -128, 200, 228);
   });
 });

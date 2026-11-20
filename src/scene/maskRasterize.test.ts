@@ -294,6 +294,76 @@ describe('rasterizeVectorMask — node-pinned frame (mask-follows-node.md)', () 
       Array.from(atLater),
     );
   });
+
+  // layer-overflow.md: a text layer whose raster rect starts left of the page. Its plane is
+  // wider and starts further left, and must cover the same page pixels as before.
+  it.each([
+    ['full res', 1],
+    ['working', 1 / 2],
+    ['draft', 1 / 8],
+  ])(
+    'a document-space mask on a consumer whose rect starts at a negative x covers the same page pixels (%s)',
+    (_name, factor) => {
+      // the consumer is a text layer: its logical frame is the page; rotated, so the pivot counts
+      const consumer: Transform2D = { x: 8, y: -4, scaleX: 1, scaleY: 1, rotation: 0.15 };
+      const origin = { x: -64, y: -64 };
+      const pageW = docSize[0] * factor;
+      const pageH = docSize[1] * factor;
+      const grownW = (docSize[0] + 64) * factor;
+      const grownH = (docSize[1] + 64) * factor;
+      const onPage = rasterizeVectorMask(
+        paths,
+        'nonzero',
+        ref,
+        IDENTITY_TRANSFORM_2D,
+        docSize,
+        consumer,
+        docSize,
+        pageW,
+        pageH,
+        factor,
+      );
+      const grown = rasterizeVectorMask(
+        paths,
+        'nonzero',
+        ref,
+        IDENTITY_TRANSFORM_2D,
+        docSize,
+        consumer,
+        docSize,
+        grownW,
+        grownH,
+        factor,
+        origin,
+      );
+      expect(onPage.some((v) => v === 255)).toBe(true);
+      const ox = -origin.x * factor;
+      const oy = -origin.y * factor;
+      for (let y = 0; y < pageH; y++) {
+        const old = Array.from(onPage.subarray(y * pageW, (y + 1) * pageW));
+        const start = (y + oy) * grownW + ox;
+        expect(Array.from(grown.subarray(start, start + pageW))).toEqual(old);
+      }
+      // an origin of zero is the plane it always was
+      expect(
+        Array.from(
+          rasterizeVectorMask(
+            paths,
+            'nonzero',
+            ref,
+            IDENTITY_TRANSFORM_2D,
+            docSize,
+            consumer,
+            docSize,
+            pageW,
+            pageH,
+            factor,
+            { x: 0, y: 0 },
+          ),
+        ),
+      ).toEqual(Array.from(onPage));
+    },
+  );
 });
 
 // ---------------------------------------------------------------- pixel drivers (layer-as-driver.md)
@@ -328,6 +398,24 @@ describe('pixelMaskPlane', () => {
 });
 
 describe('driverToTargetMatrix', () => {
+  it('a consumer raster that starts left of and above its frame (layer-overflow.md): the driver lands that much further in', () => {
+    const consumer = { ...IDENTITY_TRANSFORM_2D, rotation: 0.3, x: 5 };
+    const at = (origin?: { x: number; y: number }) =>
+      driverToTargetMatrix(IDENTITY_TRANSFORM_2D, [100, 80], consumer, [200, 160], 0.5, origin);
+    for (const [px, py] of [
+      [0, 0],
+      [40, 70],
+      [100, 80],
+    ]) {
+      const flat = applyMatrix(at(), px, py);
+      const grown = applyMatrix(at({ x: -64, y: -128 }), px, py);
+      expect(grown.x).toBeCloseTo(flat.x + 32);
+      expect(grown.y).toBeCloseTo(flat.y + 64);
+    }
+    // an origin of zero is exactly the matrix it always was
+    expect(at({ x: 0, y: 0 })).toEqual(at());
+  });
+
   it('unmoved layers of the same size map straight through, scaled to the cook level', () => {
     const m = driverToTargetMatrix(
       IDENTITY_TRANSFORM_2D,
