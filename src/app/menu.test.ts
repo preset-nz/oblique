@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { VectorNode } from '@/scene/types';
 import { menuBindings } from './menu';
 
@@ -145,28 +145,35 @@ describe('the state the menu shows', () => {
 });
 
 describe('the side panels', () => {
-  it('tick Show Left and Right Panel from the panel store, and a click flips only its own', async () => {
-    const { usePanelStore } = await import('@/app/panelState');
-    usePanelStore.setState({ left: true, right: true });
-    expect(menuBindings({ ...state, leftPanel: false })['view-left-panel'].pressed).toBe(false);
-    expect(menuBindings({ ...state, rightPanel: true })['view-right-panel'].pressed).toBe(true);
-    menuBindings(state)['view-left-panel'].run?.();
-    expect(usePanelStore.getState()).toMatchObject({ left: false, right: true });
-    menuBindings(state)['view-right-panel'].run?.();
-    expect(usePanelStore.getState()).toMatchObject({ left: false, right: false });
-    menuBindings(state)['view-left-panel'].run?.();
-    menuBindings(state)['view-right-panel'].run?.();
-    expect(usePanelStore.getState()).toMatchObject({ left: true, right: true });
+  const deps = () => ({
+    ensure: () => Promise.resolve(),
+    toggleLeftPanel: vi.fn(),
+    toggleRightPanel: vi.fn(),
+  });
+
+  it('tick Show Left Panel (the layer panel) and Show Right Panel from the panels, and a click toggles only its own', () => {
+    const d = deps();
+    expect(menuBindings({ ...state, leftPanel: false }, d)['view-left-panel'].pressed).toBe(false);
+    expect(menuBindings({ ...state, leftPanel: true }, d)['view-left-panel'].pressed).toBe(true);
+    expect(menuBindings({ ...state, rightPanel: true }, d)['view-right-panel'].pressed).toBe(true);
+    expect(menuBindings({ ...state, rightPanel: false }, d)['view-right-panel'].pressed).toBe(
+      false,
+    );
+    menuBindings(state, d)['view-left-panel'].run?.();
+    expect(d.toggleLeftPanel).toHaveBeenCalledTimes(1);
+    expect(d.toggleRightPanel).not.toHaveBeenCalled();
+    menuBindings(state, d)['view-right-panel'].run?.();
+    expect(d.toggleLeftPanel).toHaveBeenCalledTimes(1);
+    expect(d.toggleRightPanel).toHaveBeenCalledTimes(1);
   });
 
   it('is view state: it never writes the scene, so there is no undo step', async () => {
-    const { usePanelStore } = await import('@/app/panelState');
     const { useSceneStore } = await import('@/scene/store');
     const before = useSceneStore.getState().scene;
-    menuBindings(state)['view-left-panel'].run?.();
-    menuBindings(state)['view-left-panel'].run?.();
+    const d = deps();
+    menuBindings(state, d)['view-left-panel'].run?.();
+    menuBindings(state, d)['view-right-panel'].run?.();
     expect(useSceneStore.getState().scene).toBe(before);
-    expect(usePanelStore.getState().left).toBe(true);
   });
 });
 

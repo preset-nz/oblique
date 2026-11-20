@@ -19,6 +19,8 @@
 //! - `levels-curve`: Levels' gamma as a curve over a histogram (Epic 27, levels-curve).
 //! - `text-overflow`: text and vector layers keep what lies past the page (Epic 03,
 //!   layer-overflow).
+//! - `layers-left`: thirty layers, with the layer list on the left and the properties on the right
+//!   (Epic 04, layers-left).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -738,6 +740,85 @@ fn text_overflow_fixture() {
     check_or_write("text-overflow", &text_overflow_project());
 }
 
+// ---- layers on the left ----
+
+const LAYERS_LEFT_NOTES: &str = "\
+Layers-left window check (Epic 04, layers-left). `just fixtures layers-left` writes this file again.
+
+0. Open a fresh copy (`just window-check layers-left`). A 1280 x 960 page with thirty layers: Layer 01 at the bottom to Layer 30 at the top (every third one is text, the rest are white boxes), and two saved selections. The layers are on the left, in a panel with Layers and Selections tabs; the 48 px tool rail is at the window's far left, outside it. Properties, Vectors, History and Notes are on the right. There is no title strip with the app name above them.
+a. Click Layer 05 in the list: its modifier stack (Invert, then Levels above it) shows at the top of Properties, with no scrolling and no layer list above it. Click Layer 20, then Layer 03: the same, each with its own stack. Layer 12 has no modifiers: Properties shows its name and Add Modifier only.
+b. The layer list scrolls on its own, inside the left panel; Properties doesn't move while it does.
+c. Press Escape on the canvas to deselect (or click empty page): Properties reads Nothing selected.
+d. Cmd+[ collapses the layer panel to a rail on the left of the canvas, with the tool rail still at the window edge; press it again and the panel comes back on the tab you left. View > Show Left Panel is ticked while it shows. Cmd+] does the same for the right panel and Show Right Panel. Click a collapsed panel's rail icon to reopen it.
+e. Drag the layer panel's inner (right) edge: it stops at 200 px and 420 px. Drag the right panel's inner (left) edge: it stops at 280 px and 520 px. Double-click an edge: the panel goes back to its default width (240 and 320). Leave the left one wide and the right one narrow, collapse the right one, quit and relaunch the app: both come back at those widths, the right one still collapsed, and the document starts Untitled as usual (reopen your copy from File > Open Recent if you want it back).
+f. Collapse the right panel, switch to the Move tool and double-click Layer 03 (a text layer) on the canvas: the right panel opens on Properties with the Text field focused. Do it again with the Vectors tab showing: it comes back to Properties.
+g. Drag a layer by its grip in the list and drop it elsewhere: the order changes (the canvas follows). In Properties, drag a modifier row on Layer 05 by its grip: Invert and Levels swap.
+h. Selections tab: two saved selections. Click a row: it becomes the active selection (outline and tint on the canvas); click it again to clear. Double-click a name to rename it, press Enter. Click the pencil (Edit Shape): the Move tool is chosen and the shape's anchors show.";
+
+fn layers_left_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(levels_catalogue()),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run("document.set_size", &json!({"size": [1280.0, 960.0]}))
+        .unwrap();
+    d.run("document.set_note", &json!({"note": LAYERS_LEFT_NOTES}))
+        .unwrap();
+    d.run(
+        "document.set_background",
+        &json!({"background": {"type": "color", "color": "#262a33"}}),
+    )
+    .unwrap();
+    // each new layer lands on top, so the bottom one is added first: Layer 01 .. Layer 30
+    for n in 1..=30_u32 {
+        let id = format!("layer-{n:02}");
+        let label = format!("Layer {n:02}");
+        // a grid of six columns by five rows, so the layers read apart on the page
+        let (col, row) = (f64::from((n - 1) % 6), f64::from((n - 1) / 6));
+        let (x, y) = (60.0 + col * 200.0, 60.0 + row * 180.0);
+        let mut node = if n % 3 == 0 {
+            text_layer(&id, &label, &format!("Text {n:02}"), "#f4d35e", x, y)
+        } else {
+            vector_layer(
+                &id,
+                &label,
+                &[(x, y), (x + 150.0, y), (x + 150.0, y + 120.0), (x, y + 120.0)],
+            )
+        };
+        if let Some(size) = node.get_mut("fontSize") {
+            *size = json!(48.0);
+        }
+        // application order: Invert first, then Levels, which the stack shows on top
+        if n == 5 || n == 20 {
+            node["modifiers"] = json!([
+                {"id": format!("invert-{n:02}"), "type": "invert", "enabled": true, "params": {}},
+                {"id": format!("levels-{n:02}"), "type": "levels", "enabled": true,
+                 "params": {"black": 20.0, "white": 230.0, "gamma": 1.4,
+                            "out_black": 0.0, "out_white": 255.0}}
+            ]);
+        }
+        d.run("layer.add", &json!({ "node": node })).unwrap();
+    }
+    for (id, label, x) in [("sel-a", "Selection A", 100.0), ("sel-b", "Selection B", 600.0)] {
+        let mut node = vector_layer(
+            id,
+            label,
+            &[(x, 820.0), (x + 300.0, 820.0), (x + 300.0, 920.0), (x, 920.0)],
+        );
+        node["role"] = json!("selection");
+        node["visible"] = json!(false);
+        d.run("layer.add", &json!({ "node": node })).unwrap();
+    }
+    d.tree().serialise()
+}
+
+#[test]
+fn layers_left_fixture() {
+    check_or_write("layers-left", &layers_left_project());
+}
+
 #[test]
 fn depth_map_fixture() {
     let text = depth_map_project();
@@ -764,6 +845,7 @@ fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(blur_radius_project(), blur_radius_project());
     assert_eq!(levels_curve_project(), levels_curve_project());
     assert_eq!(text_overflow_project(), text_overflow_project());
+    assert_eq!(layers_left_project(), layers_left_project());
 }
 
 #[test]

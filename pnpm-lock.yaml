@@ -14,6 +14,9 @@ importers:
       '@preset.nz/facets':
         specifier: ^0.3.1
         version: 0.3.1(react@19.3.1)
+      '@preset.nz/preferences':
+        specifier: ^0.2.0
+        version: 0.2.0(@preset.nz/facets@0.3.1(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)
       '@preset.nz/ux-kit':
         specifier: ^0.1.4
         version: 0.1.4(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -483,6 +486,13 @@ packages:
 
   '@preset.nz/math@0.1.0':
     resolution: {integrity: sha512-eGOJZVvox4NPtoWrolIk06GjsfDNy8OCwes3pYw6o3CDRKolGWrrwf78U733OkKexUjHVeQfi39xrbEIhsQodQ==}
+
+  '@preset.nz/preferences@0.2.0':
+    resolution: {integrity: sha512-dNyawI99kFcdhOG06PCKV+wl0doOpr0B49X/++mHirQhJRvPIdKi5LeV5JBBX6YmrHDn0eJvDMiCtRTWmwPZsg==}
+    peerDependencies:
+      '@preset.nz/facets': ^0.3.0
+      '@tauri-apps/api': ^2
+      react: ^19
 
   '@preset.nz/ux-kit@0.1.4':
     resolution: {integrity: sha512-lkw3JwHCUtEKvM72uRlXirm8IdeD8R91tDysbtkfhcYcILZ+bS9orxip5gfWrk4UXB1iuHMX/9e4bSoGfEXg/A==}
@@ -2418,6 +2428,12 @@ snapshots:
       react: 19.3.1
 
   '@preset.nz/math@0.1.0': {}
+
+  '@preset.nz/preferences@0.2.0(@preset.nz/facets@0.3.1(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)':
+    dependencies:
+      '@preset.nz/facets': 0.3.1(react@19.3.1)
+      '@tauri-apps/api': 2.12.4
+      react: 19.3.1
 
   '@preset.nz/ux-kit@0.1.4(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:

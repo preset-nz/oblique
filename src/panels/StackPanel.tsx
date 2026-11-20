@@ -1,14 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 // Side-effecting import: registers the shared package's built-in field
 // renderers, Oblique's number/slider/select overrides, and the
 // `modifier:<opType>` scopes (re-registered whenever the ops cache
 // updates). See bootstrap.ts for the singleton rationale.
 import './stack/bootstrap';
-import { Icons } from '@preset.nz/ux-kit';
+import { EmptyState, Icons } from '@preset.nz/ux-kit';
 import { ImageInspector } from '@/panels/image/ImageInspector';
 import { AddModifier } from '@/panels/stack/AddModifier';
-import { layerNodes } from '@/panels/stack/dragReorder';
-import { LayerList } from '@/panels/stack/LayerList';
 import { LOCKED_HINT, stackControlsDisabled } from '@/panels/stack/lockUi';
 import { StackRow } from '@/panels/stack/StackRow';
 import { invertIndex, toDisplayOrder } from '@/panels/stack/stackOrder';
@@ -20,9 +18,9 @@ import { isPixelNode, isTextNode } from '@/scene/types';
 import { useOpsCacheStore } from '@/sidecar/opsCache';
 
 /**
- * Real modifier stack panel (Epic 04 stack-rows) — replaces the Epic 02
- * debug panel entirely. `LayerList` picks the node; the modifier stack
- * below it displays bottom-to-top (epic README § "Stack direction
+ * The Properties tab of the right panel: the selected layer's inspector and modifier stack (Epic
+ * 04 stack-rows). The layer list that picks the node is the left panel's (`LayersPanel`,
+ * layers-left.md). The stack displays bottom-to-top (epic README § "Stack direction
  * decision"): the scene-model `modifiers` array is unchanged application
  * order, `toDisplayOrder` just reverses it for rendering, and the
  * add-modifier button sits at the displayed top (= scene-model end).
@@ -32,7 +30,6 @@ export function StackPanel() {
   const ops = useOpsCacheStore((s) => s.ops);
   const categories = useOpsCacheStore((s) => s.categories);
   const selection = useSelectionStore((s) => s.selection);
-  const selectNode = useSelectionStore((s) => s.selectNode);
   const reorderModifier = useSceneStore((s) => s.reorderModifier);
   const modifierListRef = useRef<HTMLDivElement>(null);
   const selectedNode =
@@ -54,45 +51,17 @@ export function StackPanel() {
     },
   });
 
-  useEffect(() => {
-    // Only repair a selection that points at a DELETED node (fall back to
-    // the top of the stack). `kind: 'none'` is a legitimate state — Escape
-    // deselects and must stay deselected (dogfood 2026-07-05); never
-    // auto-select out of it.
-    if (selection.kind !== 'node') return;
-    if (nodes.some((n) => n.id === selection.nodeId)) return;
-    // The first LAYER: a saved selection can sit at the top, and it isn't in the list.
-    const top = layerNodes(nodes)[0];
-    if (top) selectNode(top.id);
-  }, [nodes, selection, selectNode]);
+  const node = selectedNode;
 
-  if (layerNodes(nodes).length === 0) {
-    return (
-      <div className="flex flex-col gap-3 text-sm text-neutral-200">
-        <div className="text-neutral-500">No layers yet — import an image.</div>
-      </div>
-    );
-  }
-
-  const selectedNodeId = selection.kind === 'node' ? selection.nodeId : null;
-  const node = nodes.find((n) => n.id === selectedNodeId);
-
-  if (!node) {
-    return (
-      <div className="flex flex-col gap-3 text-sm text-neutral-200">
-        <LayerList selectedNodeId={null} onSelectNode={selectNode} />
-      </div>
-    );
-  }
+  // Nothing selected, or no layers at all (the layer panel says to import one).
+  if (!node) return <EmptyState title="Nothing selected" />;
 
   const displayModifiers = toDisplayOrder(node.modifiers);
   const locked = stackControlsDisabled(node);
 
   return (
     <div className="flex flex-col gap-3 text-sm text-neutral-200">
-      <LayerList selectedNodeId={node.id} onSelectNode={selectNode} />
-
-      <div className="flex flex-col gap-1 border-t border-neutral-800 pt-3">
+      <div className="flex flex-col gap-1">
         <div className="mb-1 flex items-center justify-between gap-2 text-xs text-neutral-400">
           {/* min-w-0 + truncate: Draw Things exports put whole prompts in
               filenames; an untruncated label forces horizontal panel scroll. */}

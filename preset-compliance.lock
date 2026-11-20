@@ -15,7 +15,7 @@ sha256 = "95b14d6d13bd5cf2f79a6dfcd510094d09484b52b078cb7aba103e9af29ae862"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "56fe28c039ab988959f018af8e19fa35509310293765368271eeec19b5f8dcbf"
+sha256 = "b67d27b2a497d204407fa464edaf5a8dc92dafefedccc839c94af4ff851c3c90"
 
 [[inputs]]
 path = "sidecar/kernels/Cargo.lock"
@@ -5644,6 +5644,14 @@ scope = "shipped"
 ecosystem = "pnpm"
 name = "@preset.nz/math"
 version = "0.1.0"
+source = "registry"
+declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@preset.nz/preferences"
+version = "0.2.0"
 source = "registry"
 declared = "MIT"
 scope = "shipped"

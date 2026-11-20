@@ -1,9 +1,14 @@
 import { ModelPromptHost } from '@preset.nz/app-kit/models';
-import { SnackbarProvider, SnackbarViewport, TooltipProvider } from '@preset.nz/ux-kit';
+import {
+  Icons,
+  SidePanel,
+  SnackbarProvider,
+  SnackbarViewport,
+  TooltipProvider,
+} from '@preset.nz/ux-kit';
 import { useEffect, useState } from 'react';
-import { usePanelStore } from '@/app/panelState';
+import type { Panels } from '@/app/panelState';
 import { StatusBar } from '@/app/StatusBar';
-import { PRODUCT_NAME } from '@/branding';
 import { ToolbarRail } from '@/canvas/ToolbarRail';
 import { Viewport } from '@/canvas/Viewport';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -11,89 +16,114 @@ import { DocumentSettingsDialog } from '@/panels/document/DocumentSettingsDialog
 import { ExportProofDialog } from '@/panels/export/ExportProofDialog';
 import { MissingFontsDialog } from '@/panels/fonts/MissingFontsDialog';
 import { ReplaceFontDialog } from '@/panels/fonts/ReplaceFontDialog';
+import { LayersPanel } from '@/panels/LayersPanel';
 import { NotesPanel } from '@/panels/notes/NotesPanel';
 import { SelectionsPanel } from '@/panels/SelectionsPanel';
 import { StackPanel } from '@/panels/StackPanel';
 import { SettingsDialog } from '@/panels/settings/SettingsDialog';
+import { useSelectionRepair } from '@/panels/stack/useSelectionRepair';
 import { VectorsPanel } from '@/panels/VectorsPanel';
 import { useTextEditStore } from '@/scene/textEditState';
 
-export function Layout() {
-  // Controlled so a request to focus the Text field (T-click, double-click,
-  // Enter: dogfood-revisions.md) can bring the Stack tab forward first.
-  const [tab, setTab] = useState('stack');
-  // View > Show Left / Right Panel (app/panelState.ts). A hidden panel stays mounted and is
-  // only `display: none`, so its local state (open sections, a half-typed field) survives.
-  const showLeft = usePanelStore((s) => s.left);
-  const showRight = usePanelStore((s) => s.right);
+// The kit's SidePanel is the sidebar colour; Oblique's panels sit on the same neutral as the rest
+// of the window.
+const PANEL_LOOK = 'bg-neutral-950 border-neutral-800';
+
+export function Layout({ panels }: { panels: Panels }) {
+  // Both tab sets are controlled, and held here rather than in the panels: a collapsed SidePanel
+  // unmounts its children, and the tab you were on should be the one you come back to. The right
+  // one also lets a request to focus the Text field (T-click, double-click, Enter:
+  // dogfood-revisions.md) bring Properties forward first.
+  const [leftTab, setLeftTab] = useState('layers');
+  const [rightTab, setRightTab] = useState('properties');
+  const setRightOpen = panels.right.panelProps.onOpenChange;
+  useSelectionRepair();
   useEffect(
     () =>
       useTextEditStore.subscribe((state, prev) => {
-        if (state.focusRequest !== prev.focusRequest) setTab('stack');
+        if (state.focusRequest === prev.focusRequest) return;
+        // Text editing lands on the right: open the panel if it is collapsed, on Properties.
+        setRightTab('properties');
+        setRightOpen(true);
       }),
-    [],
+    [setRightOpen],
   );
 
   return (
     <SnackbarProvider>
       <TooltipProvider>
         <div className="relative flex flex-col h-screen bg-neutral-950 text-neutral-50">
-          {/* Title bar */}
-          <div className="border-b border-neutral-800 px-4 py-3 flex items-center gap-3">
-            <span className="text-sm font-medium">{PRODUCT_NAME}</span>
-          </div>
-
-          {/* Main grid */}
+          {/* Main grid: tool rail | layers | canvas | properties */}
           <div className="flex flex-1 overflow-hidden">
-            {/* Left rail: 48px */}
-            <div
-              className={`w-12 border-r border-neutral-800 flex-col items-center py-4 ${
-                showLeft ? 'flex' : 'hidden'
-              }`}
-            >
+            {/* Tool rail: 48px, outside the layer panel (layers-left.md) */}
+            <div className="w-12 shrink-0 border-r border-neutral-800 flex flex-col items-center py-4">
               <ToolbarRail />
             </div>
 
+            <SidePanel
+              side="left"
+              title="Layers"
+              icon={<Icons.StackIcon size={18} />}
+              shortcut="⌘["
+              className={PANEL_LOOK}
+              {...panels.left.panelProps}
+            >
+              <Tabs
+                value={leftTab}
+                onValueChange={setLeftTab}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <TabsList className="w-full rounded-none border-b border-neutral-800">
+                  <TabsTrigger value="layers">Layers</TabsTrigger>
+                  <TabsTrigger value="selections">Selections</TabsTrigger>
+                </TabsList>
+                <TabsContent value="layers" className="min-h-0 flex-1 overflow-auto p-4">
+                  <LayersPanel />
+                </TabsContent>
+                <TabsContent value="selections" className="min-h-0 flex-1 overflow-auto p-4">
+                  <SelectionsPanel />
+                </TabsContent>
+              </Tabs>
+            </SidePanel>
+
             {/* Centre: flexible */}
-            <div className="flex-1 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden">
               <Viewport />
             </div>
 
-            {/* Right panel: 320px */}
-            <div
-              className={`w-80 border-l border-neutral-800 flex-col ${
-                showRight ? 'flex' : 'hidden'
-              }`}
+            <SidePanel
+              side="right"
+              title="Properties"
+              icon={<Icons.SlidersHorizontalIcon size={18} />}
+              shortcut="⌘]"
+              className={PANEL_LOOK}
+              {...panels.right.panelProps}
             >
               <Tabs
-                value={tab}
-                onValueChange={setTab}
-                className="flex flex-1 flex-col overflow-hidden"
+                value={rightTab}
+                onValueChange={setRightTab}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
                 <TabsList className="w-full rounded-none border-b border-neutral-800">
-                  <TabsTrigger value="stack">Stack</TabsTrigger>
+                  <TabsTrigger value="properties">Properties</TabsTrigger>
                   <TabsTrigger value="vectors">Vectors</TabsTrigger>
-                  <TabsTrigger value="selections">Selections</TabsTrigger>
                   <TabsTrigger value="history">History</TabsTrigger>
                   <TabsTrigger value="notes">Notes</TabsTrigger>
                 </TabsList>
-                <TabsContent value="stack" className="flex-1 overflow-auto p-4">
+                <TabsContent value="properties" className="min-h-0 flex-1 overflow-auto p-4">
                   <StackPanel />
                 </TabsContent>
-                <TabsContent value="vectors" className="flex-1 overflow-auto p-4">
+                <TabsContent value="vectors" className="min-h-0 flex-1 overflow-auto p-4">
                   <VectorsPanel />
                 </TabsContent>
-                <TabsContent value="selections" className="flex-1 overflow-auto p-4">
-                  <SelectionsPanel />
-                </TabsContent>
-                <TabsContent value="history" className="flex-1 overflow-hidden p-4">
+                <TabsContent value="history" className="min-h-0 flex-1 overflow-hidden p-4">
                   <div className="text-neutral-500 text-sm">History content</div>
                 </TabsContent>
-                <TabsContent value="notes" className="flex-1 overflow-hidden p-4">
+                <TabsContent value="notes" className="min-h-0 flex-1 overflow-hidden p-4">
                   <NotesPanel />
                 </TabsContent>
               </Tabs>
-            </div>
+            </SidePanel>
           </div>
 
           {/* Status bar */}

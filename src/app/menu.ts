@@ -6,7 +6,7 @@ import {
   createDepthMap,
   productionCreateDepthMapDeps,
 } from '@/ai/createDepthMap';
-import { usePanelStore } from '@/app/panelState';
+import type { Panels } from '@/app/panelState';
 import { useColourSelectStore } from '@/canvas/colourSelect/state';
 import { useSelectionFillStore } from '@/canvas/selectionFillState';
 import { useSmartSelectStore } from '@/canvas/smartSelect/state';
@@ -42,7 +42,7 @@ import { useSidecarStatusStore } from '@/sidecar/client';
  * `id -> what it does`, plus the items whose state follows the app: Replace Image… (enabled
  * while an unlocked image layer is selected), Save Selection (enabled while a finished marquee
  * is up), Deselect (enabled while a marquee or an active selection is up) and the View ticks: Snap to Layers (the snap store's),
- * Show Selection Fill (the selection fill store's) and the two side panels (`app/panelState.ts`).
+ * Show Selection Fill (the selection fill store's) and the two side panels (`app/panelState.ts`, whose hook `App` calls once and hands to `useMenuCommands`).
  *
  * **Undo and Redo are not here.** They are app-kit's own Edit items, running the document host's
  * history in Rust; the host tells the webview with `history-stepped` and `rhizome/rhizome.ts`
@@ -129,11 +129,17 @@ function createDepthMapOfSelection(ensure: MenuDeps['ensure']): void {
 /** What the bindings need that isn't plain state: the model gate, which is a hook (`useModelGate`). */
 export interface MenuDeps {
   ensure: (id: string, options?: { for?: string }) => Promise<void>;
+  /** View > Show Left Panel: the layer panel, collapsed or expanded (`app/panelState.ts`). */
+  toggleLeftPanel: () => void;
+  /** View > Show Right Panel: the properties panel. */
+  toggleRightPanel: () => void;
 }
 
 /** Without the hook's gate (the bindings' own tests), a command that needs a model fails loudly. */
 const NO_MODEL_GATE: MenuDeps = {
   ensure: () => Promise.reject(new Error('the model gate is not mounted')),
+  toggleLeftPanel: () => {},
+  toggleRightPanel: () => {},
 };
 
 /** The state the menu shows besides what the table says. */
@@ -150,9 +156,9 @@ export interface MenuState {
   snapToLayers: boolean;
   /** Show Selection Fill is on: its tick. */
   selectionFill: boolean;
-  /** The left panel (tool rail) is showing: its tick. */
+  /** The left panel (Layers, Selections) is expanded: its tick. */
   leftPanel: boolean;
-  /** The right panel (tabbed side panel) is showing: its tick. */
+  /** The right panel (Properties and the rest) is expanded: its tick. */
   rightPanel: boolean;
 }
 
@@ -184,14 +190,14 @@ export function menuBindings(
     'file-export-proof': run(openExportProofDialog),
     'edit-duplicate': run(duplicateSelected),
     // View → Show Left / Right Panel (menu standard decision 14): view state, not an undo step.
-    // As with Snap to Layers, the store is the truth and the tick follows it.
+    // As with Snap to Layers, the panel state is the truth and the tick follows it.
     'view-left-panel': {
       pressed: state.leftPanel,
-      run: () => usePanelStore.getState().toggleLeft(),
+      run: () => deps.toggleLeftPanel(),
     },
     'view-right-panel': {
       pressed: state.rightPanel,
-      run: () => usePanelStore.getState().toggleRight(),
+      run: () => deps.toggleRightPanel(),
     },
     // View menu (view-menu-zoom.md): the same store actions the status-bar buttons call.
     'view-zoom-in': run(() => useViewTransformStore.getState().zoomIn()),
@@ -264,9 +270,10 @@ export function menuBindings(
 
 /**
  * Binds the menu to the app: call once, from `App`. Follows the selection (Replace Image…), the
- * snap, selection fill and panel stores (the ticks), and keeps text-field undo routed.
+ * snap and selection fill stores and the panels' state (the ticks), and keeps text-field undo
+ * routed.
  */
-export function useMenuCommands(): void {
+export function useMenuCommands(panels: Panels): void {
   const selectedId = useSelectionStore((s) =>
     s.selection.kind === 'node' ? s.selection.nodeId : null,
   );
@@ -284,8 +291,10 @@ export function useMenuCommands(): void {
   const hasActiveSelection = useActiveSelectionStore((s) => s.id !== null);
   const snapToLayers = useSnapStore((s) => s.enabled);
   const selectionFill = useSelectionFillStore((s) => s.enabled);
-  const leftPanel = usePanelStore((s) => s.left);
-  const rightPanel = usePanelStore((s) => s.right);
+  const leftPanel = panels.left.open;
+  const rightPanel = panels.right.open;
+  const toggleLeftPanel = panels.left.toggle;
+  const toggleRightPanel = panels.right.toggle;
   const bindings = useMemo(
     () =>
       menuBindings(
@@ -299,7 +308,7 @@ export function useMenuCommands(): void {
           leftPanel,
           rightPanel,
         },
-        { ensure },
+        { ensure, toggleLeftPanel, toggleRightPanel },
       ),
     [
       depthSource,
@@ -312,6 +321,8 @@ export function useMenuCommands(): void {
       selectionFill,
       leftPanel,
       rightPanel,
+      toggleLeftPanel,
+      toggleRightPanel,
     ],
   );
   useCommands(bindings);

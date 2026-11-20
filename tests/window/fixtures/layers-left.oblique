@@ -1,0 +1,1454 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "background": {
+          "color": "#262a33",
+          "type": "color"
+        },
+        "documentSize": [
+          1280.0,
+          960.0
+        ],
+        "note": "Layers-left window check (Epic 04, layers-left). `just fixtures layers-left` writes this file again.\n\n0. Open a fresh copy (`just window-check layers-left`). A 1280 x 960 page with thirty layers: Layer 01 at the bottom to Layer 30 at the top (every third one is text, the rest are white boxes), and two saved selections. The layers are on the left, in a panel with Layers and Selections tabs; the 48 px tool rail is at the window's far left, outside it. Properties, Vectors, History and Notes are on the right. There is no title strip with the app name above them.\na. Click Layer 05 in the list: its modifier stack (Invert, then Levels above it) shows at the top of Properties, with no scrolling and no layer list above it. Click Layer 20, then Layer 03: the same, each with its own stack. Layer 12 has no modifiers: Properties shows its name and Add Modifier only.\nb. The layer list scrolls on its own, inside the left panel; Properties doesn't move while it does.\nc. Press Escape on the canvas to deselect (or click empty page): Properties reads Nothing selected.\nd. Cmd+[ collapses the layer panel to a rail on the left of the canvas, with the tool rail still at the window edge; press it again and the panel comes back on the tab you left. View > Show Left Panel is ticked while it shows. Cmd+] does the same for the right panel and Show Right Panel. Click a collapsed panel's rail icon to reopen it.\ne. Drag the layer panel's inner (right) edge: it stops at 200 px and 420 px. Drag the right panel's inner (left) edge: it stops at 280 px and 520 px. Double-click an edge: the panel goes back to its default width (240 and 320). Leave the left one wide and the right one narrow, collapse the right one, quit and relaunch the app: both come back at those widths, the right one still collapsed, and the document starts Untitled as usual (reopen your copy from File > Open Recent if you want it back).\nf. Collapse the right panel, switch to the Move tool and double-click Layer 03 (a text layer) on the canvas: the right panel opens on Properties with the Text field focused. Do it again with the Vectors tab showing: it comes back to Properties.\ng. Drag a layer by its grip in the list and drop it elsewhere: the order changes (the canvas follows). In Properties, drag a modifier row on Layer 05 by its grip: Invert and Levels swap.\nh. Selections tab: two saved selections. Click a row: it becomes the active selection (outline and tint on the canvas); click it again to clear. Double-click a name to rename it, press Enter. Click the pencil (Edit Shape): the Move tool is chosen and the shape's anchors show.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000019",
+          "00000000000000000000000018",
+          "00000000000000000000000017",
+          "00000000000000000000000016",
+          "00000000000000000000000015",
+          "00000000000000000000000014",
+          "00000000000000000000000013",
+          "00000000000000000000000012",
+          "00000000000000000000000011",
+          "00000000000000000000000010",
+          "0000000000000000000000000Z",
+          "0000000000000000000000000Y",
+          "0000000000000000000000000V",
+          "0000000000000000000000000T",
+          "0000000000000000000000000S",
+          "0000000000000000000000000R",
+          "0000000000000000000000000Q",
+          "0000000000000000000000000P",
+          "0000000000000000000000000N",
+          "0000000000000000000000000M",
+          "0000000000000000000000000K",
+          "0000000000000000000000000J",
+          "0000000000000000000000000H",
+          "0000000000000000000000000G",
+          "0000000000000000000000000F",
+          "0000000000000000000000000E",
+          "0000000000000000000000000D",
+          "0000000000000000000000000A",
+          "00000000000000000000000009",
+          "00000000000000000000000008",
+          "00000000000000000000000007",
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/layer-01",
+      "id": "00000000000000000000000006",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 01",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 180.0
+                }
+              },
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 180.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-02",
+      "id": "00000000000000000000000007",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 02",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 180.0
+                }
+              },
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 180.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-03",
+      "id": "00000000000000000000000008",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 03",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 03",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 460.0,
+          "y": 60.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-04",
+      "id": "00000000000000000000000009",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 04",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 180.0
+                }
+              },
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 180.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-05",
+      "id": "0000000000000000000000000A",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 05",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 60.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 180.0
+                }
+              },
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 180.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "orders": {
+        "modifiers": [
+          "0000000000000000000000000B",
+          "0000000000000000000000000C"
+        ]
+      }
+    },
+    {
+      "path": "/layers/layer-05/invert-05",
+      "id": "0000000000000000000000000B",
+      "type": "op.invert",
+      "values": {
+        "enabled": true
+      }
+    },
+    {
+      "path": "/layers/layer-05/levels-05",
+      "id": "0000000000000000000000000C",
+      "type": "op.levels",
+      "values": {
+        "enabled": true,
+        "params.black": 20.0,
+        "params.gamma": 1.4,
+        "params.out_black": 0.0,
+        "params.out_white": 255.0,
+        "params.white": 230.0
+      }
+    },
+    {
+      "path": "/layers/layer-06",
+      "id": "0000000000000000000000000D",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 06",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 06",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 1060.0,
+          "y": 60.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-07",
+      "id": "0000000000000000000000000E",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 07",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 360.0
+                }
+              },
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 360.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-08",
+      "id": "0000000000000000000000000F",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 08",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 360.0
+                }
+              },
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 360.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-09",
+      "id": "0000000000000000000000000G",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 09",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 09",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 460.0,
+          "y": 240.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-10",
+      "id": "0000000000000000000000000H",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 10",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 360.0
+                }
+              },
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 360.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-11",
+      "id": "0000000000000000000000000J",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 11",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 240.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 360.0
+                }
+              },
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 360.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-12",
+      "id": "0000000000000000000000000K",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 12",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 12",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 1060.0,
+          "y": 240.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-13",
+      "id": "0000000000000000000000000M",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 13",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 540.0
+                }
+              },
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 540.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-14",
+      "id": "0000000000000000000000000N",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 14",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 540.0
+                }
+              },
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 540.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-15",
+      "id": "0000000000000000000000000P",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 15",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 15",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 460.0,
+          "y": 420.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-16",
+      "id": "0000000000000000000000000Q",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 16",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 540.0
+                }
+              },
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 540.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-17",
+      "id": "0000000000000000000000000R",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 17",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 420.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 540.0
+                }
+              },
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 540.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-18",
+      "id": "0000000000000000000000000S",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 18",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 18",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 1060.0,
+          "y": 420.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-19",
+      "id": "0000000000000000000000000T",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 19",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 720.0
+                }
+              },
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 720.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-20",
+      "id": "0000000000000000000000000V",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 20",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 720.0
+                }
+              },
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 720.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "orders": {
+        "modifiers": [
+          "0000000000000000000000000W",
+          "0000000000000000000000000X"
+        ]
+      }
+    },
+    {
+      "path": "/layers/layer-20/invert-20",
+      "id": "0000000000000000000000000W",
+      "type": "op.invert",
+      "values": {
+        "enabled": true
+      }
+    },
+    {
+      "path": "/layers/layer-20/levels-20",
+      "id": "0000000000000000000000000X",
+      "type": "op.levels",
+      "values": {
+        "enabled": true,
+        "params.black": 20.0,
+        "params.gamma": 1.4,
+        "params.out_black": 0.0,
+        "params.out_white": 255.0,
+        "params.white": 230.0
+      }
+    },
+    {
+      "path": "/layers/layer-21",
+      "id": "0000000000000000000000000Y",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 21",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 21",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 460.0,
+          "y": 600.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-22",
+      "id": "0000000000000000000000000Z",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 22",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 720.0
+                }
+              },
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 720.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-23",
+      "id": "00000000000000000000000010",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 23",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 600.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 720.0
+                }
+              },
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 720.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-24",
+      "id": "00000000000000000000000011",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 24",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 24",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 1060.0,
+          "y": 600.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-25",
+      "id": "00000000000000000000000012",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 25",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 210.0,
+                  "y": 900.0
+                }
+              },
+              {
+                "point": {
+                  "x": 60.0,
+                  "y": 900.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-26",
+      "id": "00000000000000000000000013",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 26",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 410.0,
+                  "y": 900.0
+                }
+              },
+              {
+                "point": {
+                  "x": 260.0,
+                  "y": 900.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-27",
+      "id": "00000000000000000000000014",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 27",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 27",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 460.0,
+          "y": 780.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-28",
+      "id": "00000000000000000000000015",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 28",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 810.0,
+                  "y": 900.0
+                }
+              },
+              {
+                "point": {
+                  "x": 660.0,
+                  "y": 900.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-29",
+      "id": "00000000000000000000000016",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Layer 29",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 780.0
+                }
+              },
+              {
+                "point": {
+                  "x": 1010.0,
+                  "y": 900.0
+                }
+              },
+              {
+                "point": {
+                  "x": 860.0,
+                  "y": 900.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "state": "active",
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/layer-30",
+      "id": "00000000000000000000000017",
+      "type": "text",
+      "values": {
+        "align": "left",
+        "blendMode": "normal",
+        "content": "Text 30",
+        "fill": "#f4d35e",
+        "font": {
+          "category": "sans-serif",
+          "family": "Helvetica",
+          "italic": false,
+          "postscriptName": "Helvetica",
+          "style": "Regular",
+          "weight": 400.0
+        },
+        "fontSize": 48.0,
+        "kerning": 100.0,
+        "label": "Layer 30",
+        "lineHeight": 1.2,
+        "opacity": 1.0,
+        "output": "image",
+        "position": {
+          "x": 1060.0,
+          "y": 780.0
+        },
+        "state": "active",
+        "stroke": null,
+        "tracking": 0.0,
+        "visible": true
+      }
+    },
+    {
+      "path": "/layers/sel-a",
+      "id": "00000000000000000000000018",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Selection A",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 100.0,
+                  "y": 820.0
+                }
+              },
+              {
+                "point": {
+                  "x": 400.0,
+                  "y": 820.0
+                }
+              },
+              {
+                "point": {
+                  "x": 400.0,
+                  "y": 920.0
+                }
+              },
+              {
+                "point": {
+                  "x": 100.0,
+                  "y": 920.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "role": "selection",
+        "state": "active",
+        "visible": false
+      }
+    },
+    {
+      "path": "/layers/sel-b",
+      "id": "00000000000000000000000019",
+      "type": "vector",
+      "values": {
+        "blendMode": "normal",
+        "fillRule": "nonzero",
+        "label": "Selection B",
+        "opacity": 1.0,
+        "output": "image",
+        "paths": [
+          {
+            "anchors": [
+              {
+                "point": {
+                  "x": 600.0,
+                  "y": 820.0
+                }
+              },
+              {
+                "point": {
+                  "x": 900.0,
+                  "y": 820.0
+                }
+              },
+              {
+                "point": {
+                  "x": 900.0,
+                  "y": 920.0
+                }
+              },
+              {
+                "point": {
+                  "x": 600.0,
+                  "y": 920.0
+                }
+              }
+            ],
+            "closed": true
+          }
+        ],
+        "role": "selection",
+        "state": "active",
+        "visible": false
+      }
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

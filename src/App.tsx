@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { loadAiSettings } from './ai/settings';
 import { Layout } from './app/Layout';
 import { useMenuCommands } from './app/menu';
+import { type Panels, usePanels } from './app/panelState';
 import { installShortcuts } from './app/shortcuts';
 import { useFontCatalogueStore } from './fonts/catalogue';
 import { loadFontPreferences } from './fonts/preferences';
@@ -21,8 +22,8 @@ import './cook/singleton';
  * history, selection and text-focus change (every drag frame, for the history): they must not
  * take the whole layout with them.
  */
-function NativeMenu() {
-  useMenuCommands();
+function NativeMenu({ panels }: { panels: Panels }) {
+  useMenuCommands(panels);
   // A held file that failed to open: the document host's sentence, shown as a passing message,
   // never a dialog.
   useEffect(() => {
@@ -53,11 +54,13 @@ function App() {
   useEffect(() => void useFontCatalogueStore.getState().load(), []);
   // Picker favourites and recents (font-picker-curation.md) — app-data JSON, loaded beside the catalogue.
   useEffect(() => void loadFontPreferences(), []);
+  // The side panels' widths and collapsed state: one hook for the layout and the menu ticks.
+  const panels = usePanels();
 
   return (
     <>
-      <Layout />
-      <NativeMenu />
+      <Layout panels={panels} />
+      <NativeMenu panels={panels} />
     </>
   );
 }
