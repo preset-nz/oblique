@@ -879,17 +879,78 @@ fn set_size_to_the_same_size_or_with_no_layers_touches_no_transform() {
 }
 
 #[test]
-fn set_size_leaves_a_locked_layer_s_transform_frozen() {
+fn set_size_keeps_a_locked_rotated_layer_in_place_in_the_same_undo_step() {
+    // Georg, 2026-11-21: a resize keeps locked text and vector layers in place too; the bake is
+    // drawn at its own rect inside the page's frame, so only the transform has to follow
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
+        .unwrap();
+    let turned = json!({"x": 1.0, "y": 2.0, "scaleX": 1.2, "scaleY": 1.2, "rotation": 0.5});
+    add(&mut d, moved("t", "text", turned.clone())).unwrap();
+    add(&mut d, moved("v", "vector", turned)).unwrap();
+    lock(&mut d, "/layers/t");
+    lock(&mut d, "/layers/v");
+    let before: Vec<_> = ["t", "v"]
+        .iter()
+        .map(|id| landing(placement(&d, &format!("/layers/{id}")), 2048.0, 1536.0))
+        .collect();
+
+    d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
+        .unwrap();
+    assert_eq!(d.tree().undo_label(), Some("Document Size"));
+    for (id, want) in ["t", "v"].iter().zip(&before) {
+        let at = format!("/layers/{id}");
+        assert_close(&landing(placement(&d, &at), 1536.0, 2048.0), want);
+        // still locked
+        assert_eq!(value(&d, &at, "state"), Some(Value::Choice("locked".into())));
+    }
+
+    d.undo().unwrap();
+    for (id, want) in ["t", "v"].iter().zip(&before) {
+        let back = landing(placement(&d, &format!("/layers/{id}")), 2048.0, 1536.0);
+        assert_close(&back, want);
+    }
+    assert_eq!(placement(&d, "/layers/t").x, 1.0);
+}
+
+#[test]
+fn set_size_steps_a_node_pinned_mask_on_a_locked_text_layer_with_it() {
+    let mut d = doc();
+    d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
+        .unwrap();
+    let turned = json!({"x": 10.0, "y": 20.0, "scaleX": 1.25, "scaleY": 1.25, "rotation": 0.4});
+    with_masks(&mut d, moved("a", "text", turned.clone()), &[("r1", turned)]);
+    lock(&mut d, "/layers/a");
+    let before = landing(attach_of(&d, "/layers/a/m1"), 2048.0, 1536.0);
+    d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
+        .unwrap();
+    assert_close(
+        &landing(attach_of(&d, "/layers/a/m1"), 1536.0, 2048.0),
+        &before,
+    );
+}
+
+#[test]
+fn a_locked_layer_still_refuses_a_transform_edit_by_hand_after_a_resize() {
     let mut d = doc();
     d.run("document.set_size", &json!({"size": [2048.0, 1536.0]}))
         .unwrap();
     let turned = json!({"x": 1.0, "y": 2.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.5});
     add(&mut d, moved("t", "text", turned)).unwrap();
     lock(&mut d, "/layers/t");
-    let was = placement(&d, "/layers/t");
     d.run("document.set_size", &json!({"size": [1536.0, 2048.0]}))
         .unwrap();
-    assert_eq!(placement(&d, "/layers/t"), was);
+    let placed = placement(&d, "/layers/t");
+    let history = d.tree().history_len();
+    for (key, v) in [
+        ("transform2d.position", json!([500.0, 500.0])),
+        ("transform2d.scale", json!([2.0, 2.0])),
+        ("transform2d.rotation", json!(0.0)),
+    ] {
+        assert!(set(&mut d, "/layers/t", key, v).is_err(), "{key} refused");
+    }
+    assert_eq!(placement(&d, "/layers/t"), placed);
+    assert_eq!(d.tree().history_len(), history);
 }
 
 #[test]

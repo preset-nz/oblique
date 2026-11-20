@@ -1487,14 +1487,19 @@ const MASK_KEYS: [&str; 9] = [
 /// The keys a modifier's driver binding carries (`driver_values` less `refId`).
 const DRIVER_KEYS: [&str; 5] = ["kind", "channel", "low", "high", "invert"];
 
-/// `document.set_size` (layer-overflow.md): the size, and in the same undo step each unlocked
-/// text or vector layer's transform, so the layer stays where it was on the page. Such a layer's
+/// `document.set_size` (layer-overflow.md): the size, and in the same undo step each text or
+/// vector layer's transform, so the layer stays where it was on the page. Such a layer's
 /// logical frame is the page, and it turns and scales about the page's centre: when the centre
 /// moves from `c` to `c'`, a layer with rotation and scale `M` keeps every pixel in place with
 /// `t' = t + (I − M)(c − c')`. A node-pinned mask's `attachTransform` is a transform in the same
 /// frame and takes the same step. An unmoved layer (`M = I`) is left as it is, and pixel layers
-/// don't follow the page at all. Locked layers are left too: their transform is frozen
-/// (lock-state-machine.md), and the store would refuse the change.
+/// don't follow the page at all.
+///
+/// Locked layers take the step too (Georg, 2026-11-21): their bake is drawn at the rect it was
+/// baked over inside the page's frame, so without it a rotated or scaled one would shift. This is
+/// the one write to a locked layer's transform; `values.set` still refuses one by hand
+/// (lock-state-machine.md), and the webview follows it through its resize-only placement
+/// (`keepLockedInPlace`).
 fn set_document_size(tx: &mut Edit<'_>, size: &Json) -> rhizome_core::Result<()> {
     let doc = live(tx, DOCUMENT_AT)?;
     let size_of = |tx: &Edit<'_>| match tx.at(doc).expect("live").value("documentSize") {
@@ -1512,9 +1517,7 @@ fn set_document_size(tx: &mut Edit<'_>, size: &Json) -> rhizome_core::Result<()>
 
     for layer in stack_of(tx) {
         let n = tx.at(layer).expect("live");
-        if !["vector", "text"].contains(&n.type_name())
-            || n.value("state") == Some(Value::Choice("locked".into()))
-        {
+        if !["vector", "text"].contains(&n.type_name()) {
             continue;
         }
         // node-pinned masks this layer consumes, read before anything is written

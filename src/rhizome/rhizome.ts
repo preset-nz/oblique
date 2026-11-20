@@ -6,6 +6,8 @@
  *   `setDocumentSize` send a command; the store changes when the update comes back, through
  *   the store's ORIGINAL action, so its dirty rules hold and Oblique's own history sees
  *   nothing.
+ *   A resize also steps text and vector layers' transforms in Rust (layer-overflow.md); a locked
+ *   one's step comes back through `keepLockedInPlace`, the one way past the lock guard.
  * - **Replace Image** (`setPixelSource`) is commands-first too, but a step of its own, not a
  *   drag: `layer.set_source` sends the new path and size, and Rust decides the fit. The update
  *   coming back puts the whole result (path, size, transform, mask refits) in the store at once.
@@ -367,6 +369,7 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
     setNodeTransform: stateNow().setNodeTransform,
     setNodeProp: stateNow().setNodeProp,
     setDocumentSize: stateNow().setDocumentSize,
+    keepLockedInPlace: stateNow().keepLockedInPlace,
     addPixelNode: stateNow().addPixelNode,
     addVectorNode: stateNow().addVectorNode,
     addTextNode: stateNow().addTextNode,
@@ -865,6 +868,18 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
       const current = scene().nodes.map((n) => n.id);
       for (const m of reorderMoves(current, target)) original.reorderNode(m.id, m.to);
     }
+    // A resize (layer-overflow.md): Rust's `document.set_size` also stepped the transforms of
+    // text and vector layers, locked ones too, so they stay in place on the page. A locked
+    // layer's step can't go through `setNodeTransform` (the lock guard), so it has its own
+    // placement below. Read before the loop: the rows come in no set order.
+    const resized =
+      !stepped &&
+      u.rows.some((r) => {
+        if (r.path !== DOCUMENT_PATH) return false;
+        const size = val(r, 'documentSize') as [number, number] | undefined;
+        const have = scene().documentSize;
+        return size !== undefined && (size[0] !== have[0] || size[1] !== have[1]);
+      });
     // the layers whose modifiers this update touched: a modifier row, or the layer row itself
     const modified = new Set<string>();
     for (const r of u.rows) {
@@ -904,7 +919,27 @@ export function createRhizome(deps: RhizomeDeps): Rhizome {
         if (owner?.parent === layers.id && r.type.startsWith('op.')) modified.add(owner.name);
       }
     }
+    if (resized) {
+      for (const node of scene().nodes) {
+        if (node.state !== 'locked' || (!isTextNode(node) && !isVectorNode(node))) continue;
+        const row = mirror.byPath(layerPath(node.id));
+        if (row) original.keepLockedInPlace(node.id, transform2d(row), attachTransformsOf(row));
+      }
+    }
     for (const id of modified) if (!localLayers.has(id)) applyModifierEcho(id);
+  }
+
+  /** The node-pinned masks a layer row's modifiers read, as the mirror holds them: their snapshots by mask ref id. */
+  function attachTransformsOf(row: Row): Record<string, Transform2D> {
+    const refs: Record<string, MaskRef> = {};
+    layerNode(mirror.rows, row, refs);
+    const out: Record<string, Transform2D> = {};
+    for (const ref of Object.values(refs)) {
+      if (!isPixelMaskRef(ref) && ref.space === 'node' && ref.attachTransform) {
+        out[ref.id] = ref.attachTransform;
+      }
+    }
+    return out;
   }
 
   function takeUpdate(u: Update): void {

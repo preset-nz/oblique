@@ -1258,4 +1258,32 @@ describe('layer overflow — a document resize keeps text and vector layers in p
       }
     },
   );
+
+  it.each([
+    ['a locked text layer', 'text'],
+    ['a locked rotated vector layer', 'vector'],
+  ] as const)(
+    '%s: its bake, drawn at the rect it was baked over, lands on the same page pixels after the resize with no recook',
+    (_name, type) => {
+      // baked while it ran past the left edge of the 2048x1536 page
+      const baked = { x: -192, y: 0, w: 2240, h: 1536 };
+      cache.set('n', 'baked', bitmapFor(baked, 1), baked);
+      const node = (transform2d: typeof rotated) =>
+        textNode('n', { type, state: 'locked', transform2d } as Partial<SceneNode>);
+
+      const before = matrixCtx();
+      compositeScene(before, makeScene([node(rotated)], from), 'baked');
+      // Rust's resize stepped the locked layer's transform too; the bake is untouched
+      const after = matrixCtx();
+      compositeScene(after, makeScene([node(keptInPlace(rotated, from, to))], to), 'baked');
+
+      expect(after.draws[0].src).toBe(before.draws[0].src);
+      for (const p of [...points, { x: -150, y: 300 }]) {
+        const a = shownAt(before.draws[0], baked, 1, p);
+        const b = shownAt(after.draws[0], baked, 1, p);
+        expect(b.x).toBeCloseTo(a.x, 9);
+        expect(b.y).toBeCloseTo(a.y, 9);
+      }
+    },
+  );
 });

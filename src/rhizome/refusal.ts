@@ -51,8 +51,18 @@ export const ON_RHIZOME = [
   'unlockNode',
 ] as const;
 
-/** Bookkeeping, not edits: cook state, and whole-scene swaps from rhizome's own restore/open. */
-export const INTERNAL = ['markDirty', 'clearDirty', 'loadScene', 'resetScene'] as const;
+/**
+ * Bookkeeping, not edits: cook state, and the store following rhizome — whole-scene swaps from
+ * its own restore/open, and a resize's placement of locked layers, which only the echo of
+ * `document.set_size` calls (`keepLockedInPlace`, layer-overflow.md).
+ */
+export const INTERNAL = [
+  'markDirty',
+  'clearDirty',
+  'loadScene',
+  'resetScene',
+  'keepLockedInPlace',
+] as const;
 
 /** Every function on the store: its actions. */
 export function actionNames(state: State): string[] {

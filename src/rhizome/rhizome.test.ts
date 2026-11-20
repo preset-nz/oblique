@@ -2875,3 +2875,74 @@ describe('document and lock (document.*, layer.set_state)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------- a resize keeps layers in place
+
+describe('a document resize keeps text and vector layers in place, locked ones too (layer-overflow.md)', () => {
+  const turned = { x: 1, y: 2, scaleX: 1.2, scaleY: 1.2, rotation: 0.5 };
+  // what Rust would decide for 2048x1536 -> 1536x2048 (src-tauri holds the rule)
+  const placedT = { ...turned, x: 11, y: -7 };
+  const placedU = { ...turned, x: 21, y: -17 };
+  const placedAttach = { x: 31, y: 41, scaleX: 2, scaleY: 1.5, rotation: 0.4 };
+
+  async function arrange() {
+    const t: TextNode = {
+      ...textLayer('t'),
+      state: 'locked',
+      transform2d: turned,
+      modifiers: [{ id: 'mod', type: 'blur', enabled: true, params: {}, maskId: 'r1' }],
+    };
+    const u = vectorLayer('u', { transform2d: turned });
+    await setup([t, u, vectorLayer('v')], true, {
+      documentSize: [2048, 1536],
+      maskRefs: { r1: ref() },
+    });
+    host.resized = (rows) => {
+      const place = (path: string, p: typeof turned) => {
+        const row = [...rows.values()].find((r) => r.path === path);
+        if (!row) throw new Error(path);
+        row.values = {
+          ...row.values,
+          'transform2d.position': [p.x, p.y],
+          'transform2d.scale': [p.scaleX, p.scaleY],
+          'transform2d.rotation': p.rotation,
+        };
+      };
+      place('/layers/t', placedT);
+      place('/layers/u', placedU);
+      const mod = [...rows.values()].find((r) => r.path === '/layers/t/mod');
+      const b = mod?.bindings?.[0];
+      if (b) b.values = { ...b.values, attachTransform: placedAttach };
+    };
+  }
+
+  it('the echo places a locked layer and its node-pinned mask past the lock guard, with nothing for the reconcile to heal', async () => {
+    await arrange();
+    state().setDocumentSize([1536, 2048]);
+    await settle();
+    expect(host.runs.map((r) => r.id)).toEqual(['document.set_size']);
+    expect(state().scene.documentSize).toEqual([1536, 2048]);
+    expect(node('t')?.transform2d).toEqual(placedT);
+    expect(state().scene.maskRefs?.r1.attachTransform).toEqual(placedAttach);
+    expect(node('t')?.state).toBe('locked');
+    expect(node('t')?.dirty).toEqual(clean); // the bake is drawn at its rect: no recook
+    expect(node('u')?.transform2d).toEqual(placedU);
+    expect(node('u')?.dirty).toEqual({ draft: true, working: true }); // redraws over the new page
+    await expect(rhizome.reconcile()).resolves.toBe('same');
+    expect(host.messages.filter((m) => m.startsWith('reconcile:'))).toEqual([]);
+  });
+
+  it('a transform edit by hand on the locked layer is still refused', async () => {
+    await arrange();
+    state().setDocumentSize([1536, 2048]);
+    await settle();
+    const runs = host.runs.length;
+    state().setNodeTransform('t', T(500));
+    await settle();
+    expect(host.runs).toHaveLength(runs); // nothing sent
+    expect(node('t')?.transform2d).toEqual(placedT);
+    // and the store's own action holds its guard too
+    originals.setNodeTransform('t', T(500));
+    expect(node('t')?.transform2d).toEqual(placedT);
+  });
+});

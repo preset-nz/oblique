@@ -17,6 +17,7 @@ import {
   isPixelNode,
   isSelectionNode,
   isTextNode,
+  isVectorMaskRef,
   isVectorNode,
   type MaskRef,
   type Modifier,
@@ -223,6 +224,22 @@ interface SceneState {
    * transform2d; node-transform-2d.md).
    */
   setNodeTransform: (id: string, transform2d: Transform2D) => void;
+
+  /**
+   * A document resize's placement of a LOCKED text or vector layer (layer-overflow.md, Georg
+   * 2026-11-21): Rust's `document.set_size` steps its transform, and each node-pinned mask's
+   * `attachTransform` it consumes (`attachTransforms`, by mask ref id), so it stays where it was
+   * on the page, and the webview follows here. Only rhizome's echo of a resize calls it: it is
+   * the one way past `setNodeTransform`'s lock guard, and a transform edit by hand on a locked
+   * layer is still refused (by that guard, and by Rust). No dirty flag on the layer: its bake is
+   * drawn at the rect it was baked over, inside the new frame. No-op on an active, missing or
+   * pixel layer, or when nothing differs.
+   */
+  keepLockedInPlace: (
+    id: string,
+    transform2d: Transform2D | undefined,
+    attachTransforms: Record<string, Transform2D>,
+  ) => void;
 
   /**
    * Sets `scene.documentSize`. Compositing-only for pixel layers (rule 4). A text or vector
@@ -622,6 +639,38 @@ export function withDriverDirty(scene: Scene): Scene {
   };
 }
 
+/**
+ * `scene.nodes` with `id` placed at `transform2d`. Compositing-only — no dirty flag per dirty
+ * rule 4 (see Transform2D's doc comment in scene/types.ts) — with TWO narrow, deliberate
+ * exceptions for vector masks (VectorMaskRef's doc comment): (a) the moved node carries a
+ * DOCUMENT-pinned mask — it must re-rasterise in its new frame (node-pinned masks,
+ * mask-follows-node.md, read their own attachTransform and travel with the pixels: no recook),
+ * unless it is locked (a locked node never carries a dirty flag); (b) the moved node IS a vector
+ * node some maskRefs entry points at, or a pixel driver — every consumer's mask must
+ * re-rasterise at the shape's new composited position (same cross-node dirty as
+ * setVectorPaths). Shared by `setNodeTransform` and a resize's `keepLockedInPlace`.
+ */
+function placeNode(scene: Scene, id: string, transform2d: Transform2D): SceneNode[] {
+  const maskRefs = scene.maskRefs ?? {};
+  const refsAtMovedNode = new Set(
+    Object.values(maskRefs)
+      .filter((ref) => ref.nodeId === id)
+      .map((ref) => ref.id),
+  );
+  return scene.nodes.map((n) => {
+    if (n.id === id) {
+      const hasDocPinnedMask = hasDocumentPinnedMask(n.modifiers, (mid) => maskRefs[mid]);
+      return hasDocPinnedMask && n.state !== 'locked'
+        ? { ...n, transform2d, dirty: dirtyBoth() }
+        : { ...n, transform2d };
+    }
+    const consumesMovedShape = n.modifiers.some(
+      (m) => (m.maskId && refsAtMovedNode.has(m.maskId)) || m.driver?.nodeId === id,
+    );
+    return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
+  });
+}
+
 type SetScene = (
   partial:
     | SceneState
@@ -917,39 +966,34 @@ export const useSceneStore: SceneStore = create<SceneState>((rawSet, get) => {
     },
 
     setNodeTransform: (id, transform2d) => {
-      // Compositing-only mutation — no dirty flag per dirty rule 4 (see
-      // Transform2D's doc comment in scene/types.ts) — with TWO narrow,
-      // deliberate exceptions for vector masks (VectorMaskRef's doc comment):
-      // (a) the moved node carries a DOCUMENT-pinned mask — it must
-      // re-rasterise in its new frame (node-pinned masks, mask-follows-node.md,
-      // read their own attachTransform and travel with the pixels: no recook);
-      // (b) the moved node IS a
-      // vector node some maskRefs entry points at — every consumer's mask
-      // must re-rasterise at the shape's new composited position (same
-      // cross-node dirty as setVectorPaths).
+      // Compositing-only, with the two mask exceptions `placeNode` names.
       set((s) => {
         if (isLocked(s.scene.nodes, id)) return s; // guarded (lock-state-machine.md)
+        return { scene: { ...s.scene, nodes: placeNode(s.scene, id, transform2d) } };
+      });
+    },
 
-        const maskRefs = s.scene.maskRefs ?? {};
-        const refsAtMovedNode = new Set(
-          Object.values(maskRefs)
-            .filter((ref) => ref.nodeId === id)
-            .map((ref) => ref.id),
-        );
-
-        const nodes = s.scene.nodes.map((n) => {
-          if (n.id === id) {
-            const hasDocPinnedMask = hasDocumentPinnedMask(n.modifiers, (mid) => maskRefs[mid]);
-            return hasDocPinnedMask
-              ? { ...n, transform2d, dirty: dirtyBoth() }
-              : { ...n, transform2d };
-          }
-          const consumesMovedShape = n.modifiers.some(
-            (m) => (m.maskId && refsAtMovedNode.has(m.maskId)) || m.driver?.nodeId === id,
-          );
-          return consumesMovedShape ? { ...n, dirty: dirtyBoth() } : n;
-        });
-        return { scene: { ...s.scene, nodes } };
+    keepLockedInPlace: (id, transform2d, attachTransforms) => {
+      set((s) => {
+        const node = s.scene.nodes.find((n) => n.id === id);
+        if (!node || node.state !== 'locked' || (node.type !== 'text' && node.type !== 'vector')) {
+          return s;
+        }
+        const placed =
+          transform2d && JSON.stringify(transform2d) !== JSON.stringify(node.transform2d)
+            ? placeNode(s.scene, id, transform2d)
+            : s.scene.nodes;
+        // only the node-pinned refs this layer consumes take a new snapshot
+        const own = new Set(node.modifiers.flatMap((m) => (m.maskId ? [m.maskId] : [])));
+        let maskRefs = s.scene.maskRefs;
+        for (const [refId, attachTransform] of Object.entries(attachTransforms)) {
+          const ref = maskRefs?.[refId];
+          if (!ref || !own.has(refId) || !isVectorMaskRef(ref) || ref.space !== 'node') continue;
+          if (JSON.stringify(ref.attachTransform) === JSON.stringify(attachTransform)) continue;
+          maskRefs = { ...maskRefs, [refId]: { ...ref, attachTransform } };
+        }
+        if (placed === s.scene.nodes && maskRefs === s.scene.maskRefs) return s;
+        return { scene: { ...s.scene, nodes: placed, ...(maskRefs ? { maskRefs } : {}) } };
       });
     },
 

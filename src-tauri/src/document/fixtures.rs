@@ -664,7 +664,7 @@ e. File > Export PNG with the layers moved on: the PNG shows every letter and th
 f. Lock Right (its padlock), save, close and reopen the file: Right shows whole where you left it. Unlock it, drag it further right and back: still whole.
 g. Drag Left fully onto the page, then Use as mask in its row: the layers below it show only through its letters, all of them whole. Use as image to put it back.
 h. Give Turned an Invert modifier and choose Mask from vector or text layer, then Right: Turned inverts only where Right's letters cover it. Drag Right across Turned: the inverted letters are whole.
-i. File > Document Settings…: switch Orientation to Portrait. Nothing moves on the page: each layer keeps its place, and Turned keeps its angle and its place (the parts outside the new page are simply off it). Switch back to Landscape: all as before. One undo takes the orientation back with everything in place. The same for a different aspect (1:1) and a different size.
+i. File > Document Settings…: switch Orientation to Portrait. Nothing moves on the page: each layer keeps its place, and Turned keeps its angle and its place (the parts outside the new page are simply off it). Switch back to Landscape: all as before. One undo takes the orientation back with everything in place. The same for a different aspect (1:1) and a different size. Then lock Turned and Right and switch again: the locked layers keep their place and angle too, and stay locked.
 j. After the switch in i, drag each layer around the new page: nothing is cut that was there before.";
 
 fn helvetica() -> Json {

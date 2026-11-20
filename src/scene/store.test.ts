@@ -1549,3 +1549,65 @@ describe('setDocumentSize (layer-overflow.md)', () => {
     expect(dirtyOf('v')).toEqual(clean);
   });
 });
+
+describe('keepLockedInPlace (a resize placing a locked layer, layer-overflow.md)', () => {
+  const t1 = { x: 3, y: 4, scaleX: 1, scaleY: 1, rotation: 0.5 };
+  const t2 = { x: 9, y: -2, scaleX: 1, scaleY: 1, rotation: 0.5 };
+  const nodeRef = (id: string, nodeId: string, space?: 'node') => ({
+    id,
+    nodeId,
+    featherPx: 0,
+    expand: 0,
+    invert: false,
+    ...(space ? { space, attachTransform: t1 } : {}),
+  });
+
+  function arrange(): void {
+    useSceneStore.setState((s) => ({
+      scene: {
+        ...s.scene,
+        documentSize: [2048, 1536],
+        nodes: [
+          vectorNode('locked', {
+            state: 'locked',
+            transform2d: t1,
+            modifiers: [modifier('m1', { maskId: 'mine' })],
+          }),
+          vectorNode('active', { transform2d: t1 }),
+          pixelNode('p', { state: 'locked', transform2d: t1 }),
+          vectorNode('shape'),
+        ],
+        maskRefs: {
+          mine: nodeRef('mine', 'shape', 'node'),
+          other: nodeRef('other', 'shape', 'node'),
+        },
+      },
+    }));
+  }
+  const get = (id: string) => useSceneStore.getState().scene.nodes.find((n) => n.id === id);
+
+  it('places a locked text or vector layer and the node-pinned masks it reads, and leaves it clean', () => {
+    arrange();
+    useSceneStore.getState().keepLockedInPlace('locked', t2, { mine: t2, other: t2 });
+    expect(get('locked')?.transform2d).toEqual(t2);
+    expect(get('locked')?.dirty).toEqual({ draft: false, working: false });
+    expect(useSceneStore.getState().scene.maskRefs?.mine.attachTransform).toEqual(t2);
+    // a ref the layer doesn't read is not its to move
+    expect(useSceneStore.getState().scene.maskRefs?.other.attachTransform).toEqual(t1);
+  });
+
+  it('does nothing for an active layer (setNodeTransform is its way) or a pixel layer', () => {
+    arrange();
+    useSceneStore.getState().keepLockedInPlace('active', t2, {});
+    useSceneStore.getState().keepLockedInPlace('p', t2, {});
+    expect(get('active')?.transform2d).toEqual(t1);
+    expect(get('p')?.transform2d).toEqual(t1);
+  });
+
+  it('writes nothing when nothing differs', () => {
+    arrange();
+    const before = useSceneStore.getState().scene;
+    useSceneStore.getState().keepLockedInPlace('locked', t1, { mine: t1 });
+    expect(useSceneStore.getState().scene).toBe(before);
+  });
+});

@@ -112,6 +112,14 @@ export class FakeHost implements RhizomeBackend {
    */
   decided: ((layer: Row, rows: Map<string, Row>, size: [number, number]) => void) | null = null;
 
+  /**
+   * What Rust decides besides the size when `document.set_size` changes it (the placements that
+   * keep text and vector layers in place, layer-overflow.md; only the Rust tests hold the rule):
+   * a test supplies the outcome it wants the webview to apply.
+   */
+  resized: ((rows: Map<string, Row>, from: [number, number], to: [number, number]) => void) | null =
+    null;
+
   private onCommit: ((u: Update) => void)[] = [];
   private onState: ((s: Status) => void)[] = [];
   private onStep: ((s: Stepped) => void)[] = [];
@@ -526,7 +534,11 @@ export class FakeHost implements RhizomeBackend {
         );
       case 'document.set_size':
         return this.commit('Document Size', () => {
-          this.setValue(this.at('/document/document'), 'documentSize', p.size);
+          const doc = this.at('/document/document');
+          const from = val(doc, 'documentSize') as [number, number];
+          const to = p.size as [number, number];
+          this.setValue(doc, 'documentSize', to);
+          if (from[0] !== to[0] || from[1] !== to[1]) this.resized?.(this.rows, from, to);
         });
       case 'document.set_background': {
         const doc = this.at('/document/document');
