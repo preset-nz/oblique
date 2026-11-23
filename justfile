@@ -131,7 +131,7 @@ build:
     # at module load, but nothing in main.py's import graph reaches
     # `_kernels` yet (story 2 wires a real kernel-backed op) — PyInstaller's
     # static analyser can't see it, so it's named explicitly.
-    (cd sidecar && uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py)
+    (cd sidecar && uv run --group build pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py)
     pnpm tauri build
     # tauri-bundler's ad-hoc signing doesn't reseal correctly once
     # bundle.resources adds a nested executable + dylib tree (sidecar-dist/)
@@ -152,7 +152,7 @@ build:
 [group('build')]
 build:
     Remove-Item -Recurse -Force sidecar/dist, sidecar/build -ErrorAction SilentlyContinue
-    cd sidecar; uv run pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    cd sidecar; uv run --group build pyinstaller --name oblique-sidecar --onedir --distpath dist --workpath build --specpath build --hidden-import oblique_kernels --noconfirm main.py; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$env:SystemRoot\System32\$dll" sidecar/dist/oblique-sidecar/_internal/ -Force }
     pnpm tauri build --bundles nsis
 

@@ -434,10 +434,18 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
-dev = [
+build = [
     { name = "pyinstaller" },
+]
+dev = [
     { name = "pytest" },
     { name = "ruff" },
+]
+lint = [
+    { name = "ruff" },
+]
+test = [
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -449,11 +457,13 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+build = [{ name = "pyinstaller", specifier = ">=6.21.0" }]
 dev = [
-    { name = "pyinstaller", specifier = ">=6.21.0" },
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "ruff", specifier = ">=0.15.20" },
 ]
+lint = [{ name = "ruff", specifier = ">=0.15.20" }]
+test = [{ name = "pytest", specifier = ">=8.3.0" }]
 
 [[package]]
 name = "sympy"
