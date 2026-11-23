@@ -17,6 +17,8 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // The window comes back where it was, at the size it was (app-kit's).
+        .plugin(preset_app_kit::window_state())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .manage(sidecar::SidecarState::default())
