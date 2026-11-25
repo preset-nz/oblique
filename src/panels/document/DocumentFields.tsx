@@ -95,6 +95,7 @@ export function DocumentFields() {
       <div className="flex flex-col gap-1">
         <span className="text-xs text-neutral-500">Aspect</span>
         <ToggleGroup
+          className="flex-wrap"
           value={presetId ? [presetId] : []}
           onValueChange={([value]) => value && applyPreset(value)}
         >
