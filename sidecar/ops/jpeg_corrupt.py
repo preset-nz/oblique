@@ -63,10 +63,27 @@ range.
 
 **Failure is quiet.** A damaged file that Pillow can't decode is tried once
 more with `variant + 1_000_003`; if that fails too, or if the marker count
-isn't what the grid says it must be, the input comes back unchanged. Never an
-empty layer. `LOAD_TRUNCATED_IMAGES` is switched on only around the decode.
+isn't what the grid says it must be, the input comes back unchanged (in
+`picture`; see Show for `damage`). Never an empty picture. `LOAD_TRUNCATED_IMAGES` is switched on only around the decode.
 
-**Alpha** is set aside and put back unchanged (`writes_alpha` stays False).
+**Show.** `picture` is the damaged picture above. `damage` keeps only the
+damaged blocks: a block is damaged when it is infected *and* its damaged decode
+differs from the clean decode of the same file (no hits) by more than
+`_DAMAGE_THRESHOLD`, measured over the whole block at the working size. Those
+blocks keep the picture's pixels and the input's alpha; every other block has
+alpha 0 and the input's RGB, so a blur after the op doesn't pull in black.
+When nothing is damaged (Progress 0, or a file that can't be decoded) the whole
+layer is transparent: there is no damage to show, so the quiet failure below
+doesn't hand back the picture. `colonies` skips the JPEG and shades each
+interval by its rank in the infection order: 255 once infected, then a linear
+fall from `_COLONIES_NEXT_GREY` (the next block to be reached) to
+`_COLONIES_LAST_GREY` (the last), as grey RGB. At Progress 0 it is still the
+map (all grey), not the untouched picture. It doesn't depend on Quality,
+Severity, Damage or Variant.
+
+**Alpha.** `picture` puts it back unchanged. `damage` writes it (0 outside the
+damaged blocks, the input's inside), so the op declares `writes_alpha`.
+`colonies` keeps the input's alpha.
 
 How a decoder handles damaged data isn't part of the JPEG standard, so the
 same bytes can look different after a Pillow upgrade. Pillow is pinned by
@@ -94,6 +111,20 @@ _RETRY_VARIANT_OFFSET = 1_000_003
 _NOISE_SCALE_MCUS = 10.0
 # So the front's noise isn't the same stream as the colony draw.
 _NOISE_SEED_OFFSET = 0x5EED
+
+# `show="damage"`: a block counts as damaged when the damaged decode differs
+# from the clean decode of the same file (no hits) by more than this, as the
+# mean absolute difference over R, G and B (0..255) across the block. 4 sits
+# above the chroma that 4:2:0 smooths over a block's edge from a hit in the
+# next block (2.4 at most; measured 2026-11-25 on the window fixture photo at
+# Quality 40) and far under a hit that changes the picture (median about 48).
+_DAMAGE_THRESHOLD = 4.0
+
+# `show="colonies"`: the grey of the first block not yet infected, and of the
+# last. White (255) is infected, so the gap keeps white from blurring into the
+# next block.
+_COLONIES_NEXT_GREY = 160.0
+_COLONIES_LAST_GREY = 24.0
 
 
 def _mcu_size(chroma: str) -> int:
@@ -268,11 +299,86 @@ def _resized(rgb: np.ndarray, size: tuple[int, int], resample: Any) -> np.ndarra
     return np.asarray(picture.resize(size, resample))
 
 
+def _working_size(h: int, w: int, mcu: int, block: float) -> tuple[int, int]:
+    """The size the picture is resized to so one MCU looks `block` pixels big."""
+    if block == mcu:
+        return h, w
+    factor = mcu / block
+    return max(1, round(h * factor)), max(1, round(w * factor))
+
+
+def _spread(
+    per_mcu: np.ndarray, mcu: int, work: tuple[int, int], size: tuple[int, int]
+) -> np.ndarray:
+    """A `(rows, cols)` uint8 map, one value per MCU, as pixels: each value
+    covers its MCU at the working size, then the map is put back to the
+    picture's size with nearest-neighbour (the same call as the damaged
+    pixels, so the edges line up)."""
+    hs, ws = work
+    h, w = size
+    spread = np.repeat(np.repeat(per_mcu, mcu, axis=0), mcu, axis=1)[:hs, :ws]
+    if (hs, ws) != (h, w):
+        spread = np.asarray(
+            Image.fromarray(np.ascontiguousarray(spread)).resize(
+                (w, h), Image.Resampling.NEAREST
+            )
+        )
+    return spread
+
+
+def _block_means(a: np.ndarray, b: np.ndarray, mcu: int) -> np.ndarray:
+    """Mean absolute difference over R, G and B, per MCU-sized block (the
+    partial blocks at the right and bottom edges are averaged over the pixels
+    they have)."""
+    diff = np.abs(a.astype(np.int16) - b.astype(np.int16)).mean(axis=-1)
+    ys = np.arange(0, diff.shape[0], mcu)
+    xs = np.arange(0, diff.shape[1], mcu)
+    sums = np.add.reduceat(np.add.reduceat(diff, ys, axis=0), xs, axis=1)
+    counts = np.outer(
+        np.minimum(mcu, diff.shape[0] - ys), np.minimum(mcu, diff.shape[1] - xs)
+    )
+    return sums / counts
+
+
+def _clear(img: np.ndarray) -> np.ndarray:
+    """Damage view with nothing damaged: every pixel transparent, the RGB kept."""
+    out = img.copy()
+    out[..., 3] = 0
+    return out
+
+
+def _colonies_map(
+    img: np.ndarray, rows: int, cols: int, mcu: int, work: tuple[int, int], p: dict
+) -> np.ndarray:
+    """The infection map: white where it has reached, falling grey ahead of it."""
+    n_mcu = rows * cols
+    n_int = -(-n_mcu // p["smear"])
+    count = _infected_count(p["progress"], n_int)
+    order = _infection_order(
+        rows, cols, p["smear"], p["colonies"], p["spores"], p["irregularity"], p["seed"]
+    )
+    rank = np.empty(n_int, dtype=np.int64)
+    rank[order] = np.arange(n_int)
+    # 0 at the first block not yet infected, 1 at the last
+    ahead = (rank - count) / max(n_int - 1 - count, 1)
+    shade = np.where(
+        rank < count,
+        255.0,
+        _COLONIES_NEXT_GREY + (_COLONIES_LAST_GREY - _COLONIES_NEXT_GREY) * ahead,
+    )
+    per_mcu = np.rint(shade[np.arange(n_mcu) // p["smear"]]).astype(np.uint8)
+    grey = _spread(per_mcu.reshape(rows, cols), mcu, work, img.shape[:2])
+    out = img.copy()
+    out[..., :3] = grey[..., None]
+    return out
+
+
 @op(
     "jpeg_corrupt",
     category="distort",
     label="JPEG Corrupt",
     description="The file rots: colonies of broken JPEG blocks spread through the picture.",
+    writes_alpha=True,
     params=[
         P(
             "progress",
@@ -389,6 +495,19 @@ def _resized(rgb: np.ndarray, size: tuple[int, int], resample: Any) -> np.ndarra
             description="Size of one damaged block, in document pixels.",
         ),
         P(
+            "show",
+            "enum",
+            default="picture",
+            choices=("picture", "damage", "colonies"),
+            choice_labels={
+                "picture": "Picture",
+                "damage": "Damage",
+                "colonies": "Colonies",
+            },
+            label="Show",
+            description="The whole picture, only the broken blocks (the rest transparent), or a map of the infection.",
+        ),
+        P(
             "variant",
             "int",
             min=0,
@@ -425,31 +544,51 @@ def jpeg_corrupt(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     quality = int(np.clip(int(params.get("quality", 40)), 1, 95))
     chroma = "444" if str(params.get("chroma", "420")) == "444" else "420"
     block = max(1e-6, float(params.get("block", 16.0)))
+    show = str(params.get("show", "picture"))
+    if show not in ("picture", "damage", "colonies"):
+        show = "picture"
     variant = max(0, int(params.get("variant", 0)))
     seed = max(0, int(params.get("seed", 0)))
 
-    out = img.copy()
-    if progress <= 0.0:
-        return out
-
     h, w = img.shape[:2]
     mcu = _mcu_size(chroma)
-    rgb = np.ascontiguousarray(img[..., :3])
-    if block == mcu:
-        hs, ws = h, w
-        small = rgb
-    else:
-        factor = mcu / block
-        hs, ws = max(1, round(h * factor)), max(1, round(w * factor))
-        resample = Image.Resampling.BOX if factor < 1.0 else Image.Resampling.BILINEAR
-        small = _resized(rgb, (ws, hs), resample)
-
+    hs, ws = _working_size(h, w, mcu, block)
     rows, cols = -(-hs // mcu), -(-ws // mcu)
     n_mcu = rows * cols
     n_int = -(-n_mcu // smear)
-    count = _infected_count(progress, n_int)
+
+    if show == "colonies":
+        return _colonies_map(
+            img,
+            rows,
+            cols,
+            mcu,
+            (hs, ws),
+            {
+                "progress": progress,
+                "smear": smear,
+                "colonies": colonies,
+                "spores": spores,
+                "irregularity": irregularity,
+                "seed": seed,
+            },
+        )
+
+    # What comes back when nothing was damaged: the picture, or no damage.
+    untouched = img.copy() if show == "picture" else _clear(img)
+    count = _infected_count(progress, n_int) if progress > 0.0 else 0
     if count == 0:
-        return out
+        return untouched
+
+    rgb = np.ascontiguousarray(img[..., :3])
+    if (hs, ws) == (h, w):
+        small = rgb
+    else:
+        resample = (
+            Image.Resampling.BOX if mcu / block < 1.0 else Image.Resampling.BILINEAR
+        )
+        small = _resized(rgb, (ws, hs), resample)
+
     order = _infection_order(rows, cols, smear, colonies, spores, irregularity, seed)
     infected = np.sort(order[:count])
 
@@ -464,7 +603,7 @@ def jpeg_corrupt(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     data = buf.getvalue()
     layout = _intervals(data)
     if layout is None or len(layout[0]) != n_int:
-        return out
+        return untouched
     starts, ends, arr = layout
 
     decoded = None
@@ -481,19 +620,25 @@ def jpeg_corrupt(img: np.ndarray, params: dict[str, Any]) -> np.ndarray:
         if decoded is not None:
             break
     if decoded is None:
-        return out
+        return untouched
 
-    mask = np.repeat(
-        np.repeat(_infected_mcus(rows, cols, smear, order, count), mcu, axis=0),
-        mcu,
-        axis=1,
-    )[:hs, :ws]
+    mask = _infected_mcus(rows, cols, smear, order, count)
+    if show == "damage":
+        # Against the same file undamaged, so the JPEG's own quality loss
+        # (large at low Quality) never counts as damage.
+        try:
+            clean = _decode(data)
+        except Exception:  # noqa: BLE001
+            return untouched
+        if clean.shape[:2] != (hs, ws):
+            return untouched
+        mask = mask & (_block_means(decoded, clean, mcu) > _DAMAGE_THRESHOLD)
+
+    pixels = _spread(mask.astype(np.uint8) * 255, mcu, (hs, ws), (h, w)).astype(bool)
     if (hs, ws) != (h, w):
         decoded = _resized(decoded, (w, h), Image.Resampling.NEAREST)
-        mask = np.asarray(
-            Image.fromarray(mask.astype(np.uint8) * 255).resize(
-                (w, h), Image.Resampling.NEAREST
-            )
-        ).astype(bool)
-    out[..., :3] = np.where(mask[..., None], decoded, img[..., :3])
+    out = img.copy()
+    out[..., :3] = np.where(pixels[..., None], decoded, img[..., :3])
+    if show == "damage":
+        out[..., 3] = np.where(pixels, img[..., 3], 0)
     return out

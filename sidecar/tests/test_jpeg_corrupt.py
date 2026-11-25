@@ -26,6 +26,7 @@ BASE = {
     "quality": 40,
     "chroma": "420",
     "block": 16.0,
+    "show": "picture",
     "variant": 0,
     "seed": 0,
 }
@@ -83,11 +84,11 @@ def encoded(img: np.ndarray, smear: int, chroma: str = "420", quality: int = 40)
 # --- registration --------------------------------------------------------
 
 
-def test_registered_as_a_distort_op_that_leaves_alpha_alone():
+def test_registered_as_a_distort_op_that_writes_alpha_for_the_damage_view():
     entry = OPS["jpeg_corrupt"]
     assert entry.category == "distort"
     assert entry.label == "JPEG Corrupt"
-    assert entry.writes_alpha is False
+    assert entry.writes_alpha is True
     assert entry.fn.__name__ == "jpeg_corrupt"
 
 
@@ -100,6 +101,13 @@ def test_params_match_the_story_and_only_block_is_spatial():
     assert [n for n, s in specs.items() if s.scale == "spatial"] == ["block"]
     assert specs["mode"].choices == ("flip", "replace", "shift")
     assert specs["chroma"].choices == ("420", "444")
+    assert specs["show"].choices == ("picture", "damage", "colonies")
+    assert specs["show"].choice_labels == {
+        "picture": "Picture",
+        "damage": "Damage",
+        "colonies": "Colonies",
+    }
+    assert specs["show"].label == "Show"
     assert specs["block"].min == 4.0 and specs["block"].max == 128.0
 
 
@@ -399,3 +407,287 @@ def test_truncated_image_loading_is_not_left_on():
 
     op(textured(64, 64), {**BASE, "progress": 1.0})
     assert ImageFile.LOAD_TRUNCATED_IMAGES is False
+
+
+# --- show ----------------------------------------------------------------
+
+
+def block_view(a: np.ndarray, mcu: int = 16) -> np.ndarray:
+    """`(rows, cols, mcu, mcu, ...)` blocks of a picture whose sides are whole MCUs."""
+    h, w = a.shape[:2]
+    rest = a.shape[2:]
+    return a.reshape(h // mcu, mcu, w // mcu, mcu, *rest).swapaxes(1, 2)
+
+
+def infected_mask(h: int, w: int, params: dict) -> np.ndarray:
+    mcu = jc._mcu_size(params["chroma"])
+    mask = np.zeros((-(-h // mcu), -(-w // mcu)), dtype=bool)
+    for r, c in infected_set(h, w, params):
+        mask[r, c] = True
+    return mask
+
+
+def test_the_default_show_is_the_picture():
+    specs = {p.name: p for p in OPS["jpeg_corrupt"].params}
+    assert specs["show"].default == "picture"
+    img = textured()
+    assert op(img, {**BASE, "show": "picture"}).tobytes() == (
+        op(img, {k: v for k, v in BASE.items() if k != "show"}).tobytes()
+    )
+
+
+def test_an_unknown_show_is_the_picture():
+    img = textured()
+    assert op(img, {**BASE, "show": "x"}).tobytes() == op(img, dict(BASE)).tobytes()
+
+
+def test_damage_is_whole_blocks_either_opaque_or_transparent():
+    img = textured()
+    out = op(img, {**BASE, "show": "damage", "progress": 0.6})
+    blocks = block_view(out[..., 3])
+    flat = blocks.reshape(*blocks.shape[:2], -1)
+    opaque = (flat == img_alpha_blocks(img)).all(axis=-1)
+    clear = (flat == 0).all(axis=-1)
+    assert (opaque | clear).all()
+    assert opaque.any() and clear.any()
+
+
+def img_alpha_blocks(img: np.ndarray) -> np.ndarray:
+    blocks = block_view(img[..., 3])
+    return blocks.reshape(*blocks.shape[:2], -1)
+
+
+def test_damage_keeps_the_pictures_pixels_in_its_blocks_and_the_inputs_rgb_elsewhere():
+    img = textured()
+    img[..., 3] = np.maximum(img[..., 3], 1)  # so alpha 0 means "not damaged"
+    params = {**BASE, "progress": 0.6}
+    picture = op(img, params)
+    out = op(img, {**params, "show": "damage"})
+    clear = out[..., 3] == 0
+    assert clear.any() and (~clear).any()
+    np.testing.assert_array_equal(out[~clear, :3], picture[~clear, :3])
+    np.testing.assert_array_equal(out[~clear, 3], img[~clear, 3])
+    np.testing.assert_array_equal(out[clear, :3], img[clear, :3])
+    # every damaged block is an infected block
+    infected = np.repeat(np.repeat(infected_mask(384, 256, params), 16, 0), 16, 1)
+    assert not (~clear & ~infected).any()
+
+
+def test_damage_with_a_transparent_input_pixel_stays_transparent():
+    img = textured()
+    img[:16, :16, 3] = 0  # a whole block, whatever it does
+    out = op(img, {**BASE, "show": "damage", "progress": 1.0})
+    assert (out[:16, :16, 3] == 0).all()
+
+
+def test_an_infected_block_the_decode_left_unchanged_is_transparent(monkeypatch):
+    """Hits land in only some infected intervals, so the others decode exactly
+    as a clean file would, and that is not damage however big the JPEG's own
+    quality loss on this noisy picture is."""
+    img = textured()
+    img[..., 3] = np.maximum(img[..., 3], 1)
+    # 4:4:4 has no chroma leaking into the next block, so "left unchanged" is exact
+    params = {
+        **BASE,
+        "smear": 1,
+        "progress": 0.6,
+        "show": "damage",
+        "chroma": "444",
+        "block": 8.0,
+    }
+    infected = infected_mask(384, 256, params)
+    real = jc._damage
+    hit = {"first": None}
+
+    def some_of_them(data, starts, ends, arr, which, *rest):
+        keep = which[::2]
+        hit["first"] = set(keep.tolist())
+        return real(data, starts, ends, arr, keep, *rest)
+
+    monkeypatch.setattr(jc, "_damage", some_of_them)
+    out = op(img, params)
+    cols = 256 // 8
+    opaque = block_view(out[..., 3], 8).reshape(48, cols, -1).max(axis=-1) > 0
+    expected = np.zeros(48 * cols, dtype=bool)
+    expected[sorted(hit["first"])] = True
+    # an infected block that wasn't hit is transparent; a hit one is opaque
+    assert not (opaque.reshape(-1) & ~expected).any()
+    assert opaque.sum() > 0
+    assert (infected.reshape(-1) & ~expected).sum() > 0
+    np.testing.assert_array_equal(
+        out[out[..., 3] == 0][:, :3], img[out[..., 3] == 0][:, :3]
+    )
+
+
+def test_a_decode_that_changes_nothing_leaves_the_layer_transparent(monkeypatch):
+    monkeypatch.setattr(jc, "_damage", lambda data, *rest: data)
+    img = textured()
+    out = op(img, {**BASE, "show": "damage", "progress": 1.0})
+    assert (out[..., 3] == 0).all()
+    np.testing.assert_array_equal(out[..., :3], img[..., :3])
+
+
+def test_damage_at_progress_zero_is_transparent_with_the_inputs_rgb():
+    img = textured()
+    out = op(img, {**BASE, "show": "damage", "progress": 0.0})
+    assert (out[..., 3] == 0).all()
+    np.testing.assert_array_equal(out[..., :3], img[..., :3])
+
+
+def test_damage_that_cannot_be_decoded_is_transparent_not_the_picture(monkeypatch):
+    def broken(data):
+        raise OSError("broken data stream")
+
+    monkeypatch.setattr(jc, "_decode", broken)
+    img = textured()
+    out = op(img, {**BASE, "show": "damage", "progress": 0.7})
+    assert (out[..., 3] == 0).all()
+    np.testing.assert_array_equal(out[..., :3], img[..., :3])
+
+
+def test_damage_follows_the_block_size_and_stays_whole_blocks():
+    img = textured(96, 128, seed=5)
+    out = op(img, {**BASE, "show": "damage", "block": 40.0, "progress": 0.8})
+    assert out.shape == img.shape
+    assert set(np.unique(out[..., 3] == 0)) == {True, False}
+
+
+def smooth_picture(h: int = 96, w: int = 128) -> np.ndarray:
+    """Soft colour gradients with a little grain, closer to a photo than noise."""
+    yy, xx = np.mgrid[0:h, 0:w].astype(float)
+    grain = np.random.default_rng(3).normal(0, 3, size=(h, w, 3))
+    rgb = np.stack(
+        [
+            128 + 100 * np.sin(xx / 17),
+            128 + 100 * np.sin(yy / 13 + 1),
+            128 + 100 * np.sin((xx + yy) / 23 + 2),
+        ],
+        axis=-1,
+    )
+    return np.clip(rgb + grain, 0, 255).astype(np.uint8)
+
+
+def test_the_damage_threshold_sits_between_chroma_leak_and_a_real_hit():
+    """4:2:0 reads one chroma sample over a block's edge, so the block beside a
+    hit shifts a little (about 2.4 on the fixture photo); a hit in its own
+    block changes it by tens of levels. The constant sits between."""
+    smooth = smooth_picture()
+    data, starts, ends, arr = encoded(smooth, 1)
+    clean = jc._decode(data)
+    cols = 8
+    for i in (9, 20, 30, 41):
+        for mode in ("flip", "replace", "shift"):
+            damaged = jc._decode(
+                jc._damage(data, starts, ends, arr, np.array([i]), mode, 3, 1, 0)
+            )
+            means = jc._block_means(damaged, clean, 16)
+            r, c = divmod(i, cols)
+            assert means[r, c] > jc._DAMAGE_THRESHOLD
+            means[r, c] = 0
+            assert means.max() < jc._DAMAGE_THRESHOLD
+
+
+def test_block_means_average_partial_edge_blocks_over_their_own_pixels():
+    a = np.zeros((20, 20, 3), dtype=np.uint8)
+    b = a.copy()
+    b[16:, 16:] = 10  # the 4 x 4 corner block, entirely different
+    means = jc._block_means(a, b, 16)
+    assert means.shape == (2, 2)
+    assert means[1, 1] == 10.0 and means[0, 0] == 0.0
+
+
+def test_colonies_white_is_exactly_the_infected_blocks():
+    img = textured()
+    params = {**BASE, "show": "colonies", "progress": 0.45}
+    out = op(img, params)
+    white = block_view(out[..., 0]).reshape(24, 16, -1)
+    assert (white == white[..., :1]).all()  # one value per block
+    got = white[..., 0] == 255
+    np.testing.assert_array_equal(got, infected_mask(384, 256, params))
+
+
+def test_colonies_is_opaque_grey_with_the_inputs_alpha():
+    img = textured()
+    out = op(img, {**BASE, "show": "colonies"})
+    np.testing.assert_array_equal(out[..., 0], out[..., 1])
+    np.testing.assert_array_equal(out[..., 0], out[..., 2])
+    np.testing.assert_array_equal(out[..., 3], img[..., 3])
+    assert out.shape == img.shape and out.dtype == np.uint8
+
+
+def test_colonies_greys_fall_linearly_from_next_to_last_in_infection_order():
+    img = textured()
+    params = {**BASE, "smear": 1, "show": "colonies", "progress": 0.25}
+    out = op(img, params)
+    shade = out[::16, ::16, 0].reshape(-1).astype(float)
+    order = jc._infection_order(24, 16, 1, 3, 0.15, 0.6, 0)
+    count = jc._infected_count(0.25, 24 * 16)
+    assert (shade[order[:count]] == 255).all()
+    ahead = shade[order[count:]]
+    assert ahead[0] == jc._COLONIES_NEXT_GREY
+    assert ahead[-1] == jc._COLONIES_LAST_GREY
+    assert (np.diff(ahead) <= 0).all()
+    steps = np.diff(ahead)
+    assert steps.min() >= -2 and steps.max() <= 0  # evenly spaced, to rounding
+    assert ahead.max() < 255
+
+
+def test_colonies_at_progress_zero_is_the_map_not_the_picture():
+    img = textured()
+    out = op(img, {**BASE, "show": "colonies", "progress": 0.0})
+    assert not np.array_equal(out, img)
+    assert out[..., 0].max() < 255
+    assert out[..., 0].max() == round(jc._COLONIES_NEXT_GREY)
+
+
+def test_colonies_at_progress_one_is_all_white():
+    out = op(textured(), {**BASE, "show": "colonies", "progress": 1.0})
+    assert (out[..., :3] == 255).all()
+
+
+def test_colonies_ignore_variant_quality_severity_and_damage_mode():
+    img = textured()
+    base = op(img, {**BASE, "show": "colonies"})
+    for change in (
+        {"variant": 5},
+        {"quality": 90},
+        {"severity": 12},
+        {"mode": "flip"},
+    ):
+        assert (
+            op(img, {**BASE, "show": "colonies", **change}).tobytes() == base.tobytes()
+        )
+
+
+def test_colonies_follow_seed_smear_and_the_block_size():
+    img = textured()
+    base = op(img, {**BASE, "show": "colonies"}).tobytes()
+    for change in ({"seed": 1}, {"smear": 8}, {"block": 32.0}, {"colonies": 6}):
+        assert op(img, {**BASE, "show": "colonies", **change}).tobytes() != base
+
+
+def test_colonies_never_encode_or_decode(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("the colonies map must not touch the JPEG")
+
+    monkeypatch.setattr(jc, "_decode", boom)
+    monkeypatch.setattr(jc, "_damage", boom)
+    op(textured(), {**BASE, "show": "colonies"})
+
+
+@pytest.mark.parametrize("size", [(64, 64), (1, 1), (33, 17)])
+@pytest.mark.parametrize("show", ["damage", "colonies"])
+def test_the_other_views_run_on_awkward_sizes(show, size):
+    h, w = size
+    img = textured(h, w, seed=3)
+    out = op(img, {**BASE, "show": show, "progress": 1.0})
+    assert out.shape == img.shape and out.dtype == np.uint8
+
+
+@pytest.mark.parametrize("show", ["damage", "colonies"])
+def test_the_other_views_do_not_mutate_the_input_and_repeat(show):
+    img = textured()
+    before = img.copy()
+    a = op(img, {**BASE, "show": show})
+    np.testing.assert_array_equal(img, before)
+    assert a.tobytes() == op(img, {**BASE, "show": show}).tobytes()
