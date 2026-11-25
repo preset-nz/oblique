@@ -43,7 +43,7 @@ def test_decided_assignments():
         "colour": "colour_crush colour_keep colourise desaturate invert levels recolour",
         "print": "cmyk_halftone hatch ink_starved threshold xerox",
         "film": "bloom film_burn film_stock grain technicolor",
-        "distort": "gaussian_blur pixelate smear",
+        "distort": "gaussian_blur jpeg_corrupt pixelate smear",
         "edges": "dilate erode edge_noise",
     }
     for category, names in expected.items():

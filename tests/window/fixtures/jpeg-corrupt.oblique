@@ -1,0 +1,90 @@
+{
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "00000000000000000000000001",
+      "type": "root"
+    },
+    {
+      "path": "/document",
+      "id": "00000000000000000000000003",
+      "type": "category"
+    },
+    {
+      "path": "/document/document",
+      "id": "00000000000000000000000005",
+      "type": "document",
+      "values": {
+        "documentSize": [
+          640.0,
+          480.0
+        ],
+        "note": "JPEG Corrupt window check (Epic 28, jpeg-corrupt). `just fixtures jpeg-corrupt` writes this file again.\n\n0. Open a fresh copy (`just window-check jpeg-corrupt`). One 640 x 480 picture, Photo, with a JPEG Corrupt modifier at its defaults (Progress 0.35, Colonies 3, Spores 0.15, Irregularity 0.6, Smear 4, Severity 3, Damage Shift bytes, Quality 40, Colour blocks Coarse, Block size 16, Variant 0, Seed 0). Patches of blocks are broken (smeared colour, slipped rows, garbage blocks) in a few clumps, with some single blocks away from them; the rest of the picture is untouched.\na. Scrub Progress from 0 up to 1 slowly. At 0 the picture is exactly as it was. Blocks are only ever added: nothing that was broken heals or changes as you go up, and the clumps grow outward from where they started, with single blocks appearing ahead of them. At 1 every block is broken. Scrub back down: the damage retreats the way it came, the same blocks each time.\nb. Put Progress at 0.5 and scrub Variant: the damage inside the broken blocks changes every step (it boils), but the same blocks are broken and the clumps stay where they are.\nc. Change Seed: the clumps and the single blocks land somewhere else.\nd. Colonies up to 8: more clumps start. Back to 3: the first ones are where they were.\ne. Spores to 0: no single blocks ahead of the clumps. To 1: the infection is scattered blocks with no clumps to speak of.\nf. Irregularity to 0: each clump grows as a clean round patch. To 1: ragged edges.\ng. Smear to 1: each break stays in its own block. To 32: breaks run on along the row in long smears.\nh. Severity 1 to 16: the broken blocks get more broken.\ni. Damage: Flip bits is gentle (mostly colour and detail errors), Replace bytes is rougher, Shift bytes slips the rest of the run.\nj. Quality 5: the broken blocks are coarse and blocky; 95: they keep much more of the picture's detail.\nk. Colour blocks Fine (4:4:4): smaller, sharper breaks than Coarse (4:2:0)'s chunky colour smears.\nl. Block size 64: big blocks; 4: fine grit. While you scrub (the blurry draft) the same blocks are broken as in the sharp picture after you let go.\nm. Undo after a scrub: one step takes the whole scrub back. Turn the modifier off and on again: the picture goes clean and the same damage comes back. Save, close and reopen the file: the same picture, the same damage.",
+        "sceneId": "00000000000000000000000005"
+      }
+    },
+    {
+      "path": "/layers",
+      "id": "00000000000000000000000004",
+      "type": "category",
+      "orders": {
+        "stack": [
+          "00000000000000000000000006"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo",
+      "id": "00000000000000000000000006",
+      "type": "pixel",
+      "values": {
+        "blendMode": "normal",
+        "label": "Photo",
+        "opacity": 1.0,
+        "output": "image",
+        "sourceSize": [
+          640.0,
+          480.0
+        ],
+        "state": "active",
+        "visible": true
+      },
+      "refs": {
+        "source": {
+          "file": "jpeg-corrupt.assets/photo.png"
+        }
+      },
+      "orders": {
+        "modifiers": [
+          "00000000000000000000000007"
+        ]
+      }
+    },
+    {
+      "path": "/layers/photo/corrupt",
+      "id": "00000000000000000000000007",
+      "type": "op.jpeg_corrupt",
+      "values": {
+        "enabled": true,
+        "params.block": 16.0,
+        "params.chroma": "420",
+        "params.colonies": 3,
+        "params.irregularity": 0.6,
+        "params.mode": "shift",
+        "params.progress": 0.35,
+        "params.quality": 40,
+        "params.seed": 0,
+        "params.severity": 3,
+        "params.smear": 4,
+        "params.spores": 0.15,
+        "params.variant": 0
+      }
+    },
+    {
+      "path": "/presets",
+      "id": "00000000000000000000000002",
+      "type": "category"
+    }
+  ]
+}

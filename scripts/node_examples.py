@@ -184,6 +184,22 @@ RECIPES: dict[str, tuple[str, Chain]] = {
         ],
     ),
     "invert": ("Cut and flip", [("threshold", {"level": 127.0}), ("invert", {})]),
+    "jpeg_corrupt": (
+        "Rotting mainframe",
+        [
+            (
+                "jpeg_corrupt",
+                {
+                    "progress": 0.5,
+                    "colonies": 4,
+                    "spores": 0.2,
+                    "smear": 8,
+                    "severity": 6,
+                    "seed": 11,
+                },
+            )
+        ],
+    ),
     "levels": ("Crushed hard", [("levels", {"black": 100.0, "white": 175.0})]),
     "pixelate": (
         "Low-res",
