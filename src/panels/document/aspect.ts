@@ -14,6 +14,7 @@ export const ASPECT_PRESETS: AspectPreset[] = [
   { id: '4:3', label: '4:3', ratio: 4 / 3 },
   { id: '16:10', label: '16:10', ratio: 16 / 10 },
   { id: '1:2', label: '1:2', ratio: 2 },
+  { id: '16:5', label: '16:5', ratio: 16 / 5 },
 ];
 
 export interface BasePreset {

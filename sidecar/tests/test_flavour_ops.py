@@ -19,6 +19,7 @@ from ops.erode import erode
 from ops.film_burn import _smoothstep, film_burn
 from ops.hatch import hatch
 from ops.ink_starved import ink_starved
+from ops.jpeg_corrupt import jpeg_corrupt
 from ops.pixelate import pixelate
 from ops.recolour import recolour
 from ops.smear import smear
@@ -64,6 +65,23 @@ ALL_OPS = [
             "char": 0.4,
             "char_colour": "#2a1608",
             "hole": "white",
+            "seed": 7,
+        },
+    ),
+    (
+        jpeg_corrupt,
+        {
+            "progress": 0.6,
+            "colonies": 2,
+            "spores": 0.2,
+            "irregularity": 0.5,
+            "smear": 2,
+            "severity": 4,
+            "mode": "shift",
+            "quality": 40,
+            "chroma": "420",
+            "block": 16.0,
+            "variant": 1,
             "seed": 7,
         },
     ),
@@ -160,6 +178,7 @@ def test_registry_entry_runs_the_op_it_names(name):
         "smear",
         "bloom",
         "film_burn",
+        "jpeg_corrupt",
     ],
 )
 def test_registered_in_ops_registry(name):

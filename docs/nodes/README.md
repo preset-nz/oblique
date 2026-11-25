@@ -23,6 +23,7 @@ title: Oblique nodes
 | | Node | What it does |
 |---|---|---|
 | ![Gaussian Blur](img/gaussian_blur-thumb.webp) | [Gaussian Blur](op.gaussian_blur.md) | Even, soft blur across the RGB channels — alpha stays untouched. |
+| ![JPEG Corrupt](img/jpeg_corrupt-thumb.webp) | [JPEG Corrupt](op.jpeg_corrupt.md) | The file rots: colonies of broken JPEG blocks spread through the picture. |
 | ![Pixelate](img/pixelate-thumb.webp) | [Pixelate](op.pixelate.md) | Flat-mean square-cell mosaic — each cell renders as one solid colour. |
 | ![Smear](img/smear-thumb.webp) | [Smear](op.smear.md) | The scanner head stalled: sample one row or column and repeat it across the frame. |
 

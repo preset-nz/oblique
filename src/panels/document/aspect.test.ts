@@ -86,6 +86,15 @@ describe('describeLongEdge', () => {
   });
 });
 
+describe('widescreen preset', () => {
+  it('16:5, half of 16:10, gives 1920x600 at 1080p width', () => {
+    const wide = ASPECT_PRESETS.find((p) => p.id === '16:5');
+    if (!wide) throw new Error('fixture preset missing');
+    expect(computeDocumentSize(1920, wide.ratio, 'landscape')).toEqual([1920, 600]);
+    expect(describeDocumentSize([1920, 600]).presetId).toBe('16:5');
+  });
+});
+
 describe('describeDocumentSize', () => {
   it('identifies an exact preset match and orientation', () => {
     expect(describeDocumentSize([2048, 1536])).toEqual({

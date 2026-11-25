@@ -21,6 +21,7 @@
 //!   layer-overflow).
 //! - `layers-left`: thirty layers, with the layer list on the left and the properties on the right
 //!   (Epic 04, layers-left).
+//! - `jpeg-corrupt`: an infection that only grows as Progress rises, with its damage or its map on a layer of its own (Epic 28, jpeg-corrupt, jpeg-corrupt-show).
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -652,6 +653,183 @@ fn levels_curve_fixture() {
     );
 }
 
+// ---- jpeg corrupt ----
+
+const JPEG_CORRUPT_NOTES: &str = "\
+JPEG Corrupt window check (Epic 28, jpeg-corrupt and jpeg-corrupt-show). `just fixtures jpeg-corrupt` writes this file again.
+
+0. Open a fresh copy (`just window-check jpeg-corrupt`). One 640 x 480 picture on two layers. The bottom one, Photo, has a JPEG Corrupt modifier at its defaults (Progress 0.35, Colonies 3, Spores 0.15, Irregularity 0.6, Smear 4, Severity 3, Damage Shift bytes, Quality 40, Colour blocks Coarse, Block size 16, Show Picture, Variant 0, Seed 0). Patches of blocks are broken (smeared colour, slipped rows, garbage blocks) in a few clumps, with some single blocks away from them; the rest of the picture is untouched. The top one, Damage grey, has a second JPEG Corrupt with the same settings but Show Damage, then Desaturate: only the broken blocks show on it, in grey, exactly over the same blocks on Photo. Its settings are its own: they don't follow Photo's.
+1. Hide Damage grey (its eye in the layer list) and show it again: the broken blocks go colour and back to grey, and nothing else on the picture changes. Hide it for steps a to m, which are about Photo. Select Photo to change its settings.
+2. Select Damage grey and set Show on its JPEG Corrupt to Colonies, then scrub Progress from 0 to 1: the layer is now a grey map over the whole picture. At 0 it is all grey, lighter for the blocks the infection will reach first and darker for the last, with no white. White spreads through it as Progress rises, the white blocks growing out from where the colonies start with single blocks ahead of them. At 1 it is all white. Change Seed: the map changes with it; change Variant, Quality, Severity or Damage: the map doesn't. Hide Photo to see the map on its own.
+3. Set Show back to Damage: only the broken blocks again. Set it to Picture: the whole damaged picture, as it looked before Show existed, in grey (Desaturate is still after it). Put Damage grey's Progress at 0 with Show on Damage: that layer is empty, so only Photo shows.
+a. Scrub Progress from 0 up to 1 slowly. At 0 the picture is exactly as it was. Blocks are only ever added: nothing that was broken heals or changes as you go up, and the clumps grow outward from where they started, with single blocks appearing ahead of them. At 1 every block is broken. Scrub back down: the damage retreats the way it came, the same blocks each time.
+b. Put Progress at 0.5 and scrub Variant: the damage inside the broken blocks changes every step (it boils), but the same blocks are broken and the clumps stay where they are.
+c. Change Seed: the clumps and the single blocks land somewhere else.
+d. Colonies up to 8: more clumps start. Back to 3: the first ones are where they were.
+e. Spores to 0: no single blocks ahead of the clumps. To 1: the infection is scattered blocks with no clumps to speak of.
+f. Irregularity to 0: each clump grows as a clean round patch. To 1: ragged edges.
+g. Smear to 1: each break stays in its own block. To 32: breaks run on along the row in long smears.
+h. Severity 1 to 16: the broken blocks get more broken.
+i. Damage: Flip bits is gentle (mostly colour and detail errors), Replace bytes is rougher, Shift bytes slips the rest of the run.
+j. Quality 5: the broken blocks are coarse and blocky; 95: they keep much more of the picture's detail.
+k. Colour blocks Fine (4:4:4): smaller, sharper breaks than Coarse (4:2:0)'s chunky colour smears.
+l. Block size 64: big blocks; 4: fine grit. While you scrub (the blurry draft) the same blocks are broken as in the sharp picture after you let go.
+m. Undo after a scrub: one step takes the whole scrub back. Turn the modifier off and on again: the picture goes clean and the same damage comes back. Save, close and reopen the file: the same picture, the same damage.";
+
+/// `list_ops`' `jpeg_corrupt` as the sidecar declares it (sidecar/ops/jpeg_corrupt.py), so the
+/// fixture's modifier is the one the app makes.
+fn jpeg_corrupt_catalogue() -> Catalogue {
+    let number = |name: &str, label: &str, kind: &str, default: Json, min: f64, max: f64| OpParam {
+        name: name.into(),
+        label: Some(label.into()),
+        description: None,
+        kind: kind.into(),
+        default,
+        min: Some(min),
+        max: Some(max),
+        choices: vec![],
+        choice_labels: Default::default(),
+    };
+    let choice = |name: &str, label: &str, default: &str, labels: &[(&str, &str)]| OpParam {
+        name: name.into(),
+        label: Some(label.into()),
+        description: None,
+        kind: "enum".into(),
+        default: json!(default),
+        min: None,
+        max: None,
+        choices: labels.iter().map(|(c, _)| c.to_string()).collect(),
+        choice_labels: labels
+            .iter()
+            .map(|(c, l)| (c.to_string(), l.to_string()))
+            .collect(),
+    };
+    Catalogue(vec![
+        Op {
+            name: "jpeg_corrupt".into(),
+            label: Some("JPEG Corrupt".into()),
+            description: None,
+            category: Some("distort".into()),
+            drivers: vec![],
+            params: vec![
+                number("progress", "Progress", "float", json!(0.35), 0.0, 1.0),
+                number("colonies", "Colonies", "int", json!(3), 1.0, 12.0),
+                number("spores", "Spores", "float", json!(0.15), 0.0, 1.0),
+                number(
+                    "irregularity",
+                    "Irregularity",
+                    "float",
+                    json!(0.6),
+                    0.0,
+                    1.0,
+                ),
+                number("smear", "Smear", "int", json!(4), 1.0, 64.0),
+                number("severity", "Severity", "int", json!(3), 1.0, 16.0),
+                choice(
+                    "mode",
+                    "Damage",
+                    "shift",
+                    &[
+                        ("flip", "Flip bits"),
+                        ("replace", "Replace bytes"),
+                        ("shift", "Shift bytes"),
+                    ],
+                ),
+                number("quality", "Quality", "int", json!(40), 5.0, 95.0),
+                choice(
+                    "chroma",
+                    "Colour blocks",
+                    "420",
+                    &[("420", "Coarse (4:2:0)"), ("444", "Fine (4:4:4)")],
+                ),
+                number("block", "Block size", "float", json!(16.0), 4.0, 128.0),
+                choice(
+                    "show",
+                    "Show",
+                    "picture",
+                    &[
+                        ("picture", "Picture"),
+                        ("damage", "Damage"),
+                        ("colonies", "Colonies"),
+                    ],
+                ),
+                number("variant", "Variant", "int", json!(0), 0.0, 9999.0),
+                number("seed", "Seed", "int", json!(0), 0.0, 9999.0),
+            ],
+        },
+        Op {
+            name: "desaturate".into(),
+            label: Some("Desaturate".into()),
+            description: None,
+            category: Some("colour".into()),
+            drivers: vec![],
+            params: vec![number("amount", "Amount", "float", json!(1.0), 0.0, 1.0)],
+        },
+    ])
+}
+
+fn jpeg_corrupt_project() -> String {
+    let mut d = Document::<Oblique>::new_in(
+        Arc::new(jpeg_corrupt_catalogue()),
+        MemoryStore::default(),
+        IdSource::sequential(),
+    )
+    .unwrap();
+    d.run(
+        "document.set_size",
+        &json!({"size": [SIZE.0 as f64, SIZE.1 as f64]}),
+    )
+    .unwrap();
+    d.run("document.set_note", &json!({"note": JPEG_CORRUPT_NOTES}))
+        .unwrap();
+    let corrupt = |id: &str, show: &str| {
+        json!({"id": id, "type": "jpeg_corrupt", "enabled": true,
+               "params": {"progress": 0.35, "colonies": 3, "spores": 0.15, "irregularity": 0.6,
+                          "smear": 4, "severity": 3, "mode": "shift", "quality": 40,
+                          "chroma": "420", "block": 16.0, "show": show, "variant": 0, "seed": 0}})
+    };
+    // each new layer lands on top, so the bottom one is added first
+    let mut photo = layer("photo", "Photo", "jpeg-corrupt.assets/photo.png", true);
+    photo["modifiers"] = json!([corrupt("corrupt", "picture")]);
+    d.run("layer.add", &json!({ "node": photo })).unwrap();
+    // the same picture again: only the damage, in grey, over the same blocks
+    let mut grey = layer(
+        "damage-grey",
+        "Damage grey",
+        "jpeg-corrupt.assets/photo.png",
+        true,
+    );
+    grey["modifiers"] = json!([
+        corrupt("corrupt-damage", "damage"),
+        {"id": "grey", "type": "desaturate", "enabled": true, "params": {"amount": 1.0}}
+    ]);
+    d.run("layer.add", &json!({ "node": grey })).unwrap();
+    d.tree().serialise()
+}
+
+fn write_jpeg_corrupt_pictures() {
+    encode(
+        &fixtures_dir().join("jpeg-corrupt.assets/photo.png"),
+        png::ColorType::Rgb,
+        png::BitDepth::Eight,
+        &photo(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn jpeg_corrupt_fixture() {
+    let text = jpeg_corrupt_project();
+    check_or_write("jpeg-corrupt", &text);
+    if wanted("jpeg-corrupt") {
+        write_jpeg_corrupt_pictures();
+    }
+    assert!(
+        fixtures_dir().join("jpeg-corrupt.assets/photo.png").is_file(),
+        "tests/window/fixtures/jpeg-corrupt.assets/photo.png is missing: write it with `just fixtures jpeg-corrupt`"
+    );
+}
+
 // ---- text overflow ----
 
 const TEXT_OVERFLOW_NOTES: &str = "\
@@ -844,6 +1022,7 @@ fn the_fixtures_are_built_the_same_every_time() {
     assert_eq!(layer_as_driver_project(), layer_as_driver_project());
     assert_eq!(blur_radius_project(), blur_radius_project());
     assert_eq!(levels_curve_project(), levels_curve_project());
+    assert_eq!(jpeg_corrupt_project(), jpeg_corrupt_project());
     assert_eq!(text_overflow_project(), text_overflow_project());
     assert_eq!(layers_left_project(), layers_left_project());
 }

@@ -483,6 +483,7 @@ from ops import grain as _grain  # noqa: F401
 from ops import hatch as _hatch  # noqa: F401
 from ops import ink_starved as _ink_starved  # noqa: F401
 from ops import invert as _invert  # noqa: F401
+from ops import jpeg_corrupt as _jpeg_corrupt  # noqa: F401
 from ops import levels as _levels  # noqa: F401
 from ops import pixelate as _pixelate  # noqa: F401
 from ops import recolour as _recolour  # noqa: F401
