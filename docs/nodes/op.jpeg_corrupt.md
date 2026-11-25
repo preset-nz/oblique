@@ -34,34 +34,53 @@ Slots: `mask`.
 
 ## Using it
 
-Breaks the picture the way a damaged JPEG file breaks, and spreads the damage like an infection. It saves the picture as a real JPEG, damages bytes inside the file, and opens it again. It is built to be scrubbed: **Progress** is the time axis, and every step only adds damage, so an animation reads as growth rather than flicker.
+Breaks the picture the way a damaged JPEG file breaks, and spreads the damage like an infection. The op saves the picture as a real JPEG, damages bytes inside the file and opens it again. Add it to a layer with **Add modifier**.
 
-**Progress starts at 0.35.** At 0 the op does nothing and the picture is exactly as it came in. At 1 every block is infected. The blocks that aren't infected yet are the original pixels, so the quality loss shows only where the infection has reached.
+### To grow the infection
 
-- **Colonies** is how many places the infection starts from. You don't place them: they come from Seed, so change Seed to move them. At a given seed the first colony stays put as the count goes up.
-- **Spores** is the share of blocks that are hit at random, ahead of the colonies, so the infection throws isolated blocks out in front of itself.
-- **Irregularity** is how ragged the edge of a colony is. At 0 each colony grows as a clean circle; higher is more like mould.
-- **Smear** is how many blocks in a row one hit can damage. The damage can't run past them, so a low value keeps the breaks to single blocks and a high value gives long runs along the row.
-- **Severity** is how many bytes are damaged in each infected run. More is more broken.
-- **Damage** is what a hit does. Flip bits changes a byte, Replace bytes puts a random byte in its place, and Shift bytes slips a byte in or out, which knocks the rest of the run out of step: the slips and the garbage colour.
-- **Quality** is how hard the picture is compressed before it is damaged. Low is blocky and rough; high keeps more of the picture around the damage.
-- **Colour blocks** chooses Coarse (4:2:0), where colour is kept at half the detail of the grey and a break smears colour across a larger block, or Fine (4:4:4), where colour keeps the full detail and the breaks are smaller and sharper.
-- **Block size** is the size of one damaged block in pixels. The picture is shrunk or enlarged to fit it before it is damaged and put back afterwards, so large values give big blocks and small values give fine ones.
-- **Show** chooses what you see. Picture is the whole picture with the damage in it. Damage keeps only the broken blocks and makes everything else transparent, so the damage is a layer of its own that other modifiers and blend modes can work on. Colonies is a map of the infection, with no JPEG in it: white where it has reached, and grey ahead of it, lighter for the blocks it reaches next and darker for the last. At Progress 0 it is still the map, all grey, not the untouched picture. Colonies follows Colonies, Spores, Irregularity, Smear, Block size, Colour blocks and Seed; Quality, Severity, Damage and Variant don't change it.
-- **Variant** re-rolls the damage inside the infected blocks without moving the colonies. Step it through values for a boiling look.
-- **Seed** moves the colonies and the spores.
+Drag **Progress** from 0 to 1. Each step only adds damage, so a sequence of frames reads as growth rather than flicker.
 
-Alpha is left as it was, except in Damage, where the blocks that aren't broken become transparent. If the damaged file can't be opened, the op tries once more with different damage, and if that fails too it leaves the picture unchanged (in Damage, with nothing broken to show, the layer is transparent).
+### To colour only the damage
 
-The op has no colour settings: to colour only the damage, duplicate the layer, set the top copy's Show to Damage, and add Desaturate, a tint or another colour modifier after it. The picture underneath stays as it was.
+1. Select the layer and choose **Edit ▸ Duplicate** (⌘D).
+2. On the top copy, set **Show** to Damage.
+3. On the top copy, add Desaturate, or another colour modifier, after JPEG Corrupt.
+
+Only the broken blocks change colour; the rest of the picture shows through from the copy underneath.
+
+**Note:** the two copies have their own settings. A change to Progress, Seed or any other setting on one copy moves its damage away from the other's, so make it on both.
+
+### To see the colonies
+
+Set **Show** to Colonies and drag **Progress**. White spreads through the grey as the infection does.
+
+### Settings
+
+- **Progress** Sets how much of the picture is infected. At 0 the picture is untouched; at 1 every block is infected. Blocks not yet reached keep their original pixels, so the JPEG's quality loss shows only where the infection has been. 0.35 by default.
+- **Colonies** Sets how many places the infection starts from. Seed places them; at a given seed the first colony stays put as the count goes up.
+- **Spores** Sets the share of blocks hit at random ahead of the colonies, as isolated blocks in front of the spread.
+- **Irregularity** Sets how ragged a colony's edge is. At 0 each colony grows as a clean circle; higher reads as mould.
+- **Smear** Sets how many blocks along a row one hit can damage. The damage stops at the end of its run, so 1 keeps each break to a single block and high values give long runs.
+- **Severity** Sets how many bytes are damaged in each infected run.
+- **Damage** Chooses what a hit does to the file. **Flip bits** changes a byte, **Replace bytes** puts a random byte in its place, and **Shift bytes** slips a byte in or out, which knocks the rest of the run out of step: the slips and the garbage colour.
+- **Quality** Sets the JPEG quality the picture is saved at before it is damaged. Low is blocky and rough; high keeps more of the picture around the damage.
+- **Colour blocks** Chooses how coarse the colour is. **Coarse (4:2:0)** keeps colour at half the detail of the grey, so a break smears colour across a larger block. **Fine (4:4:4)** keeps colour at full detail, so the breaks are smaller and sharper.
+- **Block size** Sets the size of one damaged block in document pixels. The picture is scaled to fit the block grid before it is damaged and scaled back afterwards.
+- **Show** Chooses what the op hands on. Picture by default.
+  - **Picture** The whole picture with the damage in it. Alpha is kept.
+  - **Damage** Only the broken blocks, with everything else transparent. A block counts as broken when the damage changed it, not merely when the infection reached it. With nothing broken (Progress 0, or a file that won't open) the layer is fully transparent.
+  - **Colonies** A map of the infection, with no JPEG in it: white where it has reached, grey ahead of it, lighter for the blocks it reaches next and darker for the last. At Progress 0 the map is all grey. Quality, Severity, Damage and Variant don't change it.
+- **Variant** Re-rolls the damage inside the infected blocks without moving the colonies. Stepping it gives a boiling look.
+- **Seed** Moves the colonies and the spores.
+
+When the damaged file won't open, the op tries once more with different damage. If that fails too, Picture hands the layer on unchanged.
 
 ## Recipes
 
-- **Infection in progress.** The defaults, then step Progress from 0 to 1 for the growth.
+- **Infection in progress.** The defaults, with Progress stepped from 0 to 1.
 - **Rotting mainframe.** Progress 0.5, Colonies 4, Spores 0.2, Smear 8, Severity 6, Seed 11.
-- **Boiling.** Keep everything still and step Variant, so the colonies stay put while the damage inside them moves.
-- **Grey rot.** Duplicate the layer. Leave the bottom copy as it is. On the top copy set Show to Damage and add Desaturate after JPEG Corrupt, with the same Progress, Seed and other settings as the bottom copy. Only the broken blocks go grey.
-- **Colonies.** Set Show to Colonies and step Progress from 0 to 1: the white spreads through the grey as the infection does. Change Seed to move where it starts.
+- **Grey rot.** Rotting mainframe on both copies, with the damage coloured by Desaturate, as in *To colour only the damage*.
+- **Boiling.** Every setting held, with Variant stepped.
 - **Fine corrosion.** Colour blocks Fine (4:4:4), Block size 8, Severity 8, Damage Replace bytes.
 
 ## Examples
