@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "docs/gen/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "00abd779cbfddb17358eee57a44f0ff2f22004d8b475ca1e78707c87fa071702"
+sha256 = "51754abffe428eac7855bd7657118050f6af75e21d76ef5e00031cf9053281c6"
 
 [[inputs]]
 path = "docs/gen/Cargo.toml"
@@ -34,7 +34,7 @@ sha256 = "6e6ec883edc2e6bad822dd34a465fcaac0b822d97389d0af0a882fc127e3aafc"
 [[inputs]]
 path = "src-tauri/Cargo.lock"
 ecosystem = "cargo"
-sha256 = "ed9eca8ab2f5f59637bc757a57870b0eb1ffd70bef5d4bcff8ed3b423009d92c"
+sha256 = "b0a4cac38cb73c9a23d5eee2a0f304e143154cfd038aa784c47fb1b47408f57c"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
@@ -531,7 +531,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "cookie"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry"
 declared = "MIT OR Apache-2.0"
 scope = "shipped"
@@ -1091,7 +1091,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry"
 declared = "MIT OR Apache-2.0"
 scope = "shipped"
@@ -4171,7 +4171,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry"
 declared = "MIT OR Apache-2.0"
 scope = "shipped"
